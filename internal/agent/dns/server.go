@@ -29,17 +29,8 @@ type resolver struct {
 // here, so a bind failure (the port taken, the address gone) is reported
 // at once rather than from a goroutine.
 func serve(want netip.AddrPort, h mdns.Handler) (*resolver, error) {
-	pc, err := net.ListenPacket("udp", want.String())
+	pc, ln, addr, err := bindPair(want)
 	if err != nil {
-		return nil, err
-	}
-	addr := want
-	if want.Port() == 0 {
-		addr = netip.AddrPortFrom(want.Addr(), uint16(pc.LocalAddr().(*net.UDPAddr).Port))
-	}
-	ln, err := net.Listen("tcp", addr.String())
-	if err != nil {
-		_ = pc.Close() // nothing was served on it
 		return nil, err
 	}
 	r := &resolver{want: want, addr: addr, pc: pc, ln: ln, stopped: make(chan struct{})}
@@ -62,6 +53,31 @@ func serve(want netip.AddrPort, h mdns.Handler) (*resolver, error) {
 		}
 	}
 	return r, nil
+}
+
+// bindPair opens want over UDP and TCP. For port 0 (tests) TCP takes the
+// port the system gave UDP; when TCP may not have it -- Windows reserves
+// port ranges for TCP alone (`netsh int ipv4 show excludedportrange
+// protocol=tcp`) -- another port is tried.
+func bindPair(want netip.AddrPort) (net.PacketConn, net.Listener, netip.AddrPort, error) {
+	for try := 1; ; try++ {
+		pc, err := net.ListenPacket("udp", want.String())
+		if err != nil {
+			return nil, nil, netip.AddrPort{}, err
+		}
+		addr := want
+		if want.Port() == 0 {
+			addr = netip.AddrPortFrom(want.Addr(), uint16(pc.LocalAddr().(*net.UDPAddr).Port))
+		}
+		ln, err := net.Listen("tcp", addr.String())
+		if err == nil {
+			return pc, ln, addr, nil
+		}
+		_ = pc.Close() // nothing was served on it
+		if want.Port() != 0 || try == 10 {
+			return nil, nil, netip.AddrPort{}, err
+		}
+	}
 }
 
 // dead reports whether a server stopped serving on its own.
