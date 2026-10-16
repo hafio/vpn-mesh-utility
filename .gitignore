@@ -1,0 +1,34 @@
+# Go build / dev tooling (scripts/dev.sh|dev.ps1)
+/dist/
+/coverage/
+coverage.out
+coverage.html
+scripts/logs/
+# root-built binary from `go build ./cmd/meshctl`
+/meshctl
+/meshctl.exe
+
+# wintun.dll is fetched and hash-verified at build time (internal/tools/fetchwintun),
+# never committed: a binary blob in git has no provenance.
+internal/agent/platform/windows/wintun_*.dll
+
+# Runtime state that must never be committed: SQLite databases (they hold
+# password hashes and encrypted TOTP secrets), node keys, exports.
+*.db
+*.db-wal
+*.db-shm
+*.key
+*.pem
+*.crt
+/data/
+/mesh.yaml
+/exports/
+
+# graphify per-machine state (interpreter path, cache)
+graphify-out/20*
+graphify-out/.graphify_python
+graphify-out/cache
+
+# Claude Code per-user local settings (the tracked conventions live in
+# .claude/settings.json).
+.claude/settings.local.json

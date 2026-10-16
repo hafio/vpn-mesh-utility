@@ -1,0 +1,45 @@
+# meshctl agent. `meshctl agent join` installs this file unchanged to
+# /etc/systemd/system/meshctl-agent.service. The agent runs as root (it owns
+# wg0, routes, sysctls and, on servers, firewalld), but only with the two
+# capabilities that needs, on a read-only system. docs/security.md explains
+# each setting; deploy_test.go pins them.
+[Unit]
+Description=meshctl mesh agent
+Documentation=https://github.com/hafio/vpn-mesh-utility
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/meshctl agent run --data /var/lib/meshctl
+Restart=always
+RestartSec=5
+StateDirectory=meshctl
+StateDirectoryMode=0700
+RuntimeDirectory=meshctl wireguard
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+UMask=0077
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/meshctl
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+DevicePolicy=closed
+DeviceAllow=/dev/net/tun rw
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target

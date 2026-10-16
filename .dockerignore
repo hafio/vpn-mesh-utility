@@ -1,0 +1,20 @@
+# Build context for the root Dockerfile. Only what the build stage compiles
+# goes in: no git history, no local state, no secrets, no docs.
+.git
+.github
+.claude
+dist
+coverage
+scripts/logs
+graphify-out
+docs
+*.md
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/*.key
+**/*.pem
+**/*.crt
+data
+exports
+internal/agent/platform/windows/wintun_*.dll

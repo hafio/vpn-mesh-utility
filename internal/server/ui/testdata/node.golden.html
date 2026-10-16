@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false}'>
+<title>vps-1 - meshctl</title>
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/htmx.min.js" defer></script>
+</head>
+<body hx-headers='{"X-CSRF-Token": "csrf-token"}'>
+<header>
+<span class="brand">meshctl</span>
+<nav>
+<a href="/">Dashboard</a>
+<a href="/nodes" class="active">Nodes</a>
+<a href="/dns">DNS</a>
+<a href="/firewall">Firewall</a>
+<a href="/versions">Versions</a>
+<a href="/audit">Audit</a>
+<a href="/settings">Settings</a>
+<a href="/users">Users</a>
+<a href="/account">admin</a>
+</nav>
+<form method="post" action="/logout" class="inline">
+<input type="hidden" name="csrf" value="csrf-token">
+<button type="submit" class="link">Sign out</button>
+</form>
+</header>
+<main>
+<h1>vps-1</h1>
+<p class="flash">Saved; config version 5 is on its way to the agents</p>
+
+<p><span class="state warn">applying v5</span> last seen 12s ago</p>
+<table class="facts">
+<tr><th>Role</th><td>server</td></tr>
+<tr><th>Mesh IP</th><td>10.77.0.1</td></tr>
+<tr><th>Endpoint</th><td>203.0.113.10:51820</td></tr>
+<tr><th>Host</th><td>vps-1.example.com (linux/amd64)</td></tr>
+<tr><th>Agent</th><td>v1.0.0, kernel WireGuard</td></tr>
+<tr><th>Config version</th><td>applied 4, current 5</td></tr>
+<tr><th>DNS</th><td>unavailable: the node answers .mesh on its mesh IP, but its host has no systemd-resolved to send its own lookups there</td></tr>
+</table>
+
+<h2>Peers as last reported</h2>
+<table>
+<thead><tr><th>Peer</th><th>Endpoint</th><th>Handshake</th><th>Received</th><th>Sent</th></tr></thead>
+<tbody>
+<tr><td>vps-2</td><td>203.0.113.11:51820</td><td>40s ago</td><td>1.0 KiB</td><td>2.0 KiB</td></tr>
+</tbody>
+</table>
+
+<h2>Edit</h2>
+<form method="post" action="/nodes/vps-1" class="grid">
+<input type="hidden" name="csrf" value="csrf-token">
+<label>Endpoint <input name="endpoint" value="203.0.113.10:51820" placeholder="IPv4:port"></label>
+<label>Listen port <input name="listen_port" value="51820"></label>
+<label><input type="checkbox" name="can_exit"> Can be an internet exit</label>
+<label>MTU <input name="mtu" value="1420"></label>
+<button type="submit">Save</button>
+</form>
+
+<h2>Actions</h2>
+<div class="actions">
+<form method="post" action="/nodes/vps-1/disable"><input type="hidden" name="csrf" value="csrf-token"><button type="submit">Disable</button></form>
+<form method="post" action="/nodes/vps-1/token"><input type="hidden" name="csrf" value="csrf-token"><button type="submit">New join token</button></form>
+<a class="button danger" href="/nodes/vps-1/remove">Remove</a>
+</div>
+<h2>Computed config</h2>
+<pre>{
+  &#34;version&#34;: 5
+}</pre>
+
+</main>
+<footer>meshctl v1.0.0</footer>
+</body>
+</html>

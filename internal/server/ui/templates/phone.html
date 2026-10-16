@@ -1,0 +1,20 @@
+{{define "content"}}
+{{- with .Data}}
+<p>In the WireGuard app on {{.Node}}: <strong>+</strong>, then <strong>Scan from QR code</strong>. This profile holds the phone's private key: it is shown once, the server does not keep it, and making another profile replaces it.</p>
+{{- if .Exit}}
+<p>While the tunnel is on, all of the phone's traffic goes through {{.Exit}}.</p>
+{{- else}}
+<p>While the tunnel is on, only mesh traffic goes through it; the phone's DNS lookups go to its hub's resolver, which answers <code>.mesh</code> names and forwards the rest.</p>
+{{- end}}
+{{- if .QR.Path}}
+<svg class="qr" viewBox="{{.QR.View}}" role="img" aria-label="QR code of the profile"><path d="{{.QR.Path}}"/></svg>
+{{- end}}
+<h2>Or as a file</h2>
+<p>Save this as <code>{{.Node}}.conf</code> and import it in the app.</p>
+<pre class="secret">{{.Profile}}</pre>
+{{- range .Warnings}}
+<p class="warning">{{.}}</p>
+{{- end}}
+<p><a href="/nodes/{{.Node}}">Go to {{.Node}}</a></p>
+{{- end}}
+{{end}}

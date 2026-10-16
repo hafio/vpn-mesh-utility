@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false}'>
+<title>Dashboard - meshctl</title>
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/htmx.min.js" defer></script>
+</head>
+<body hx-headers='{"X-CSRF-Token": "csrf-token"}'>
+<header>
+<span class="brand">meshctl</span>
+<nav>
+<a href="/" class="active">Dashboard</a>
+<a href="/nodes">Nodes</a>
+<a href="/dns">DNS</a>
+<a href="/firewall">Firewall</a>
+<a href="/versions">Versions</a>
+<a href="/audit">Audit</a>
+<a href="/settings">Settings</a>
+<a href="/users">Users</a>
+<a href="/account">admin</a>
+</nav>
+<form method="post" action="/logout" class="inline">
+<input type="hidden" name="csrf" value="csrf-token">
+<button type="submit" class="link">Sign out</button>
+</form>
+</header>
+<main>
+<h1>Dashboard</h1>
+
+
+<div id="nodes" hx-get="/fragments/nodes" hx-trigger="every 10s" hx-swap="outerHTML">
+<table>
+<thead><tr><th>Node</th><th>Role</th><th>Mesh IP</th><th>State</th><th>Applied / current</th><th>Agent</th><th>Last seen</th><th>Handshakes</th><th>Exit</th></tr></thead>
+<tbody>
+<tr>
+<td><a href="/nodes/vps-1">vps-1</a></td>
+<td>server</td>
+<td>10.77.0.1</td>
+<td><span class="state ok">in sync</span></td>
+<td>4 / 4</td>
+<td>v1.0.0</td>
+<td>12s ago</td>
+<td><span class="peer">vps-2 40s ago</span></td>
+<td>-</td>
+</tr>
+<tr>
+<td><a href="/nodes/nas">nas</a></td>
+<td>spoke</td>
+<td>10.77.1.1</td>
+<td><span class="state off">not joined</span></td>
+<td>0 / 0</td>
+<td></td>
+<td>never</td>
+<td>-</td>
+<td>-</td>
+</tr>
+</tbody>
+</table>
+<p class="warning">warning: node &#34;vps-3&#34;: no endpoint</p>
+</div>
+
+
+</main>
+<footer>meshctl v1.0.0</footer>
+</body>
+</html>

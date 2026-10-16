@@ -1,0 +1,404 @@
+{
+  "1": {
+    "version": 0,
+    "node": {
+      "id": 1,
+      "name": "vps-1",
+      "role": "server"
+    },
+    "interface": {
+      "address": "10.77.0.1/32",
+      "listen_port": 51820,
+      "mtu": 1420
+    },
+    "peers": [
+      {
+        "name": "vps-2",
+        "public_key": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
+        "endpoint": "203.0.113.11:51820",
+        "allowed_ips": [
+          "10.77.0.2/32"
+        ]
+      },
+      {
+        "name": "vps-3",
+        "public_key": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=",
+        "endpoint": "203.0.113.12:51820",
+        "allowed_ips": [
+          "10.77.0.3/32"
+        ]
+      }
+    ],
+    "dns": {
+      "zone": "mesh",
+      "records": [
+        {
+          "name": "vps-1",
+          "ip": "10.77.0.1"
+        },
+        {
+          "name": "vps-2",
+          "ip": "10.77.0.2"
+        },
+        {
+          "name": "vps-3",
+          "ip": "10.77.0.3"
+        }
+      ],
+      "upstream": [
+        "1.1.1.1",
+        "9.9.9.9"
+      ],
+      "split": true
+    },
+    "firewall": {
+      "backend": "firewalld",
+      "rules": [
+        {
+          "zone": "mesh",
+          "proto": "tcp",
+          "port": 53,
+          "source": "10.77.0.0/16",
+          "note": "dns"
+        },
+        {
+          "zone": "mesh",
+          "proto": "udp",
+          "port": 53,
+          "source": "10.77.0.0/16",
+          "note": "dns"
+        },
+        {
+          "zone": "mesh",
+          "proto": "tcp",
+          "port": 2377,
+          "source": "10.77.0.2/32",
+          "note": "swarm manager: vps-2"
+        },
+        {
+          "zone": "mesh",
+          "proto": "tcp",
+          "port": 2377,
+          "source": "10.77.0.3/32",
+          "note": "swarm manager: vps-3"
+        },
+        {
+          "zone": "mesh",
+          "proto": "udp",
+          "port": 4789,
+          "source": "10.77.0.2/32",
+          "note": "swarm overlay: vps-2"
+        },
+        {
+          "zone": "mesh",
+          "proto": "udp",
+          "port": 4789,
+          "source": "10.77.0.3/32",
+          "note": "swarm overlay: vps-3"
+        },
+        {
+          "zone": "mesh",
+          "proto": "tcp",
+          "port": 7946,
+          "source": "10.77.0.2/32",
+          "note": "swarm gossip: vps-2"
+        },
+        {
+          "zone": "mesh",
+          "proto": "tcp",
+          "port": 7946,
+          "source": "10.77.0.3/32",
+          "note": "swarm gossip: vps-3"
+        },
+        {
+          "zone": "mesh",
+          "proto": "udp",
+          "port": 7946,
+          "source": "10.77.0.2/32",
+          "note": "swarm gossip: vps-2"
+        },
+        {
+          "zone": "mesh",
+          "proto": "udp",
+          "port": 7946,
+          "source": "10.77.0.3/32",
+          "note": "swarm gossip: vps-3"
+        },
+        {
+          "zone": "public",
+          "proto": "udp",
+          "port": 51820,
+          "note": "wireguard"
+        }
+      ]
+    }
+  },
+  "2": {
+    "version": 0,
+    "node": {
+      "id": 2,
+      "name": "vps-2",
+      "role": "server"
+    },
+    "interface": {
+      "address": "10.77.0.2/32",
+      "listen_port": 51820,
+      "mtu": 1420
+    },
+    "peers": [
+      {
+        "name": "vps-1",
+        "public_key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+        "endpoint": "203.0.113.10:51820",
+        "allowed_ips": [
+          "10.77.0.1/32"
+        ]
+      },
+      {
+        "name": "vps-3",
+        "public_key": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=",
+        "endpoint": "203.0.113.12:51820",
+        "allowed_ips": [
+          "10.77.0.3/32"
+        ]
+      }
+    ],
+    "dns": {
+      "zone": "mesh",
+      "records": [
+        {
+          "name": "vps-1",
+          "ip": "10.77.0.1"
+        },
+        {
+          "name": "vps-2",
+          "ip": "10.77.0.2"
+        },
+        {
+          "name": "vps-3",
+          "ip": "10.77.0.3"
+        }
+      ],
+      "upstream": [
+        "1.1.1.1",
+        "9.9.9.9"
+      ],
+      "split": true
+    },
+    "firewall": {
+      "backend": "firewalld",
+      "rules": [
+        {
+          "zone": "mesh",
+          "proto": "tcp",
+          "port": 53,
+          "source": "10.77.0.0/16",
+          "note": "dns"
+        },
+        {
+          "zone": "mesh",
+          "proto": "udp",
+          "port": 53,
+          "source": "10.77.0.0/16",
+          "note": "dns"
+        },
+        {
+          "zone": "mesh",
+          "proto": "tcp",
+          "port": 2377,
+          "source": "10.77.0.1/32",
+          "note": "swarm manager: vps-1"
+        },
+        {
+          "zone": "mesh",
+          "proto": "tcp",
+          "port": 2377,
+          "source": "10.77.0.3/32",
+          "note": "swarm manager: vps-3"
+        },
+        {
+          "zone": "mesh",
+          "proto": "udp",
+          "port": 4789,
+          "source": "10.77.0.1/32",
+          "note": "swarm overlay: vps-1"
+        },
+        {
+          "zone": "mesh",
+          "proto": "udp",
+          "port": 4789,
+          "source": "10.77.0.3/32",
+          "note": "swarm overlay: vps-3"
+        },
+        {
+          "zone": "mesh",
+          "proto": "tcp",
+          "port": 7946,
+          "source": "10.77.0.1/32",
+          "note": "swarm gossip: vps-1"
+        },
+        {
+          "zone": "mesh",
+          "proto": "tcp",
+          "port": 7946,
+          "source": "10.77.0.3/32",
+          "note": "swarm gossip: vps-3"
+        },
+        {
+          "zone": "mesh",
+          "proto": "udp",
+          "port": 7946,
+          "source": "10.77.0.1/32",
+          "note": "swarm gossip: vps-1"
+        },
+        {
+          "zone": "mesh",
+          "proto": "udp",
+          "port": 7946,
+          "source": "10.77.0.3/32",
+          "note": "swarm gossip: vps-3"
+        },
+        {
+          "zone": "public",
+          "proto": "udp",
+          "port": 51820,
+          "note": "wireguard"
+        }
+      ]
+    }
+  },
+  "3": {
+    "version": 0,
+    "node": {
+      "id": 3,
+      "name": "vps-3",
+      "role": "server"
+    },
+    "interface": {
+      "address": "10.77.0.3/32",
+      "listen_port": 51820,
+      "mtu": 1420
+    },
+    "peers": [
+      {
+        "name": "vps-1",
+        "public_key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+        "endpoint": "203.0.113.10:51820",
+        "allowed_ips": [
+          "10.77.0.1/32"
+        ]
+      },
+      {
+        "name": "vps-2",
+        "public_key": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
+        "endpoint": "203.0.113.11:51820",
+        "allowed_ips": [
+          "10.77.0.2/32"
+        ]
+      }
+    ],
+    "dns": {
+      "zone": "mesh",
+      "records": [
+        {
+          "name": "vps-1",
+          "ip": "10.77.0.1"
+        },
+        {
+          "name": "vps-2",
+          "ip": "10.77.0.2"
+        },
+        {
+          "name": "vps-3",
+          "ip": "10.77.0.3"
+        }
+      ],
+      "upstream": [
+        "1.1.1.1",
+        "9.9.9.9"
+      ],
+      "split": true
+    },
+    "firewall": {
+      "backend": "firewalld",
+      "rules": [
+        {
+          "zone": "mesh",
+          "proto": "tcp",
+          "port": 53,
+          "source": "10.77.0.0/16",
+          "note": "dns"
+        },
+        {
+          "zone": "mesh",
+          "proto": "udp",
+          "port": 53,
+          "source": "10.77.0.0/16",
+          "note": "dns"
+        },
+        {
+          "zone": "mesh",
+          "proto": "tcp",
+          "port": 2377,
+          "source": "10.77.0.1/32",
+          "note": "swarm manager: vps-1"
+        },
+        {
+          "zone": "mesh",
+          "proto": "tcp",
+          "port": 2377,
+          "source": "10.77.0.2/32",
+          "note": "swarm manager: vps-2"
+        },
+        {
+          "zone": "mesh",
+          "proto": "udp",
+          "port": 4789,
+          "source": "10.77.0.1/32",
+          "note": "swarm overlay: vps-1"
+        },
+        {
+          "zone": "mesh",
+          "proto": "udp",
+          "port": 4789,
+          "source": "10.77.0.2/32",
+          "note": "swarm overlay: vps-2"
+        },
+        {
+          "zone": "mesh",
+          "proto": "tcp",
+          "port": 7946,
+          "source": "10.77.0.1/32",
+          "note": "swarm gossip: vps-1"
+        },
+        {
+          "zone": "mesh",
+          "proto": "tcp",
+          "port": 7946,
+          "source": "10.77.0.2/32",
+          "note": "swarm gossip: vps-2"
+        },
+        {
+          "zone": "mesh",
+          "proto": "udp",
+          "port": 7946,
+          "source": "10.77.0.1/32",
+          "note": "swarm gossip: vps-1"
+        },
+        {
+          "zone": "mesh",
+          "proto": "udp",
+          "port": 7946,
+          "source": "10.77.0.2/32",
+          "note": "swarm gossip: vps-2"
+        },
+        {
+          "zone": "public",
+          "proto": "udp",
+          "port": 51820,
+          "note": "wireguard"
+        }
+      ]
+    }
+  }
+}

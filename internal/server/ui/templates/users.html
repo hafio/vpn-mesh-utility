@@ -1,0 +1,33 @@
+{{define "content"}}
+<table>
+<thead><tr><th>User</th><th>Authenticator</th><th>State</th><th>Created</th><th></th></tr></thead>
+<tbody>
+{{- range .Data}}
+<tr>
+<td>{{.Name}}{{if .Self}} (you){{end}}</td>
+<td>{{if .TOTP}}enrolled{{else}}at next sign-in{{end}}</td>
+<td>{{if .Disabled}}disabled{{else}}active{{end}}</td>
+<td>{{.Created}}</td>
+<td class="actions">
+{{- if not .Self}}
+{{- if .Disabled}}
+<form method="post" action="/users/{{.Name}}/enable"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit">Enable</button></form>
+{{- else}}
+<form method="post" action="/users/{{.Name}}/disable"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit">Disable</button></form>
+{{- end}}
+<form method="post" action="/users/{{.Name}}/reset-totp"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit">Reset authenticator</button></form>
+{{- end}}
+</td>
+</tr>
+{{- end}}
+</tbody>
+</table>
+<h2>Add a user</h2>
+<form method="post" action="/users" class="grid">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<label>Username <input name="username" required autocomplete="off"></label>
+<label>Password <input name="password" type="password" minlength="12" required autocomplete="new-password"></label>
+<label>Repeat <input name="password2" type="password" minlength="12" required autocomplete="new-password"></label>
+<button type="submit">Add user</button>
+</form>
+{{end}}

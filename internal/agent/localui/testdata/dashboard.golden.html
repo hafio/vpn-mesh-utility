@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="10; url=/">
+<title>laptop - meshctl</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header>
+<strong>meshctl</strong> on this node
+<nav><a href="/">Status</a> <a href="/logs">Log</a>
+<form method="post" action="/logout" class="inline"><input type="hidden" name="csrf" value="1WiKUtVaAuxK6l7B6t__4cng7mpN2-I3f5gybULfyXU"><button>Sign out</button></form></nav>
+</header>
+<main>
+
+<h1>laptop <small>spoke, 10.77.2.1</small></h1>
+<table class="kv">
+<tr><th>Agent</th><td>v1.0.0, kernel WireGuard</td></tr>
+<tr><th>Server</th><td>https://mesh.example.com, last answered 5s ago</td></tr>
+<tr><th>Config</th><td>v7, applied 1m30s ago</td></tr>
+<tr><th>Exit</th><td>via vps-2</td></tr>
+<tr><th>DNS</th><td>on</td></tr>
+</table>
+
+<h2>Peers</h2>
+<table>
+<tr><th>Peer</th><th>Endpoint</th><th>Handshake</th><th>Received</th><th>Sent</th></tr>
+<tr><td>vps-1</td><td>203.0.113.10:51820</td><td>40s ago</td><td>2.0 KiB</td><td>4.0 KiB</td></tr>
+<tr><td>vps-2</td><td>203.0.113.11:51820</td><td>15s ago</td><td>3.0 MiB</td><td>512 B</td></tr>
+</table>
+
+<h2>This node's settings</h2>
+<form method="post" action="/exit">
+<input type="hidden" name="csrf" value="1WiKUtVaAuxK6l7B6t__4cng7mpN2-I3f5gybULfyXU">
+<label>Internet exit <select name="exit">
+<option value="off">off</option>
+<option value="vps-2" selected>via vps-2</option>
+<option value="vps-3">via vps-3</option>
+</select></label>
+<button>Switch</button>
+</form>
+<form method="post" action="/settings">
+<input type="hidden" name="csrf" value="1WiKUtVaAuxK6l7B6t__4cng7mpN2-I3f5gybULfyXU">
+<label>Keepalive (s) <input name="keepalive" inputmode="numeric" value="25"></label>
+<label>MTU <input name="mtu" inputmode="numeric" value="1420"></label>
+<button>Ask the server</button>
+</form>
+<form method="post" action="/dns">
+<input type="hidden" name="csrf" value="1WiKUtVaAuxK6l7B6t__4cng7mpN2-I3f5gybULfyXU">
+<input type="hidden" name="dns" value="off"><button>Turn split DNS off</button>
+</form>
+<form method="post" action="/restart">
+<input type="hidden" name="csrf" value="1WiKUtVaAuxK6l7B6t__4cng7mpN2-I3f5gybULfyXU">
+<button>Restart the tunnel</button> <span class="hint">every peer handshakes anew</span>
+</form>
+
+<h2>The mesh</h2>
+<p class="hint">As the server shows it, fetched 30s ago. <span class="warn">the server did not answer: dial tcp 203.0.113.10:443: connection refused</span></p>
+<table>
+<tr><th>Node</th><th>Role</th><th>Mesh IP</th><th>State</th><th>Seen</th><th>Applied / config</th></tr>
+<tr><td>vps-1</td><td>server</td><td>10.77.0.1</td><td class="ok">in sync</td><td>10s ago</td><td>7 / 7</td></tr>
+<tr><td>vps-2</td><td>server</td><td>10.77.0.2</td><td class="ok">in sync</td><td>12s ago</td><td>7 / 7</td></tr>
+<tr><td>vps-3</td><td>server</td><td>10.77.0.3</td><td class="ok">in sync</td><td>14s ago</td><td>7 / 7</td></tr>
+<tr><td>nas</td><td>spoke (hub vps-1)</td><td>10.77.1.1</td><td class="warn">applying v7</td><td>20s ago</td><td>6 / 7</td></tr>
+<tr><td>laptop</td><td>spoke (hub vps-1, exit vps-2)</td><td>10.77.2.1</td><td class="bad">silent for 10m0s</td><td>10m0s ago</td><td>7 / 7</td></tr>
+<tr><td>phone</td><td>phone (hub vps-1)</td><td>10.77.3.1</td><td class="off">idle</td><td>1h0m0s ago</td><td>7 / 7</td></tr>
+</table>
+</main>
+</body>
+</html>
+

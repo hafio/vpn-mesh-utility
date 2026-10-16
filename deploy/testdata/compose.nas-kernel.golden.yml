@@ -1,0 +1,54 @@
+# meshctl agent for the spoke "nas", as a container (spec S12; amendments A13, A19).
+# The kernel backend uses the host's WireGuard module (ls /sys/module/wireguard).
+#
+# Join once, with the node's join token (web UI, `meshctl node add` or `node token`):
+#   MESHCTL_TOKEN=<token> docker compose run --rm -e MESHCTL_TOKEN meshctl-agent \
+#     agent join --data /data --server https://mesh.example.com --name nas --no-service
+# then start it: docker compose up -d
+#
+# Posture (docs/security.md): not privileged; every capability dropped except
+# NET_ADMIN (wg0, its routes) and NET_BIND_SERVICE (DNS on :53); no privilege
+# escalation; read-only root. It runs as uid 0 because capabilities do not
+# survive no-new-privileges for another user, and on the host network because
+# wg0 belongs to the host.
+name: meshctl-agent
+services:
+  meshctl-agent:
+    image: ghcr.io/hafio/vpn-mesh-utility:1.2.3
+    command:
+      - agent
+      - run
+      - --data
+      - /data
+      - --wg-backend
+      - kernel
+    user: "0:0"
+    privileged: false
+    network_mode: host
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_ADMIN
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges=true
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    volumes:
+      - /volume1/docker/meshctl:/data
+    restart: unless-stopped
+    mem_limit: 256m
+    pids_limit: 256
+    healthcheck:
+      test:
+        - CMD
+        - /app/meshctl
+        - healthcheck
+        - agent
+        - --data
+        - /data
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

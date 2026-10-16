@@ -1,0 +1,39 @@
+{{define "content"}}
+<table>
+<thead><tr><th>Node</th><th>Role</th><th>Mesh IP</th><th>Endpoint</th><th>State</th></tr></thead>
+<tbody>
+{{- range .Data.Rows}}
+<tr><td><a href="/nodes/{{.Name}}">{{.Name}}</a></td><td>{{.Role}}</td><td>{{.MeshIP}}</td><td>{{if .Endpoint}}{{.Endpoint}}{{else}}-{{end}}</td><td><span class="state {{.Class}}">{{.State}}</span></td></tr>
+{{- else}}
+<tr><td colspan="5">No nodes yet.</td></tr>
+{{- end}}
+</tbody>
+</table>
+
+<h2>Add a node</h2>
+<form method="post" action="/nodes" class="grid">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+{{- with .Data.Form}}
+<label>Name <input name="name" value="{{.Name}}" required pattern="[a-z0-9-]{1,32}"></label>
+<label>Role <select name="role">
+<option value="server"{{if eq .Role "server"}} selected{{end}}>server (VPS)</option>
+<option value="spoke"{{if eq .Role "spoke"}} selected{{end}}>spoke (NAS, laptop)</option>
+<option value="phone"{{if eq .Role "phone"}} selected{{end}}>phone (WireGuard app, by QR code)</option>
+</select></label>
+<label>Mesh IP <input name="ip" value="{{.IP}}" placeholder="next free"></label>
+<label>Endpoint (servers) <input name="endpoint" value="{{.Endpoint}}" placeholder="detected at join"></label>
+<label>Listen port (servers) <input name="listen_port" value="{{.ListenPort}}" placeholder="51820"></label>
+<label>Keepalive (spokes, phones) <input name="keepalive" value="{{.Keepalive}}" placeholder="25"></label>
+<label>MTU <input name="mtu" value="{{.MTU}}" placeholder="mesh default"></label>
+<label><input type="checkbox" name="can_exit"{{if .CanExit}} checked{{end}}> Can be an internet exit (servers)</label>
+<label><input type="checkbox" name="always_on"{{if .AlwaysOn}} checked{{end}}> Always-on spoke (NAS)</label>
+{{- end}}
+<label>Hub (spokes, phones) <select name="hub">
+<option value="">default</option>
+{{- range .Data.Servers}}
+<option value="{{.}}"{{if eq . $.Data.Form.Hub}} selected{{end}}>{{.}}</option>
+{{- end}}
+</select></label>
+<button type="submit">Add node</button>
+</form>
+{{end}}

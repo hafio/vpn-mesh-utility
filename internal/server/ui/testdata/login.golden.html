@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false}'>
+<title>Sign in - meshctl</title>
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/htmx.min.js" defer></script>
+</head>
+<body>
+<header>
+<span class="brand">meshctl</span>
+</header>
+<main>
+<h1>Sign in</h1>
+<p class="error">wrong username or password</p>
+
+<form method="post" action="/login" class="narrow">
+<label>Username <input name="username" value="admin" autocomplete="username" required autofocus></label>
+<label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+<button type="submit">Sign in</button>
+</form>
+
+</main>
+<footer>meshctl v1.0.0</footer>
+</body>
+</html>

@@ -1,0 +1,82 @@
+{{template "head" .}}
+{{- with .Data}}
+<h1>{{.Status.Node.Name}} <small>{{.Status.Node.Role}}, {{.Status.MeshIP}}</small></h1>
+<table class="kv">
+<tr><th>Agent</th><td>{{.Status.AgentVersion}}, {{.Status.WGBackend}} WireGuard</td></tr>
+<tr><th>Server</th><td>{{.Status.Server}}, last answered {{.Contact}}</td></tr>
+<tr><th>Config</th><td>{{.Config}}</td></tr>
+{{- if .Status.Exit}}
+<tr><th>Exit</th><td>via {{.Status.Exit}}</td></tr>
+{{- end}}
+{{- if .Status.DNS}}
+<tr><th>DNS</th><td>{{.Status.DNS}}</td></tr>
+{{- end}}
+{{- with .Status.Rollback}}
+<tr><th>Rollback</th><td class="bad">v{{.From}} to v{{.To}}: {{.Reason}}</td></tr>
+{{- end}}
+{{- range .Status.Degraded}}
+<tr><th>Degraded</th><td class="warn">{{.}}</td></tr>
+{{- end}}
+{{- range .Status.Errors}}
+<tr><th>Error</th><td class="bad">{{.}}</td></tr>
+{{- end}}
+</table>
+{{- if .Peers}}
+
+<h2>Peers</h2>
+<table>
+<tr><th>Peer</th><th>Endpoint</th><th>Handshake</th><th>Received</th><th>Sent</th></tr>
+{{- range .Peers}}
+<tr><td>{{.Name}}</td><td>{{.Endpoint}}</td><td>{{.Handshake}}</td><td>{{.Rx}}</td><td>{{.Tx}}</td></tr>
+{{- end}}
+</table>
+{{- end}}
+
+<h2>This node's settings</h2>
+{{- if .IsSpoke}}
+<form method="post" action="/exit">
+<input type="hidden" name="csrf" value="{{$.CSRF}}">
+<label>Internet exit <select name="exit">
+<option value="off"{{if not .Status.Exit}} selected{{end}}>off</option>
+{{- range .Status.ExitChoices}}
+<option value="{{.}}"{{if eq . $.Data.Status.Exit}} selected{{end}}>via {{.}}</option>
+{{- end}}
+</select></label>
+<button>Switch</button>
+</form>
+{{- end}}
+<form method="post" action="/settings">
+<input type="hidden" name="csrf" value="{{$.CSRF}}">
+{{- if .IsSpoke}}
+<label>Keepalive (s) <input name="keepalive" inputmode="numeric"{{with .Status.Keepalive}} value="{{.}}"{{end}}></label>
+{{- end}}
+<label>MTU <input name="mtu" inputmode="numeric"{{with .Status.MTU}} value="{{.}}"{{end}}></label>
+<button>Ask the server</button>
+</form>
+{{- if .Status.DNS}}
+<form method="post" action="/dns">
+<input type="hidden" name="csrf" value="{{$.CSRF}}">
+{{- if .DNSOn}}
+<input type="hidden" name="dns" value="off"><button>Turn split DNS off</button>
+{{- else}}
+<input type="hidden" name="dns" value="on"><button>Turn split DNS on</button>
+{{- end}}
+</form>
+{{- end}}
+<form method="post" action="/restart">
+<input type="hidden" name="csrf" value="{{$.CSRF}}">
+<button>Restart the tunnel</button> <span class="hint">every peer handshakes anew</span>
+</form>
+
+<h2>The mesh</h2>
+<p class="hint">As the server shows it, {{.MeshAsOf}}.{{with .MeshError}} <span class="warn">{{.}}</span>{{end}}</p>
+{{- if .Mesh}}
+<table>
+<tr><th>Node</th><th>Role</th><th>Mesh IP</th><th>State</th><th>Seen</th><th>Applied / config</th></tr>
+{{- range .Mesh}}
+<tr><td>{{.Name}}</td><td>{{.Role}}{{with .Via}} ({{.}}){{end}}</td><td>{{.MeshIP}}</td><td class="{{.Class}}">{{.State}}</td><td>{{.Seen}}</td><td>{{.Versions}}</td></tr>
+{{- end}}
+</table>
+{{- end}}
+{{- end}}
+{{template "foot" .}}

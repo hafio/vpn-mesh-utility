@@ -1,0 +1,32 @@
+{{define "head"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+{{- if .Refresh}}
+<meta http-equiv="refresh" content="10; url=/">
+{{- end}}
+<title>{{.Title}} - meshctl</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header>
+<strong>meshctl</strong> on this node
+{{- if .CSRF}}
+<nav><a href="/">Status</a> <a href="/logs">Log</a>
+<form method="post" action="/logout" class="inline"><input type="hidden" name="csrf" value="{{.CSRF}}"><button>Sign out</button></form></nav>
+{{- end}}
+</header>
+<main>
+{{- if .Flash}}
+<p class="flash">{{.Flash}}</p>
+{{- end}}
+{{- if .Error}}
+<p class="error">{{.Error}}</p>
+{{- end}}
+{{end}}
+
+{{define "foot"}}</main>
+</body>
+</html>
+{{end}}

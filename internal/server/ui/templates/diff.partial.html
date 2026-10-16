@@ -1,0 +1,29 @@
+{{define "diff"}}
+{{- if .Empty}}
+<p>No changes.</p>
+{{- else}}
+<ul class="diff">
+{{- range .AddedNodes}}
+<li class="add">node {{.}} added</li>
+{{- end}}
+{{- range .RemovedNodes}}
+<li class="del">node {{.}} removed</li>
+{{- end}}
+{{- range .ChangedNodes}}
+{{- $n := .Name}}
+{{- range .Fields}}
+<li>{{$n}}: {{.Field}} {{if .From}}{{.From}}{{else}}(none){{end}} -&gt; {{if .To}}{{.To}}{{else}}(none){{end}}</li>
+{{- end}}
+{{- end}}
+{{- range .Settings}}
+<li>setting {{.Field}}: {{if .From}}{{.From}}{{else}}(none){{end}} -&gt; {{if .To}}{{.To}}{{else}}(none){{end}}</li>
+{{- end}}
+{{- range .DNS}}
+<li>dns {{.}}</li>
+{{- end}}
+{{- range .Firewall}}
+<li>firewall {{.}}</li>
+{{- end}}
+</ul>
+{{- end}}
+{{end}}

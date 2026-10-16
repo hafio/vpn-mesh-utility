@@ -1,0 +1,31 @@
+{{define "content"}}
+{{template "nodes-table" .Data}}
+{{end}}
+
+{{define "nodes-table"}}
+<div id="nodes" hx-get="/fragments/nodes" hx-trigger="every 10s" hx-swap="outerHTML">
+<table>
+<thead><tr><th>Node</th><th>Role</th><th>Mesh IP</th><th>State</th><th>Applied / current</th><th>Agent</th><th>Last seen</th><th>Handshakes</th><th>Exit</th></tr></thead>
+<tbody>
+{{- range .Rows}}
+<tr>
+<td><a href="/nodes/{{.Name}}">{{.Name}}</a></td>
+<td>{{.Role}}</td>
+<td>{{.MeshIP}}</td>
+<td><span class="state {{.Class}}">{{.State}}</span></td>
+<td>{{.Versions}}</td>
+<td>{{.Agent}}</td>
+<td>{{.Seen}}</td>
+<td>{{range .Peers}}<span class="peer">{{.Name}} {{.Age}}</span>{{else}}-{{end}}</td>
+<td>{{if .Exit}}{{.Exit}}{{else}}-{{end}}</td>
+</tr>
+{{- else}}
+<tr><td colspan="9">No nodes yet. <a href="/nodes">Add the first one.</a></td></tr>
+{{- end}}
+</tbody>
+</table>
+{{- range .Warnings}}
+<p class="warning">{{.}}</p>
+{{- end}}
+</div>
+{{end}}

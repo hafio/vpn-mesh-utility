@@ -1,0 +1,569 @@
+{
+  "1": {
+    "version": 0,
+    "node": {
+      "id": 1,
+      "name": "vps-1",
+      "role": "server"
+    },
+    "interface": {
+      "address": "10.77.0.1/32",
+      "listen_port": 51820,
+      "mtu": 1420
+    },
+    "peers": [
+      {
+        "name": "nas",
+        "public_key": "BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=",
+        "allowed_ips": [
+          "10.77.1.1/32"
+        ]
+      },
+      {
+        "name": "phone",
+        "public_key": "BgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgY=",
+        "allowed_ips": [
+          "10.77.3.1/32"
+        ]
+      },
+      {
+        "name": "vps-2",
+        "public_key": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
+        "endpoint": "203.0.113.11:51820",
+        "allowed_ips": [
+          "10.77.0.2/32"
+        ]
+      }
+    ],
+    "dns": {
+      "zone": "mesh",
+      "records": [
+        {
+          "name": "files",
+          "ip": "10.77.1.1"
+        },
+        {
+          "name": "nas",
+          "ip": "10.77.1.1"
+        },
+        {
+          "name": "phone",
+          "ip": "10.77.3.1"
+        },
+        {
+          "name": "printer.office",
+          "ip": "10.77.1.200"
+        },
+        {
+          "name": "vps-1",
+          "ip": "10.77.0.1"
+        },
+        {
+          "name": "vps-2",
+          "ip": "10.77.0.2"
+        },
+        {
+          "name": "vps-3",
+          "ip": "10.77.0.3"
+        }
+      ],
+      "upstream": [
+        "1.1.1.1",
+        "9.9.9.9"
+      ],
+      "split": true,
+      "forward_for": [
+        "10.77.3.1/32"
+      ]
+    },
+    "firewall": {
+      "backend": "firewalld",
+      "rules": [
+        {
+          "zone": "mesh",
+          "proto": "tcp",
+          "port": 53,
+          "source": "10.77.0.0/16",
+          "note": "dns"
+        },
+        {
+          "zone": "mesh",
+          "proto": "udp",
+          "port": 53,
+          "source": "10.77.0.0/16",
+          "note": "dns"
+        },
+        {
+          "zone": "mesh",
+          "proto": "tcp",
+          "port": 2377,
+          "source": "10.77.0.2/32",
+          "note": "swarm manager: vps-2"
+        },
+        {
+          "zone": "mesh",
+          "proto": "udp",
+          "port": 4789,
+          "source": "10.77.0.2/32",
+          "note": "swarm overlay: vps-2"
+        },
+        {
+          "zone": "mesh",
+          "proto": "tcp",
+          "port": 5432,
+          "source": "10.77.1.1/32",
+          "note": "custom rule 2"
+        },
+        {
+          "zone": "mesh",
+          "proto": "tcp",
+          "port": 7946,
+          "source": "10.77.0.2/32",
+          "note": "swarm gossip: vps-2"
+        },
+        {
+          "zone": "mesh",
+          "proto": "udp",
+          "port": 7946,
+          "source": "10.77.0.2/32",
+          "note": "swarm gossip: vps-2"
+        },
+        {
+          "zone": "mesh",
+          "proto": "tcp",
+          "port": 9100,
+          "source": "10.77.0.0/16",
+          "note": "custom: node exporter"
+        },
+        {
+          "zone": "public",
+          "proto": "udp",
+          "port": 51820,
+          "note": "wireguard"
+        }
+      ],
+      "relay": true
+    },
+    "sysctl": [
+      {
+        "key": "net.ipv4.ip_forward",
+        "value": "1"
+      }
+    ]
+  },
+  "2": {
+    "version": 0,
+    "node": {
+      "id": 2,
+      "name": "vps-2",
+      "role": "server"
+    },
+    "interface": {
+      "address": "10.77.0.2/32",
+      "listen_port": 51820,
+      "mtu": 1420
+    },
+    "peers": [
+      {
+        "name": "nas",
+        "public_key": "BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=",
+        "allowed_ips": [
+          "10.77.1.1/32"
+        ]
+      },
+      {
+        "name": "phone",
+        "public_key": "BgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgY=",
+        "allowed_ips": [
+          "10.77.3.1/32"
+        ]
+      },
+      {
+        "name": "vps-1",
+        "public_key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+        "endpoint": "203.0.113.10:51820",
+        "allowed_ips": [
+          "10.77.0.1/32"
+        ]
+      }
+    ],
+    "dns": {
+      "zone": "mesh",
+      "records": [
+        {
+          "name": "files",
+          "ip": "10.77.1.1"
+        },
+        {
+          "name": "nas",
+          "ip": "10.77.1.1"
+        },
+        {
+          "name": "phone",
+          "ip": "10.77.3.1"
+        },
+        {
+          "name": "printer.office",
+          "ip": "10.77.1.200"
+        },
+        {
+          "name": "vps-1",
+          "ip": "10.77.0.1"
+        },
+        {
+          "name": "vps-2",
+          "ip": "10.77.0.2"
+        },
+        {
+          "name": "vps-3",
+          "ip": "10.77.0.3"
+        }
+      ],
+      "upstream": [
+        "1.1.1.1",
+        "9.9.9.9"
+      ],
+      "split": true
+    },
+    "firewall": {
+      "backend": "firewalld",
+      "rules": [
+        {
+          "zone": "mesh",
+          "proto": "tcp",
+          "port": 53,
+          "source": "10.77.0.0/16",
+          "note": "dns"
+        },
+        {
+          "zone": "mesh",
+          "proto": "udp",
+          "port": 53,
+          "source": "10.77.0.0/16",
+          "note": "dns"
+        },
+        {
+          "zone": "mesh",
+          "proto": "tcp",
+          "port": 2377,
+          "source": "10.77.0.1/32",
+          "note": "swarm manager: vps-1"
+        },
+        {
+          "zone": "mesh",
+          "proto": "udp",
+          "port": 4789,
+          "source": "10.77.0.1/32",
+          "note": "swarm overlay: vps-1"
+        },
+        {
+          "zone": "mesh",
+          "proto": "tcp",
+          "port": 7946,
+          "source": "10.77.0.1/32",
+          "note": "swarm gossip: vps-1"
+        },
+        {
+          "zone": "mesh",
+          "proto": "udp",
+          "port": 7946,
+          "source": "10.77.0.1/32",
+          "note": "swarm gossip: vps-1"
+        },
+        {
+          "zone": "mesh",
+          "proto": "tcp",
+          "port": 9100,
+          "source": "10.77.0.0/16",
+          "note": "custom: node exporter"
+        },
+        {
+          "zone": "public",
+          "proto": "udp",
+          "port": 51820,
+          "note": "wireguard"
+        }
+      ],
+      "exit_gateway": true
+    },
+    "sysctl": [
+      {
+        "key": "net.ipv4.ip_forward",
+        "value": "1"
+      }
+    ]
+  },
+  "3": {
+    "version": 0,
+    "node": {
+      "id": 3,
+      "name": "vps-3",
+      "role": "server"
+    },
+    "interface": {
+      "address": "10.77.0.3/32",
+      "listen_port": 51820,
+      "mtu": 1420
+    },
+    "peers": [
+      {
+        "name": "vps-1",
+        "public_key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+        "endpoint": "203.0.113.10:51820",
+        "allowed_ips": [
+          "10.77.0.1/32"
+        ]
+      },
+      {
+        "name": "vps-2",
+        "public_key": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
+        "endpoint": "203.0.113.11:51820",
+        "allowed_ips": [
+          "10.77.0.2/32"
+        ]
+      }
+    ],
+    "dns": {
+      "zone": "mesh",
+      "records": [
+        {
+          "name": "files",
+          "ip": "10.77.1.1"
+        },
+        {
+          "name": "nas",
+          "ip": "10.77.1.1"
+        },
+        {
+          "name": "phone",
+          "ip": "10.77.3.1"
+        },
+        {
+          "name": "printer.office",
+          "ip": "10.77.1.200"
+        },
+        {
+          "name": "vps-1",
+          "ip": "10.77.0.1"
+        },
+        {
+          "name": "vps-2",
+          "ip": "10.77.0.2"
+        },
+        {
+          "name": "vps-3",
+          "ip": "10.77.0.3"
+        }
+      ],
+      "upstream": [
+        "1.1.1.1",
+        "9.9.9.9"
+      ],
+      "split": true
+    },
+    "firewall": {
+      "backend": "firewalld",
+      "rules": [
+        {
+          "zone": "mesh",
+          "proto": "tcp",
+          "port": 53,
+          "source": "10.77.0.0/16",
+          "note": "dns"
+        },
+        {
+          "zone": "mesh",
+          "proto": "udp",
+          "port": 53,
+          "source": "10.77.0.0/16",
+          "note": "dns"
+        },
+        {
+          "zone": "mesh",
+          "proto": "tcp",
+          "port": 2377,
+          "source": "10.77.0.1/32",
+          "note": "swarm manager: vps-1"
+        },
+        {
+          "zone": "mesh",
+          "proto": "tcp",
+          "port": 2377,
+          "source": "10.77.0.2/32",
+          "note": "swarm manager: vps-2"
+        },
+        {
+          "zone": "mesh",
+          "proto": "udp",
+          "port": 4789,
+          "source": "10.77.0.1/32",
+          "note": "swarm overlay: vps-1"
+        },
+        {
+          "zone": "mesh",
+          "proto": "udp",
+          "port": 4789,
+          "source": "10.77.0.2/32",
+          "note": "swarm overlay: vps-2"
+        },
+        {
+          "zone": "mesh",
+          "proto": "tcp",
+          "port": 7946,
+          "source": "10.77.0.1/32",
+          "note": "swarm gossip: vps-1"
+        },
+        {
+          "zone": "mesh",
+          "proto": "tcp",
+          "port": 7946,
+          "source": "10.77.0.2/32",
+          "note": "swarm gossip: vps-2"
+        },
+        {
+          "zone": "mesh",
+          "proto": "udp",
+          "port": 7946,
+          "source": "10.77.0.1/32",
+          "note": "swarm gossip: vps-1"
+        },
+        {
+          "zone": "mesh",
+          "proto": "udp",
+          "port": 7946,
+          "source": "10.77.0.2/32",
+          "note": "swarm gossip: vps-2"
+        },
+        {
+          "zone": "mesh",
+          "proto": "tcp",
+          "port": 9100,
+          "source": "10.77.0.0/16",
+          "note": "custom: node exporter"
+        },
+        {
+          "zone": "public",
+          "proto": "udp",
+          "port": 51820,
+          "note": "wireguard"
+        }
+      ]
+    }
+  },
+  "4": {
+    "version": 0,
+    "node": {
+      "id": 4,
+      "name": "nas",
+      "role": "spoke"
+    },
+    "interface": {
+      "address": "10.77.1.1/32",
+      "listen_port": null,
+      "mtu": 1420,
+      "fwmark": 51820
+    },
+    "peers": [
+      {
+        "name": "vps-1",
+        "public_key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+        "endpoint": "203.0.113.10:51820",
+        "allowed_ips": [
+          "10.77.0.1/32",
+          "10.77.3.1/32"
+        ],
+        "keepalive": 25
+      },
+      {
+        "name": "vps-2",
+        "public_key": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
+        "endpoint": "203.0.113.11:51820",
+        "allowed_ips": [
+          "10.77.0.2/32"
+        ],
+        "keepalive": 25
+      }
+    ],
+    "exit": {
+      "choices": [
+        "vps-2"
+      ]
+    },
+    "dns": {
+      "zone": "mesh",
+      "records": [
+        {
+          "name": "files",
+          "ip": "10.77.1.1"
+        },
+        {
+          "name": "nas",
+          "ip": "10.77.1.1"
+        },
+        {
+          "name": "phone",
+          "ip": "10.77.3.1"
+        },
+        {
+          "name": "printer.office",
+          "ip": "10.77.1.200"
+        },
+        {
+          "name": "vps-1",
+          "ip": "10.77.0.1"
+        },
+        {
+          "name": "vps-2",
+          "ip": "10.77.0.2"
+        },
+        {
+          "name": "vps-3",
+          "ip": "10.77.0.3"
+        }
+      ],
+      "upstream": [
+        "1.1.1.1",
+        "9.9.9.9"
+      ],
+      "split": true
+    }
+  },
+  "6": {
+    "version": 0,
+    "node": {
+      "id": 6,
+      "name": "phone",
+      "role": "phone"
+    },
+    "interface": {
+      "address": "10.77.3.1/32",
+      "listen_port": null,
+      "mtu": 1420
+    },
+    "peers": [
+      {
+        "name": "vps-1",
+        "public_key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+        "endpoint": "203.0.113.10:51820",
+        "allowed_ips": [
+          "10.77.0.0/16"
+        ],
+        "keepalive": 25
+      },
+      {
+        "name": "vps-2",
+        "public_key": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
+        "endpoint": "203.0.113.11:51820",
+        "allowed_ips": [
+          "10.77.0.2/32"
+        ],
+        "keepalive": 25
+      }
+    ],
+    "exit": {
+      "choices": [
+        "vps-2"
+      ]
+    }
+  }
+}

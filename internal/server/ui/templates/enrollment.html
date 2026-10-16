@@ -1,0 +1,12 @@
+{{define "content"}}
+<p>This join token is shown once and works for one hour (until {{.Data.Expires}}).</p>
+<p><code class="secret">{{.Data.Token}}</code></p>
+<h2>On {{.Data.Node}}, as root</h2>
+<pre>{{.Data.Install}}</pre>
+<h2>Or, where meshctl is already installed</h2>
+<pre>{{.Data.Join}}</pre>
+{{- range .Data.Warnings}}
+<p class="warning">{{.}}</p>
+{{- end}}
+<p><a href="/nodes/{{.Data.Node}}">Go to {{.Data.Node}}</a></p>
+{{end}}

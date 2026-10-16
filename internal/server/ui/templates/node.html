@@ -1,0 +1,119 @@
+{{define "content"}}
+{{- with .Data}}
+<p><span class="state {{.Class}}">{{.State}}</span> last seen {{.Seen}}</p>
+<table class="facts">
+<tr><th>Role</th><td>{{.Node.Role}}</td></tr>
+<tr><th>Mesh IP</th><td>{{.Node.MeshIP}}</td></tr>
+{{- if .IsServer}}
+<tr><th>Endpoint</th><td>{{if .Node.Endpoint}}{{.Node.Endpoint}}{{else}}not known yet{{end}}</td></tr>
+{{- end}}
+{{- if .IsPhone}}
+<tr><th>Profile</th><td>{{.Profile}}</td></tr>
+{{- else}}
+<tr><th>Host</th><td>{{if .Node.Hostname}}{{.Node.Hostname}} ({{.Node.OS}}/{{.Node.Arch}}){{else}}-{{end}}</td></tr>
+<tr><th>Agent</th><td>{{if .Node.AgentVersion}}{{.Node.AgentVersion}}, {{.Node.WGBackend}} WireGuard{{else}}-{{end}}</td></tr>
+<tr><th>Config version</th><td>applied {{.Node.AppliedVersion}}, current {{.Node.ConfigVersion}}</td></tr>
+{{- end}}
+{{- if .DNS}}
+<tr><th>DNS</th><td>{{.DNS}}</td></tr>
+{{- end}}
+</table>
+{{- with .Node.Rollback}}
+<p class="error">Safe apply rolled this server back from v{{.From}} to v{{.To}}: {{.Reason}}. It stays on v{{.To}} until the next change.</p>
+{{- end}}
+{{- range .Node.Errors}}
+<p class="error">{{.}}</p>
+{{- end}}
+{{- range .Warnings}}
+<p class="warning">{{.}}</p>
+{{- end}}
+{{- if not .IsPhone}}
+
+<h2>Peers as last reported</h2>
+<table>
+<thead><tr><th>Peer</th><th>Endpoint</th><th>Handshake</th><th>Received</th><th>Sent</th></tr></thead>
+<tbody>
+{{- range .Peers}}
+<tr><td>{{.Name}}</td><td>{{if .Endpoint}}{{.Endpoint}}{{else}}-{{end}}</td><td>{{.Handshake}}</td><td>{{.Rx}}</td><td>{{.Tx}}</td></tr>
+{{- else}}
+<tr><td colspan="5">No report yet.</td></tr>
+{{- end}}
+</tbody>
+</table>
+{{- end}}
+
+<h2>Edit</h2>
+<form method="post" action="/nodes/{{.Node.Name}}" class="grid">
+<input type="hidden" name="csrf" value="{{$.CSRF}}">
+{{- if .IsServer}}
+<label>Endpoint <input name="endpoint" value="{{.Node.Endpoint}}" placeholder="IPv4:port"></label>
+<label>Listen port <input name="listen_port" value="{{.Node.ListenPort}}"></label>
+<label><input type="checkbox" name="can_exit"{{if .Node.CanExit}} checked{{end}}> Can be an internet exit</label>
+{{- else}}
+<label>Hub <select name="hub">
+<option value="">default</option>
+{{- range .Servers}}
+<option value="{{.}}"{{if eq . $.Data.Node.Hub}} selected{{end}}>{{.}}</option>
+{{- end}}
+</select></label>
+{{- if not .IsPhone}}
+<label>Exit <select name="exit">
+<option value="">off</option>
+{{- range .Exits}}
+<option value="{{.}}"{{if eq . $.Data.Node.Exit}} selected{{end}}>{{.}}</option>
+{{- end}}
+</select></label>
+{{- end}}
+<label>Keepalive <input name="keepalive" value="{{.Node.Keepalive}}"></label>
+{{- end}}
+<label>MTU <input name="mtu" value="{{.Node.MTU}}"></label>
+<button type="submit">Save</button>
+</form>
+{{- if .IsPhone}}
+
+<h2>Profile for the WireGuard app</h2>
+<p>A new profile has a new key, so the phone's current profile stops working. It is shown once.</p>
+<form method="post" action="/nodes/{{.Node.Name}}/phone" class="grid">
+<input type="hidden" name="csrf" value="{{$.CSRF}}">
+<label>Internet <select name="exit">
+<option value="">off the tunnel (mesh only)</option>
+{{- range .Exits}}
+<option value="{{.}}">through {{.}}</option>
+{{- end}}
+</select></label>
+<button type="submit">Make a profile</button>
+</form>
+{{- end}}
+{{- if .IsSpoke}}
+
+<h2>Run in a container</h2>
+<p>For a NAS or another Docker host: a compose file for this node's agent. Its header has the one-time join command; then <code>docker compose up -d</code>.</p>
+<form method="get" action="/nodes/{{.Node.Name}}/compose" class="grid">
+<label>WireGuard <select name="backend">
+<option value="userspace" selected>userspace (needs /dev/net/tun)</option>
+<option value="kernel">kernel (the host has the wireguard module)</option>
+</select></label>
+<label>Data directory on the host <input name="data" value="{{.NASData}}"></label>
+<button type="submit">Download compose.yml</button>
+</form>
+{{- end}}
+
+<h2>Actions</h2>
+<div class="actions">
+{{- if .Node.Disabled}}
+<form method="post" action="/nodes/{{.Node.Name}}/enable"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit">Enable</button></form>
+{{- else}}
+<form method="post" action="/nodes/{{.Node.Name}}/disable"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit">Disable</button></form>
+{{- if not .IsPhone}}
+<form method="post" action="/nodes/{{.Node.Name}}/token"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit">New join token</button></form>
+{{- end}}
+{{- end}}
+<a class="button danger" href="/nodes/{{.Node.Name}}/remove">Remove</a>
+</div>
+
+{{- if .Config}}
+<h2>Computed config</h2>
+<pre>{{.Config}}</pre>
+{{- end}}
+{{- end}}
+{{end}}

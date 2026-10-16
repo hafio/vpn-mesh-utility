@@ -1,0 +1,23 @@
+/* meshctl local UI: no script, no external assets. */
+body { font: 15px/1.45 system-ui, sans-serif; margin: 0; color: #1d2329; background: #f6f7f9; }
+header { display: flex; gap: 1rem; align-items: center; justify-content: space-between; padding: .6rem 1.2rem; background: #1d2329; color: #fff; }
+header a { color: #cfe3ff; margin-right: .8rem; }
+main { max-width: 64rem; margin: 0 auto; padding: 1rem 1.2rem 3rem; }
+h1 small, h2 small { font-weight: normal; color: #5b6570; }
+table { border-collapse: collapse; width: 100%; margin: .5rem 0 1rem; background: #fff; }
+th, td { text-align: left; padding: .3rem .6rem; border-bottom: 1px solid #e3e6ea; vertical-align: top; }
+table.kv th { width: 9rem; color: #5b6570; font-weight: normal; }
+form { margin: .4rem 0; }
+form.inline { display: inline; }
+label { margin-right: .8rem; }
+input, select, button { font: inherit; }
+input { width: 6rem; }
+.hint { color: #5b6570; }
+.flash { background: #e6f4ea; border: 1px solid #b7dfc2; padding: .5rem .8rem; }
+.error { background: #fdecea; border: 1px solid #f3b8b1; padding: .5rem .8rem; }
+.ok { color: #1e7b34; }
+.warn { color: #9a6700; }
+.bad { color: #b42318; }
+.off { color: #6b7280; }
+pre { background: #fff; border: 1px solid #e3e6ea; padding: .6rem; overflow-x: auto; }
+pre.log { font-size: 13px; white-space: pre-wrap; }

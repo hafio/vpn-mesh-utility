@@ -1,0 +1,44 @@
+/* meshctl web UI. No external fonts or assets: everything is served by the
+   server under a strict CSP. */
+:root { --ok: #1a7f37; --warn: #9a6700; --bad: #cf222e; --off: #6e7781; --line: #d0d7de; --bg: #f6f8fa; }
+* { box-sizing: border-box; }
+body { margin: 0; font: 15px/1.45 system-ui, sans-serif; color: #1f2328; }
+header { display: flex; align-items: center; gap: 1.5rem; padding: 0.6rem 1.5rem; border-bottom: 1px solid var(--line); background: var(--bg); }
+.brand { font-weight: 700; }
+nav { display: flex; gap: 1rem; flex: 1; }
+nav a { color: inherit; text-decoration: none; }
+nav a.active { font-weight: 600; text-decoration: underline; }
+main { padding: 1rem 1.5rem 3rem; max-width: 80rem; }
+footer { padding: 1rem 1.5rem; color: var(--off); font-size: 0.85em; }
+h1 { font-size: 1.4rem; }
+h2 { font-size: 1.1rem; margin-top: 2rem; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 0.35rem 0.6rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.facts { width: auto; }
+pre, code { font: 13px/1.4 ui-monospace, monospace; }
+pre { background: var(--bg); padding: 0.8rem; overflow-x: auto; }
+code.secret { font-size: 1.05em; user-select: all; }
+pre.secret { user-select: all; }
+svg.qr { display: block; width: 20rem; height: 20rem; background: #fff; }
+.state { padding: 0.05rem 0.5rem; border-radius: 1rem; color: #fff; white-space: nowrap; }
+.state.ok { background: var(--ok); }
+.state.warn { background: var(--warn); }
+.state.bad { background: var(--bad); }
+.state.off { background: var(--off); }
+.peer { display: inline-block; margin-right: 0.8rem; white-space: nowrap; }
+.flash { padding: 0.5rem 0.8rem; background: #dafbe1; }
+.error { padding: 0.5rem 0.8rem; background: #ffebe9; }
+.warning { padding: 0.3rem 0.8rem; background: #fff8c5; }
+.hint { color: var(--off); }
+form.narrow, form.grid { display: grid; gap: 0.6rem; max-width: 28rem; }
+form.grid { grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr)); max-width: none; align-items: end; }
+form.inline { margin: 0; }
+label { display: grid; gap: 0.2rem; }
+label:has(input[type=checkbox]) { display: flex; gap: 0.4rem; align-items: center; }
+input, select, button, .button { font: inherit; padding: 0.35rem 0.5rem; }
+button, .button { border: 1px solid var(--line); background: #fff; cursor: pointer; text-decoration: none; color: inherit; }
+button.link { border: 0; background: none; text-decoration: underline; padding: 0; }
+.danger { color: var(--bad); border-color: var(--bad); }
+.actions { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+ul.diff li.add { color: var(--ok); }
+ul.diff li.del { color: var(--bad); }

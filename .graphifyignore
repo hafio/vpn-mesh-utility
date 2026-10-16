@@ -1,0 +1,25 @@
+# .graphifyignore -- files to exclude from the graphify corpus.
+# Format: gitignore-style. Graphify does NOT read .gitignore, so rules
+# here are independent of the project .gitignore.
+
+# Graphify's own temp files and output directory (already default-skipped;
+# listed to keep intent explicit).
+.graphify*
+graphify-out/
+
+# Test fixtures and goldens: generated or hand-written expected outputs that
+# would duplicate every concept node of the code that produces them.
+**/testdata/
+*.golden
+*.golden.json
+
+# Copied third-party-style tool, not this project's authored design.
+internal/tools/vulnjudge/
+
+# Build and run artifacts.
+dist/
+coverage/
+scripts/logs/
+
+LICENSE
+docs/third-party/

@@ -1,0 +1,6 @@
+{{template "head" .}}
+<h1>Log <small>{{len .Data.Lines}} lines, newest last</small></h1>
+<p><a href="/logs">Refresh</a></p>
+<pre class="log">{{range .Data.Lines}}{{.}}
+{{end}}</pre>
+{{template "foot" .}}

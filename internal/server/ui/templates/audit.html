@@ -1,0 +1,15 @@
+{{define "content"}}
+<table>
+<thead><tr><th>When</th><th>Who</th><th>Action</th><th>Target</th><th>Detail</th></tr></thead>
+<tbody>
+{{- range .Data.Rows}}
+<tr><td>{{.When}}</td><td>{{.Actor}}</td><td>{{.Action}}</td><td>{{.Target}}</td><td><code>{{.Detail}}</code></td></tr>
+{{- else}}
+<tr><td colspan="5">Nothing yet.</td></tr>
+{{- end}}
+</tbody>
+</table>
+{{- if .Data.Older}}
+<p><a href="/audit?before={{.Data.Older}}">Older entries</a></p>
+{{- end}}
+{{end}}

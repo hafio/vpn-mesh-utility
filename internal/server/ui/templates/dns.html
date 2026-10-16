@@ -1,0 +1,30 @@
+{{define "content"}}
+{{- with .Data.View}}
+<p>Every node answers the <code>{{.Zone}}</code> zone on its mesh IP: one name per node, plus the custom records. It forwards other names to {{range $i, $u := .Upstream}}{{if $i}}, {{end}}{{$u}}{{end}} only in exit mode, and on a server for the phones whose hub it is (<a href="/settings">upstream resolvers</a>).</p>
+<p class="hint">Containers on a host do not see split DNS: they use their own resolver, so <code>.{{.Zone}}</code> names do not resolve inside them.</p>
+<table>
+<thead><tr><th>Name</th><th>Address</th><th>Follows</th><th></th></tr></thead>
+<tbody>
+{{- range .Records}}
+<tr><td>{{.Name}}.{{$.Data.View.Zone}}</td><td>{{.IP}}{{if not .Live}} (not on the mesh yet){{end}}</td><td>{{if .Node}}{{.Node}}{{else}}-{{end}}</td><td>{{if .Custom}}<form method="post" action="/dns/{{.Name}}/remove" class="inline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit" class="link">Remove</button></form>{{else}}automatic{{end}}</td></tr>
+{{- end}}
+</tbody>
+</table>
+{{- end}}
+
+<h2>Add a record</h2>
+<form method="post" action="/dns" class="grid">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+{{- with .Data.Form}}
+<label>Name <input name="name" value="{{.Name}}" required placeholder="files or files.office"></label>
+<label>Follows a node <select name="node">
+<option value="">- (a fixed IP)</option>
+{{- range $.Data.View.Nodes}}
+<option value="{{.}}"{{if eq . $.Data.Form.Node}} selected{{end}}>{{.}}</option>
+{{- end}}
+</select></label>
+<label>or a fixed mesh IP <input name="ip" value="{{.IP}}" placeholder="10.77.1.200"></label>
+{{- end}}
+<button type="submit">Add record</button>
+</form>
+{{end}}

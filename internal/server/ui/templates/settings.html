@@ -1,0 +1,22 @@
+{{define "content"}}
+<form method="post" action="/settings" class="grid">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+{{- with .Data}}
+<label>Mesh CIDR <input name="mesh_cidr" value="{{.MeshCIDR}}"{{if .CIDRLocked}} readonly{{end}}></label>
+{{- if .CIDRLocked}}
+<p class="hint">The mesh CIDR is fixed once the mesh has nodes.</p>
+{{- end}}
+<label>Default MTU <input name="default_mtu" value="{{.DefaultMTU}}"></label>
+<label>Upstream DNS <input name="upstream_dns" value="{{.UpstreamDNS}}"></label>
+<label>Default hub <select name="default_hub">
+<option value="">lowest-id server</option>
+{{- range .Servers}}
+<option value="{{.}}"{{if eq . $.Data.DefaultHub}} selected{{end}}>{{.}}</option>
+{{- end}}
+</select></label>
+{{- end}}
+<button type="submit">Save</button>
+</form>
+<h2>Export</h2>
+<p><a href="/export">Download the mesh as YAML</a> (the same file as <code>meshctl export</code>; no secrets).</p>
+{{end}}

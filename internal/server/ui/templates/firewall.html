@@ -1,0 +1,55 @@
+{{define "content"}}
+<p>meshctl manages firewalld on servers only. Their <code>mesh</code> zone, on wg0, drops what is not listed here. Spokes keep their own firewall: on the NAS, allow your apps' ports from {{.Data.View.MeshCIDR}} in its firewall settings.</p>
+{{- range .Data.View.Servers}}
+<h2>{{.Name}}</h2>
+{{- with .Firewall}}
+<table>
+<thead><tr><th>Zone</th><th>Port</th><th>From</th><th>Why</th></tr></thead>
+<tbody>
+{{- range .Rules}}
+<tr><td>{{.Zone}}</td><td>{{.Port}}/{{.Proto}}</td><td>{{if .Source}}{{.Source}}{{else}}anywhere{{end}}</td><td>{{.Note}}</td></tr>
+{{- end}}
+</tbody>
+</table>
+{{- if .Relay}}
+<p>Forwards between mesh peers (policy <code>meshctl-relay</code>): it relays traffic between spokes.</p>
+{{- end}}
+{{- if .ExitGateway}}
+<p>Forwards mesh traffic to the internet, masqueraded (policy <code>meshctl-exit</code>): it is an exit.</p>
+{{- end}}
+{{- else}}
+<p>No config yet: the server has not joined, or is disabled.</p>
+{{- end}}
+{{- end}}
+
+<h2>Custom rules</h2>
+<table>
+<thead><tr><th>Server</th><th>Port</th><th>From</th><th>Note</th><th></th></tr></thead>
+<tbody>
+{{- range .Data.View.Custom}}
+<tr><td>{{if .Node}}{{.Node}}{{else}}every server{{end}}</td><td>{{.Port}}/{{.Proto}}</td><td>{{.Source}}</td><td>{{.Note}}</td><td><form method="post" action="/firewall/{{.ID}}/remove" class="inline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit" class="link">Remove</button></form></td></tr>
+{{- else}}
+<tr><td colspan="5">None yet.</td></tr>
+{{- end}}
+</tbody>
+</table>
+<form method="post" action="/firewall" class="grid">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+{{- with .Data.Form}}
+<label>Server <select name="node">
+<option value="">every server</option>
+{{- range $.Data.Servers}}
+<option value="{{.}}"{{if eq . $.Data.Form.Node}} selected{{end}}>{{.}}</option>
+{{- end}}
+</select></label>
+<label>Protocol <select name="proto">
+<option value="tcp"{{if eq .Proto "tcp"}} selected{{end}}>tcp</option>
+<option value="udp"{{if eq .Proto "udp"}} selected{{end}}>udp</option>
+</select></label>
+<label>Port <input name="port" value="{{.Port}}" required></label>
+<label>From <input name="source" value="{{.Source}}" required placeholder="10.77.0.0/16"></label>
+<label>Note <input name="note" value="{{.Note}}" maxlength="120"></label>
+{{- end}}
+<button type="submit">Add rule</button>
+</form>
+{{end}}

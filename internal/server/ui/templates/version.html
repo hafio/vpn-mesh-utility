@@ -1,0 +1,21 @@
+{{define "content"}}
+{{- with .Data}}
+<p>{{.Version.When}} by {{.Version.Actor}}: {{.Version.Summary}}{{if .Version.RolledBackFrom}} (restores v{{.Version.RolledBackFrom}}){{end}}</p>
+<h2>What this version changed</h2>
+{{template "diff" .Change}}
+<h2>Roll back to this version</h2>
+{{- if .Current}}
+<p>The mesh matches this version now.</p>
+{{- else}}
+<p>Rolling back writes a new version that restores this one. It would change:</p>
+{{template "diff" .Rollback}}
+<form method="post" action="/versions/{{.Version.Number}}/rollback">
+<input type="hidden" name="csrf" value="{{$.CSRF}}">
+{{- if .Rollback.ChangesMembership}}
+<label><input type="checkbox" name="confirm" value="yes"> I understand this adds or removes nodes</label>
+{{- end}}
+<button type="submit">Roll back to v{{.Version.Number}}</button>
+</form>
+{{- end}}
+{{- end}}
+{{end}}
