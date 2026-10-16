@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	mdns "github.com/miekg/dns"
 
@@ -185,9 +186,12 @@ func upstream(t *testing.T) (port int, stop func()) {
 	return int(r.addr.Port()), r.close
 }
 
+// ask queries the resolver at at. The client outwaits the resolver's own
+// forwardTimeout: on Windows a dead UDP upstream is noticed only then (Go
+// ignores the ICMP port unreachable there), not at once as on Linux.
 func ask(t *testing.T, network string, at netip.AddrPort, name string) *mdns.Msg {
 	t.Helper()
-	c := &mdns.Client{Net: network}
+	c := &mdns.Client{Net: network, Timeout: forwardTimeout + 3*time.Second}
 	resp, _, err := c.Exchange(query(name, mdns.TypeA), at.String())
 	if err != nil {
 		t.Fatalf("%s query for %s: %v", network, name, err)

@@ -262,8 +262,9 @@ func TestLocalSettings(t *testing.T) {
 	if l, err := (&Dir{Path: d.Path}).Local(); err != nil || !l.DNSOff {
 		t.Fatalf("after a restart = %+v, %v", l, err)
 	}
-	if st, err := os.Stat(filepath.Join(d.Path, LocalFile)); err != nil || st.Mode().Perm() != 0o600 {
-		t.Fatalf("mode = %v, %v", st, err)
+	// File modes mean nothing on Windows; the data dir's ACL guards it there.
+	if st, err := os.Stat(filepath.Join(d.Path, LocalFile)); err != nil || (runtime.GOOS != "windows" && st.Mode().Perm() != 0o600) {
+		t.Fatalf("mode = %v, %v", st.Mode().Perm(), err)
 	}
 	if err := os.WriteFile(filepath.Join(d.Path, LocalFile), []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
@@ -296,8 +297,8 @@ func TestMeshCache(t *testing.T) {
 	if err != nil || m.FetchedAt != want.FetchedAt || m.Error != "" || len(m.View.Nodes) != len(want.View.Nodes) || m.View.Nodes[4] != want.View.Nodes[4] {
 		t.Fatalf("after a restart = %+v, %v", m, err)
 	}
-	if st, err := os.Stat(filepath.Join(d.Path, MeshFile)); err != nil || st.Mode().Perm() != 0o600 {
-		t.Fatalf("mode = %v, %v", st, err)
+	if st, err := os.Stat(filepath.Join(d.Path, MeshFile)); err != nil || (runtime.GOOS != "windows" && st.Mode().Perm() != 0o600) {
+		t.Fatalf("mode = %v, %v", st.Mode().Perm(), err)
 	}
 	for _, bad := range []string{"{", `{"view":{"nodes":[{"name":"vps-1;id","role":"server","mesh_ip":"10.77.0.1","health":"ok","state":""}]}}`} {
 		if err := os.WriteFile(filepath.Join(d.Path, MeshFile), []byte(bad), 0o600); err != nil {
