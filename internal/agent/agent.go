@@ -907,10 +907,17 @@ func (r *runner) prefs(ctx context.Context, req proto.PrefsRequest) (proto.Prefs
 	return resp, nil
 }
 
-// DefaultSocket is the local API socket for a data dir: the runtime dir for
-// the standard data dir, else inside the data dir.
-func DefaultSocket(dataDir string) string {
-	if dataDir == "/var/lib/meshctl" {
+// PipeName is the local API on Windows (amendment A7).
+const PipeName = `\\.\pipe\meshctl-agent`
+
+// DefaultSocket is the local API socket for a data dir on goos: the named
+// pipe on Windows; the runtime dir for the standard data dir, else inside
+// the data dir.
+func DefaultSocket(goos, dataDir string) string {
+	switch {
+	case goos == "windows":
+		return PipeName
+	case dataDir == "/var/lib/meshctl":
 		return "/run/meshctl/agent.sock"
 	}
 	return filepath.Join(dataDir, "agent.sock")

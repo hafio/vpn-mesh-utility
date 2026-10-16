@@ -39,6 +39,7 @@ var wantService = map[string]string{
 	"ProtectHome":              "yes",
 	"PrivateTmp":               "yes",
 	"ProtectKernelModules":     "yes",
+	"ProtectKernelLogs":        "yes",
 	"ProtectControlGroups":     "yes",
 	"ProtectClock":             "yes",
 	"ProtectHostname":          "yes",

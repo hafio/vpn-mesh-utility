@@ -578,11 +578,14 @@ func TestReportKeepsToTheServersLimits(t *testing.T) {
 }
 
 func TestDefaultSocket(t *testing.T) {
-	if got := DefaultSocket("/var/lib/meshctl"); got != "/run/meshctl/agent.sock" {
-		t.Errorf("standard data dir: %s", got)
+	if got := DefaultSocket("linux", "/var/lib/meshctl"); got != "/run/meshctl/agent.sock" {
+		t.Fatalf("standard data dir: %s", got)
 	}
-	if got, want := DefaultSocket(filepath.Join("data", "mesh")), filepath.Join("data", "mesh", "agent.sock"); got != want {
-		t.Errorf("another data dir: %s, want %s", got, want)
+	if got, want := DefaultSocket("linux", filepath.Join("data", "mesh")), filepath.Join("data", "mesh", "agent.sock"); got != want {
+		t.Fatalf("custom data dir: %s, want %s", got, want)
+	}
+	if got := DefaultSocket("windows", `C:\ProgramData\meshctl`); got != `\\.\pipe\meshctl-agent` {
+		t.Fatalf("Windows: %s", got)
 	}
 }
 

@@ -11,6 +11,7 @@ go 1.27
 toolchain go1.27.2
 
 require (
+	github.com/Microsoft/go-winio v0.6.4
 	github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc
 	github.com/godbus/dbus/v5 v5.2.3
 	github.com/miekg/dns v1.1.73
@@ -19,6 +20,7 @@ require (
 	github.com/vishvananda/netns v0.0.5
 	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/crypto v0.58.0
+	golang.org/x/sys v0.49.0
 	golang.org/x/term v0.47.0
 	golang.zx2c4.com/wireguard v0.0.0-20261006164505-2631ce99a06f
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20241231184526-a9ab2273dd10
@@ -41,7 +43,6 @@ require (
 	golang.org/x/mod v0.42.0 // indirect
 	golang.org/x/net v0.61.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
-	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/telemetry v0.0.0-20261010193011-f71dc92da45e // indirect
 	golang.org/x/tools v0.52.0 // indirect
 	golang.org/x/vuln v1.9.0 // indirect

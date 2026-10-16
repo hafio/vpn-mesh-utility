@@ -2,7 +2,8 @@
 
 Running a mesh: bringing up the server, enrolling the VPS nodes, laptops and exits, day-to-day
 node changes, phones, DNS and the firewall, the web UI and each node's local UI, backups and the
-usual failures. Windows arrives in M5 (spec S15). Every command and flag is in
+usual failures. Windows is under way in M5 (spec S15): the service and its local API are in
+place, WireGuard there is not yet. Every command and flag is in
 [commands.md](commands.md).
 
 ## 1. Run the server (Dokploy)
@@ -115,6 +116,24 @@ docker compose exec meshctl-agent /app/meshctl status --data /data
 A userspace interface lives as long as the agent, so the NAS is off the mesh while its container
 restarts (a kernel interface stays up). The agent changes no firewall on a spoke: allow the NAS's
 app ports from 10.77.0.0/16 in its own firewall (spec S7.5).
+
+**A Windows laptop** (M5, in progress: the agent installs and runs as a service, but cannot bring
+WireGuard up on Windows yet). Add it as a spoke on the server, then in an elevated PowerShell
+(Run as administrator) on the laptop, with `meshctl-windows-amd64.exe` downloaded from the
+server's `/dl/`:
+
+```
+$env:MESHCTL_TOKEN = '<token>'
+.\meshctl-windows-amd64.exe agent install --server https://mesh.example.com --name laptop2
+```
+
+That copies meshctl to `C:\Program Files\meshctl\meshctl.exe`, joins, and installs and starts
+the `meshctl-agent` service, which Windows starts at boot and restarts when it fails. Its data
+is in `C:\ProgramData\meshctl` (SYSTEM and Administrators only), its log in `agent.log` there
+(10 MiB, plus one older file). `meshctl status`, `exit`, `dns`, `logs` and `ui` reach it over the
+named pipe `\\.\pipe\meshctl-agent`, from an elevated prompt only. `meshctl agent uninstall` stops
+and removes the service (`--purge` removes the data dir too, so the node must join again); the
+binary stays in Program Files.
 
 **Exits.** Allow a server to be an exit once: `node set vps-2 --can-exit`. Its agent turns on
 forwarding and firewalld's `meshctl-exit` policy, which masquerades mesh traffic to the
@@ -370,6 +389,9 @@ simply wait. When the server is back, agents reconnect within a minute.
 | `This sign-in link does not work` | links work once, within 2 minutes: run `meshctl ui` again |
 | `This is meshctl's local UI; open it at http://127.0.0.1:7443/` | the browser used another name for it (a forward to another local port, the host's name): forward to local port 7443 and open the link as printed |
 | `This change did not come from the local UI's own page` | something other than the UI's page posted to it (or a browser extension strips Origin); use the page itself |
+| `... is this prompt elevated (Run as administrator)?` on Windows | the local API pipe is for Administrators and SYSTEM: open the prompt with "Run as administrator" |
+| `installing the Windows service needs an elevated prompt` | `agent install`, `agent join` and `agent uninstall` change services: run them elevated |
+| the Windows service stops and starts again every few seconds | read `C:\ProgramData\meshctl\agent.log`; the agent exits with what failed and the service manager restarts it |
 | `drift check: put back what changed` every few minutes | something keeps changing the host's mesh setup, usually NetworkManager managing wg0: `nmcli device set wg0 managed no` |
 
 ## 13. Upgrading

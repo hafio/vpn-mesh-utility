@@ -83,10 +83,17 @@ firewalld, so it runs as root -- but bounded:
 | `ProtectSystem=strict`, `ReadWritePaths=/var/lib/meshctl` | the file system is read-only except the data dir and the two runtime dirs below |
 | `RuntimeDirectory=meshctl wireguard`, `RuntimeDirectoryPreserve=yes` | `/run/meshctl` holds the local API socket, `/run/wireguard` the userspace backend's UAPI socket that `wg show` reads; both are kept across restarts, so another WireGuard daemon's socket in `/run/wireguard` is never removed with the agent's |
 | no `ProtectKernelTunables` | deliberate: relay and exit servers need `net.ipv4.ip_forward` written to `/proc/sys` |
-| `ProtectHome`, `PrivateTmp`, `ProtectKernelModules`, `ProtectControlGroups`, `ProtectClock`, `ProtectHostname`, `RestrictNamespaces`, `RestrictRealtime`, `LockPersonality`, `MemoryDenyWriteExecute`, `SystemCallArchitectures=native` | standard hardening; none of it is needed by the agent |
+| `ProtectHome`, `PrivateTmp`, `ProtectKernelModules`, `ProtectKernelLogs`, `ProtectControlGroups`, `ProtectClock`, `ProtectHostname`, `RestrictNamespaces`, `RestrictRealtime`, `LockPersonality`, `MemoryDenyWriteExecute`, `SystemCallArchitectures=native` | standard hardening; none of it is needed by the agent |
 | `DevicePolicy=closed`, `DeviceAllow=/dev/net/tun rw` | only the tun device, for the userspace backend |
 | `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK` | sockets, D-Bus to firewalld, and netlink for links and routes |
 | `UMask=0077`, `StateDirectoryMode=0700` | everything it writes is private |
+
+`systemd-analyze security --offline=true deploy/meshctl-agent.service` rated the unit 4.3, "OK",
+on EL10 before `ProtectKernelLogs=yes` was added (2026-10-16). What it still counts is what the
+agent is for -- root with network capabilities, netlink and IP sockets, the host's network, the
+tun device, writable kernel tunables -- plus `SystemCallFilter`, the one large step left. A
+syscall the filter missed would kill the agent and drop the tunnel (and `firewall-cmd`, which the
+agent runs, inherits the filter), so it waits for a test on a real AlmaLinux node.
 
 With the userspace backend (`agent run --wg-backend userspace`, or `auto` on a host without the
 module) the agent itself is the WireGuard implementation, wireguard-go on a tun interface it
@@ -209,6 +216,22 @@ visits it, and could use it until the session ends. The session reaches no more 
 on the node does -- exit, keepalive and MTU (checked and audited by the server), split DNS, a
 tunnel restart, the mesh view and the log -- for at most 12 hours; sign out when done, and on a
 machine other people log in to, run the agent with `--ui-listen off`.
+
+## Windows (M5, in progress)
+
+- **The service** `meshctl-agent` runs `meshctl agent run --data C:\ProgramData\meshctl` as
+  LocalSystem, started with Windows and restarted on failure. Installing, changing or removing
+  it takes an elevated prompt.
+- **The data dir** gets a protected ACL that every file in it inherits: SYSTEM and Administrators
+  only (`D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)`), the Windows form of mode 0700, since file modes
+  mean nothing there. An unelevated process that opens a data dir (a test, `--no-service`) is
+  added too, so it keeps access to what it made. The keys, the cached config and the service's
+  `agent.log` live there.
+- **The local API** is the named pipe `\\.\pipe\meshctl-agent`, which only Administrators and
+  SYSTEM may open (`D:P(A;;GA;;;BA)(A;;GA;;;SY)`, amendment A7): `meshctl status`, `exit` and
+  `ui` need an elevated prompt. A second agent cannot take the pipe while one listens.
+- **The log file** is capped at 10 MiB plus one older copy and carries what the journal carries
+  on Linux: no key, no token.
 
 ## Interfaces the agent did not create
 

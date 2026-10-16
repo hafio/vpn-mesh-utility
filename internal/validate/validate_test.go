@@ -209,6 +209,19 @@ func TestLocalTokenMasksTheValue(t *testing.T) {
 	}
 }
 
+func TestPipePath(t *testing.T) {
+	for _, s := range []string{`\\.\pipe\meshctl-agent`, `\\.\pipe\meshctl-test_1.a`} {
+		if _, err := PipePath("socket", s); err != nil {
+			t.Errorf("PipePath(%q) = %v", s, err)
+		}
+	}
+	for _, s := range append([]string{`\\.\pipe\`, `\\server\pipe\x`, `C:\data\agent.sock`, `\\.\pipe\a\b`, "/run/meshctl/agent.sock"}, hostile...) {
+		if _, err := PipePath("socket", s); err == nil {
+			t.Errorf("PipePath(%q) accepted it", s)
+		}
+	}
+}
+
 func TestVersionAndSemVer(t *testing.T) {
 	for _, s := range []string{"dev", "v1.2.3", "v1.2.3-4-gabcdef0-dirty", "abcdef0"} {
 		if _, err := Version("version", s); err != nil {

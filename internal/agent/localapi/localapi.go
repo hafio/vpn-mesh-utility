@@ -1,10 +1,10 @@
 // Package localapi is the agent's local API (amendment A7): the CLI on the
 // node (`meshctl status`, `meshctl exit`, `meshctl dns`, `meshctl logs`,
 // `meshctl ui`) uses it over a Unix socket that only root and the `meshctl`
-// group can open. It never listens
-// on the network. A change of the node's settings is relayed to the server,
-// which decides (amendment A10); `dns on|off` is the node's own and stays
-// on it.
+// group can open -- on Windows a named pipe only Administrators and SYSTEM
+// can open. It never listens on the network. A change of the node's
+// settings is relayed to the server, which decides (amendment A10); `dns
+// on|off` is the node's own and stays on it.
 package localapi
 
 import (
@@ -18,18 +18,12 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/user"
 	"path/filepath"
-	"runtime"
-	"strconv"
 	"time"
 
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
 	"github.com/hafio/vpn-mesh-utility/internal/validate"
 )
-
-// Group may read the socket in addition to root, when it exists.
-const Group = "meshctl"
 
 // Funcs are what the local API calls in the agent.
 type Funcs struct {
@@ -188,10 +182,9 @@ func reply(w http.ResponseWriter, v any, err error) {
 	_ = json.NewEncoder(w).Encode(v) // the CLI went away; nothing to do
 }
 
-// Listen opens the socket at path: mode 0660, group meshctl when that group
-// exists (else root only), replacing a stale socket but refusing to start
-// when another agent answers on it.
-func Listen(path string) (net.Listener, error) {
+// listenSocket opens a Unix socket at path, replacing a stale socket but
+// refusing to start when another agent answers on it.
+func listenSocket(path string) (net.Listener, error) {
 	if len(path) > 100 {
 		return nil, fmt.Errorf("local API socket path %s is too long for a Unix socket; use a shorter --socket", path)
 	}
@@ -208,21 +201,6 @@ func Listen(path string) (net.Listener, error) {
 	ln, err := net.Listen("unix", path)
 	if err != nil {
 		return nil, fmt.Errorf("listen on %s: %w", path, err)
-	}
-	// File modes mean nothing on Windows; the agent there moves to a named
-	// pipe with an ACL (milestone M5).
-	if runtime.GOOS == "windows" {
-		return ln, nil
-	}
-	mode := os.FileMode(0o600)
-	if g, err := user.LookupGroup(Group); err == nil {
-		if gid, err := strconv.Atoi(g.Gid); err == nil && os.Chown(path, -1, gid) == nil {
-			mode = 0o660
-		}
-	}
-	if err := os.Chmod(path, mode); err != nil {
-		_ = ln.Close()
-		return nil, fmt.Errorf("restrict %s: %w", path, err)
 	}
 	return ln, nil
 }
@@ -251,10 +229,7 @@ type Client struct {
 
 // NewClient returns a client for the agent on socket.
 func NewClient(socket string) *Client {
-	tr := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		var d net.Dialer
-		return d.DialContext(ctx, "unix", socket)
-	}}
+	tr := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) { return dial(ctx, socket) }}
 	return &Client{socket: socket, http: &http.Client{Transport: tr, Timeout: 10 * time.Second}}
 }
 
@@ -322,7 +297,7 @@ func (c *Client) Logs(ctx context.Context, follow bool, w io.Writer) error {
 }
 
 func (c *Client) unreachable(err error) error {
-	return fmt.Errorf("reach the agent at %s: %w (is `meshctl agent run` running, and are you root or in group %s?)", c.socket, err, Group)
+	return fmt.Errorf("reach the agent at %s: %w (%s)", c.socket, err, reachHint)
 }
 
 // refusal is a non-200 answer as an error: the agent's ErrorBody as a

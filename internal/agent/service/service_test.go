@@ -69,14 +69,14 @@ func TestAvailable(t *testing.T) {
 		t.Error("no /run/systemd/system: must not be available")
 	}
 	i, _ := host(t, deploy.BinaryPath, "/run/systemd/system")
-	if ok, why := i.Available(); !ok && !strings.Contains(why, "M5") {
+	if ok, why := i.Available(); !ok && !strings.Contains(why, "Linux-only") {
 		t.Errorf("systemd host: Available = false (%s)", why)
 	}
 	c, _ := host(t, deploy.BinaryPath, "/run/systemd/system")
 	if err := os.WriteFile(c.path("/.dockerenv"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if ok, why := c.Available(); ok || (!strings.Contains(why, "container") && !strings.Contains(why, "M5")) {
+	if ok, why := c.Available(); ok || (!strings.Contains(why, "container") && !strings.Contains(why, "Linux-only")) {
 		t.Errorf("container: Available = %v (%s)", ok, why)
 	}
 }

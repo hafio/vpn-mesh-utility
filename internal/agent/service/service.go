@@ -1,6 +1,8 @@
-// Package service installs the agent as a systemd service (spec S6.1 step 7):
-// it writes deploy's static unit file and enables it through systemctl, run
-// by the single exec site. Windows services arrive in milestone M5.
+// Package service installs the agent as a system service (spec S6.1 step
+// 7). On Linux it writes deploy's static unit file and enables it through
+// systemctl, run by the single exec site; on Windows it registers the
+// meshctl-agent service with the service manager (service_windows.go) and
+// runs the agent under it.
 package service
 
 import (
@@ -37,7 +39,7 @@ func Systemd() Installer {
 func (i Installer) Available() (bool, string) {
 	switch {
 	case runtime.GOOS != "linux":
-		return false, "service install on " + runtime.GOOS + " arrives in milestone M5"
+		return false, "systemd services are Linux-only; on Windows, `meshctl agent install` installs the service"
 	case exists(i.path("/.dockerenv")) || exists(i.path("/run/.containerenv")):
 		return false, "running in a container; the container's restart policy runs `meshctl agent run`"
 	case !exists(i.path("/run/systemd/system")):

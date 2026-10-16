@@ -66,6 +66,7 @@ var (
 	reLabel    = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 	reUser     = regexp.MustCompile(`^[a-z][a-z0-9_.-]{0,31}$`)
 	reToken    = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+	rePipe     = regexp.MustCompile(`^\\\\\.\\pipe\\[A-Za-z0-9._-]{1,200}$`)
 	reVersion  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$`)
 	reSemVer   = regexp.MustCompile(`^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]{1,32})?$`)
 	rePosix    = regexp.MustCompile(`^/[A-Za-z0-9._/-]*$`)
@@ -207,6 +208,15 @@ func Token(field, s string) (string, error) {
 func LocalToken(field, s string) (string, error) {
 	if !reToken.MatchString(s) {
 		return "", fail(field, mask(s), "must be the 43-character token of a link `meshctl ui` printed")
+	}
+	return s, nil
+}
+
+// PipePath validates the Windows named pipe of the agent's local API:
+// \\.\pipe\ and a name of letters, digits, dots, dashes and underscores.
+func PipePath(field, s string) (string, error) {
+	if !rePipe.MatchString(s) {
+		return "", fail(field, s, `must be a named pipe such as \\.\pipe\meshctl-agent`)
 	}
 	return s, nil
 }

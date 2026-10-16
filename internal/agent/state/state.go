@@ -53,13 +53,18 @@ type Dir struct {
 	Path string
 }
 
-// Open returns the data directory at path, creating it (mode 0700) if needed.
+// Open returns the data directory at path, creating it (mode 0700) if
+// needed. On Windows, where modes mean nothing, it gets an ACL instead
+// (protect).
 func Open(path string) (*Dir, error) {
 	if _, err := validate.FilePath("--data", path); err != nil {
 		return nil, err
 	}
 	if err := os.MkdirAll(path, 0o700); err != nil {
 		return nil, fmt.Errorf("create data dir %s: %w (run as root, or pass --data)", path, err)
+	}
+	if err := protect(path); err != nil {
+		return nil, err
 	}
 	return &Dir{Path: path}, nil
 }

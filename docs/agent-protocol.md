@@ -244,7 +244,8 @@ at boot, and a node's first config, never arm it.
 
 `meshctl status` reads `GET /v1/status` from the agent's Unix socket (`/run/meshctl/agent.sock`
 for the standard data dir, else `<data>/agent.sock`; mode 0660 with group `meshctl` when that
-group exists, else 0600). It never listens on the network.
+group exists, else 0600). On Windows it is the named pipe `\\.\pipe\meshctl-agent`, which only
+Administrators and SYSTEM may open. It never listens on the network.
 
 `meshctl exit` posts a prefs request to `POST /v1/prefs`. The agent validates it, relays it to the
 server as a signed prefs request, fetches the new config at once, and answers the server's answer

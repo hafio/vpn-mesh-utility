@@ -265,7 +265,7 @@ func TestLogs(t *testing.T) {
 		t.Fatalf("a follow when the agent stops = %v", err)
 	}
 
-	if err := NewClient(filepath.Join(shortDir(t), "none.sock")).Logs(context.Background(), false, &out); err == nil || !strings.Contains(err.Error(), "agent run") {
+	if err := NewClient(filepath.Join(shortDir(t), "none.sock")).Logs(context.Background(), false, &out); err == nil || !strings.Contains(err.Error(), reachHint) {
 		t.Fatalf("logs without an agent = %v", err)
 	}
 	if err := serve(t, Funcs{}).Logs(context.Background(), false, &out); err == nil || !strings.Contains(err.Error(), "answered 404") {
@@ -293,7 +293,7 @@ func (droppedLogs) Follow(context.Context) ([]string, <-chan string) {
 
 func TestClientExplainsAMissingAgent(t *testing.T) {
 	_, err := NewClient(filepath.Join(shortDir(t), "none.sock")).Status(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "agent run") {
+	if err == nil || !strings.Contains(err.Error(), reachHint) {
 		t.Fatalf("Status = %v", err)
 	}
 }

@@ -3,46 +3,88 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"io"
+	"path/filepath"
 
 	"github.com/hafio/vpn-mesh-utility/internal/agent"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/localui"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/logbuf"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/service"
+	"github.com/hafio/vpn-mesh-utility/internal/agent/state"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/wg"
 )
 
 func agentCommands() []command {
 	return []command{
+		{name: "install", summary: "Windows: copy meshctl into Program Files, join this node and install the service", setup: setupAgentInstall},
 		{name: "join", summary: "enroll this node with a one-time token, then install and start the service", setup: setupAgentJoin},
 		{name: "run", summary: "run the agent in the foreground (what the service runs)", setup: setupAgentRun},
+		{name: "uninstall", summary: "Windows: stop and remove the service (--purge also removes the data dir)", setup: setupAgentUninstall},
 	}
 }
 
-func setupAgentJoin(fs *flag.FlagSet, e *env) action {
+// joinFlags registers what join and install take; the returned func reads
+// them once they are parsed.
+func joinFlags(fs *flag.FlagSet, e *env) func() (agent.JoinOptions, error) {
 	srv := fs.String("server", "", "server origin, e.g. https://mesh.example.com")
 	// The token is never a flag default: -h would print it.
 	token := fs.String("token", "", "one-time join token (or set MESHCTL_TOKEN, which keeps it out of the process list)")
 	name := fs.String("name", "", "the node name the token must belong to (a safety check)")
 	endpoint := fs.String("endpoint", "", "servers only: public IPv4:port, when auto-detection would be wrong")
 	data := fs.String("data", defaultAgentData(e), "agent data directory")
-	noService := fs.Bool("no-service", false, "do not install and start the system service")
-	return func(ctx context.Context, args []string) error {
-		if err := wantArgs(args, 0, ""); err != nil {
-			return err
-		}
+	return func() (agent.JoinOptions, error) {
 		tok := *token
 		if tok == "" {
 			tok = e.getenv("MESHCTL_TOKEN")
 		}
 		if *srv == "" || tok == "" {
-			return usagef("--server and --token (or MESHCTL_TOKEN) are required; `meshctl node add` prints both")
+			return agent.JoinOptions{}, usagef("--server and --token (or MESHCTL_TOKEN) are required; `meshctl node add` prints both")
 		}
-		_, err := agent.Join(ctx, agent.JoinOptions{
-			DataDir: *data, Server: *srv, Token: tok, Name: *name, Endpoint: *endpoint, Version: e.version,
-			NoService: *noService, Service: service.Systemd(), Out: e.stdout, Now: e.now,
-		})
+		return agent.JoinOptions{DataDir: *data, Server: *srv, Token: tok, Name: *name, Endpoint: *endpoint, Version: e.version,
+			Out: e.stdout, Now: e.now}, nil
+	}
+}
+
+func setupAgentJoin(fs *flag.FlagSet, e *env) action {
+	opts := joinFlags(fs, e)
+	noService := fs.Bool("no-service", false, "do not install and start the system service")
+	return func(ctx context.Context, args []string) error {
+		if err := wantArgs(args, 0, ""); err != nil {
+			return err
+		}
+		o, err := opts()
+		if err != nil {
+			return err
+		}
+		o.NoService, o.Service = *noService, hostService(o.DataDir)
+		_, err = agent.Join(ctx, o)
 		return err
+	}
+}
+
+func setupAgentInstall(fs *flag.FlagSet, e *env) action {
+	opts := joinFlags(fs, e)
+	return func(ctx context.Context, args []string) error {
+		if err := wantArgs(args, 0, ""); err != nil {
+			return err
+		}
+		o, err := opts()
+		if err != nil {
+			return err
+		}
+		return installAgent(ctx, e, o)
+	}
+}
+
+func setupAgentUninstall(fs *flag.FlagSet, e *env) action {
+	data := fs.String("data", defaultAgentData(e), "agent data directory")
+	purge := fs.Bool("purge", false, "also remove the data directory: this node's keys and cached config (it must join again)")
+	return func(ctx context.Context, args []string) error {
+		if err := wantArgs(args, 0, ""); err != nil {
+			return err
+		}
+		return uninstallAgent(ctx, e, *data, *purge)
 	}
 }
 
@@ -63,29 +105,62 @@ func setupAgentRun(fs *flag.FlagSet, e *env) action {
 			}
 			uiListen = *ui
 		}
-		// The log goes to stderr (the journal) and to the ring `meshctl
-		// logs` reads.
-		ring := logbuf.New(logbuf.DefaultLines)
-		log, err := newLogger(io.MultiWriter(e.stderr, ring), *level)
+		asService, err := service.IsWindowsService()
+		if err != nil {
+			return fmt.Errorf("find out whether the Windows service manager started meshctl: %w", err)
+		}
+		out, closeLog, err := agentLog(e.stderr, *data, asService)
 		if err != nil {
 			return err
 		}
-		return agent.Run(ctx, agent.Deps{
+		defer closeLog()
+		ring := logbuf.New(logbuf.DefaultLines)
+		log, err := newLogger(io.MultiWriter(out, ring), *level)
+		if err != nil {
+			return err
+		}
+		d := agent.Deps{
 			DataDir: *data, Socket: sock(), UIListen: uiListen, Version: e.version,
 			NoFirewall: *noFirewall, Backend: *backend, Log: log, Logs: ring, Now: e.now,
-		})
+		}
+		if asService {
+			return service.RunWindowsService(func(ctx context.Context) error { return agent.Run(ctx, d) })
+		}
+		return agent.Run(ctx, d)
 	}
+}
+
+// serviceLogMax caps the Windows service's log file (and its one rotated
+// copy).
+const serviceLogMax = 10 << 20
+
+// agentLog is where the agent's text log goes besides the ring `meshctl
+// logs` reads: stderr (the journal), or for the Windows service, whose
+// stderr nobody reads, <data>/agent.log in the data dir (protected like the
+// keys beside it).
+func agentLog(stderr io.Writer, data string, asService bool) (io.Writer, func(), error) {
+	if !asService {
+		return stderr, func() {}, nil
+	}
+	if _, err := state.Open(data); err != nil {
+		return nil, nil, err
+	}
+	f, err := logbuf.OpenFile(filepath.Join(data, "agent.log"), serviceLogMax)
+	if err != nil {
+		return nil, nil, err
+	}
+	return f, func() { _ = f.Close() }, nil // the agent has stopped; nothing to report to
 }
 
 // socketFlags registers --data and --socket. The returned func resolves the
 // socket once flags are parsed: --socket, else the default for the data dir.
 func socketFlags(fs *flag.FlagSet, e *env) (*string, func() string) {
 	data := fs.String("data", defaultAgentData(e), "agent data directory")
-	socket := fs.String("socket", "", "local API socket (default: /run/meshctl/agent.sock for the standard data dir, else <data>/agent.sock)")
+	socket := fs.String("socket", "", `local API socket (default: /run/meshctl/agent.sock for the standard data dir, else <data>/agent.sock; \\.\pipe\meshctl-agent on Windows)`)
 	return data, func() string {
 		if *socket != "" {
 			return *socket
 		}
-		return agent.DefaultSocket(*data)
+		return agent.DefaultSocket(e.goos, *data)
 	}
 }

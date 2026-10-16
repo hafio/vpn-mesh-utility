@@ -251,6 +251,62 @@ func TestAgentRunNeedsAJoin(t *testing.T) {
 	}
 }
 
+// `agent install` and `agent uninstall` are Windows commands; elsewhere they
+// say what to use instead and touch nothing. (On Windows they would install
+// or remove the host's real service, so the tests leave them alone there.)
+func TestAgentInstallIsForWindows(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("installs the real service on Windows")
+	}
+	data := filepath.Join(shortDir(t), "data")
+	if code, _, errOut := runArgs("agent", "install", "--server", "https://mesh.example.com", "--token", testfix.Token, "--data", data); code != exitUsage ||
+		!strings.Contains(errOut, "install.sh") {
+		t.Fatalf("agent install on %s = %d %q", runtime.GOOS, code, errOut)
+	}
+	if code, _, errOut := runArgs("agent", "uninstall", "--data", data, "--purge"); code != exitUsage || !strings.Contains(errOut, "systemctl disable") {
+		t.Fatalf("agent uninstall on %s = %d %q", runtime.GOOS, code, errOut)
+	}
+	if _, err := os.Stat(data); err == nil {
+		t.Fatal("a refused install or uninstall touched the data dir")
+	}
+	if code, _, _ := runArgs("agent", "install", "--data", data); code != exitUsage {
+		t.Fatalf("agent install without a token = %d", code)
+	}
+}
+
+// The agent logs to stderr, or as the Windows service to agent.log in its
+// data dir; a data dir that cannot be opened is the error.
+func TestAgentLog(t *testing.T) {
+	var stderr strings.Builder
+	out, done, err := agentLog(&stderr, "unused", false)
+	if err != nil || out != &stderr {
+		t.Fatalf("agentLog outside a service = %v, %v", out, err)
+	}
+	done()
+	data := filepath.Join(shortDir(t), "data")
+	out, done, err = agentLog(&stderr, data, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(out, "level=INFO msg=\"meshctl agent running\"\n"); err != nil {
+		t.Fatal(err)
+	}
+	done()
+	if b, err := os.ReadFile(filepath.Join(data, "agent.log")); err != nil || !strings.Contains(string(b), "agent running") || stderr.Len() != 0 {
+		t.Fatalf("agent.log = %q, %v; stderr %q", b, err, stderr.String())
+	}
+	if _, _, err := agentLog(&stderr, filepath.Join(shortDir(t), "data?x"), true); err == nil || !strings.Contains(err.Error(), "--data") {
+		t.Fatalf("agentLog with an unusable data dir = %v", err)
+	}
+	blocked := filepath.Join(shortDir(t), "blocked")
+	if err := os.MkdirAll(filepath.Join(blocked, "agent.log", "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := agentLog(&stderr, blocked, true); err == nil || !strings.Contains(err.Error(), "open log file") {
+		t.Fatalf("agentLog over a directory = %v", err)
+	}
+}
+
 func TestHealthcheckServer(t *testing.T) {
 	status := http.StatusOK
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -350,7 +406,7 @@ func TestPrintStatusOfALaptop(t *testing.T) {
 		t.Errorf("status with an argument = %d", code)
 	}
 	if code, _, errOut := runArgs("status", "--socket", filepath.Join(shortDir(t), "none.sock")); code != exitFailure ||
-		!strings.Contains(errOut, "agent run") {
+		!strings.Contains(errOut, "reach the agent at") {
 		t.Errorf("status without an agent = %d %q", code, errOut)
 	}
 }
