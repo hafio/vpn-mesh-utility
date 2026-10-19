@@ -2,6 +2,7 @@ package dns
 
 import (
 	"fmt"
+	"math/rand/v2"
 	"net"
 	"net/netip"
 	"sync"
@@ -55,29 +56,42 @@ func serve(want netip.AddrPort, h mdns.Handler) (*resolver, error) {
 	return r, nil
 }
 
-// bindPair opens want over UDP and TCP. For port 0 (tests) TCP takes the
-// port the system gave UDP; when TCP may not have it -- Windows reserves
-// port ranges for TCP alone (`netsh int ipv4 show excludedportrange
-// protocol=tcp`) -- another port is tried.
+// bindPair opens want over TCP and UDP, both on one port. For port 0 (tests)
+// it picks the port itself: Windows reserves blocks of ports for TCP and for
+// UDP (`netsh int ipv4 show excludedportrange protocol=tcp`, and udp), and
+// hands out ports in sequence, so the port the system gives one protocol is
+// often reserved for the other, and so are the next dozen. A random port
+// below the dynamic range, where those blocks sit, escapes them; one that is
+// taken or reserved is tried again.
 func bindPair(want netip.AddrPort) (net.PacketConn, net.Listener, netip.AddrPort, error) {
-	for try := 1; ; try++ {
-		pc, err := net.ListenPacket("udp", want.String())
-		if err != nil {
-			return nil, nil, netip.AddrPort{}, err
-		}
-		addr := want
-		if want.Port() == 0 {
-			addr = netip.AddrPortFrom(want.Addr(), uint16(pc.LocalAddr().(*net.UDPAddr).Port))
-		}
-		ln, err := net.Listen("tcp", addr.String())
-		if err == nil {
+	if want.Port() != 0 {
+		pc, ln, err := bindBoth(want)
+		return pc, ln, want, err
+	}
+	var err error
+	for range 50 {
+		addr := netip.AddrPortFrom(want.Addr(), uint16(20000+rand.IntN(29000)))
+		var pc net.PacketConn
+		var ln net.Listener
+		if pc, ln, err = bindBoth(addr); err == nil {
 			return pc, ln, addr, nil
 		}
-		_ = pc.Close() // nothing was served on it
-		if want.Port() != 0 || try == 10 {
-			return nil, nil, netip.AddrPort{}, err
-		}
 	}
+	return nil, nil, netip.AddrPort{}, err
+}
+
+// bindBoth opens addr over TCP, then UDP.
+func bindBoth(addr netip.AddrPort) (net.PacketConn, net.Listener, error) {
+	ln, err := net.Listen("tcp", addr.String())
+	if err != nil {
+		return nil, nil, err
+	}
+	pc, err := net.ListenPacket("udp", addr.String())
+	if err != nil {
+		_ = ln.Close() // nothing was served on it
+		return nil, nil, err
+	}
+	return pc, ln, nil
 }
 
 // dead reports whether a server stopped serving on its own.
