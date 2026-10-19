@@ -4,9 +4,9 @@ package wg
 
 import "errors"
 
-// NewKernel is Linux-only. Windows gets the userspace backend in M5.
+// NewKernel is Linux-only; Windows runs the userspace backend on wintun.
 func NewKernel() (Host, error) {
-	return nil, errors.New("kernel WireGuard is Linux-only; this platform uses the userspace backend (milestone M5 for Windows)")
+	return nil, errors.New("kernel WireGuard is Linux-only; this platform uses the userspace backend (--wg-backend userspace)")
 }
 
 // DetectBackend reports the only backend this platform can have.

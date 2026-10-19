@@ -17,4 +17,4 @@ docs
 **/*.crt
 data
 exports
-internal/agent/platform/windows/wintun_*.dll
+internal/agent/wintun/wintun_*.dll

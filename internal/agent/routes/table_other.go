@@ -1,4 +1,4 @@
-//go:build !linux
+//go:build !linux && !windows
 
 package routes
 
@@ -9,10 +9,10 @@ import (
 
 type unsupported struct{}
 
-// NewTable is Linux-only until the Windows backend (M5).
+// NewTable has no routing table to manage on this platform.
 func NewTable() Table { return unsupported{} }
 
-var errUnsupported = errors.New("route management on this platform arrives with the Windows agent (milestone M5)")
+var errUnsupported = errors.New("route management runs on Linux and Windows only")
 
 func (unsupported) List(string) ([]netip.Prefix, error) { return nil, errUnsupported }
 func (unsupported) Add(string, netip.Prefix) error      { return errUnsupported }

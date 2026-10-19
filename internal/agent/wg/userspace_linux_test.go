@@ -14,7 +14,7 @@ import (
 // root, so that half is the e2e suite's (TestSpokesAndExit's NAS).
 func TestUserspaceWithoutADevice(t *testing.T) {
 	var logs bytes.Buffer
-	u := &userspace{links: links{kind: "tuntap"}, log: slog.New(slog.NewTextHandler(&logs, nil))}
+	u := &userspace{links: links{kind: "tuntap"}, wgdev: wgdev{log: slog.New(slog.NewTextHandler(&logs, nil))}}
 	if l, err := u.Link("mctest-none"); err != nil || l.Exists {
 		t.Fatalf("Link of a missing interface = %+v, %v", l, err)
 	}

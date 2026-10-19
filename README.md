@@ -18,8 +18,8 @@ userspace WireGuard backend and the NAS container (`meshctl node compose`). M4 s
 DNS records and firewall rules in the web UI, the agent's drift check, and phones, with a profile
 for the WireGuard app as a QR code (mesh only or via an exit), each node's cached view of the
 mesh and `meshctl logs`, and each node's local UI (`meshctl ui`). Windows (M5) is under way:
-the agent installs as a Windows service with its local API on a named pipe; WireGuard there is
-next.
+the agent installs as a Windows service with its local API on a named pipe and runs WireGuard on
+the bundled wintun driver; exit mode and split DNS there are next.
 
 ## Quick start
 

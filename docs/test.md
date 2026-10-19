@@ -235,6 +235,7 @@ and `Policy.Fail`/`FailOn` inject a failure into one method, also while an agent
 | | `TestExitModeOnSwitchOff`, `TestExitModeFailureIsFatal` | exit on installs the rules, a switch moves 0.0.0.0/0 between peers without touching them, off removes them, 0.0.0.0/0 never in the main table; a policy failure is fatal; an engine without policy routing refuses exit on |
 | `exitmode` | `TestDesiredIsWgQuicksExitRouting`, `TestSyncTurnsExitModeOnAndOff`, `TestSyncReplacesAStaleRuleOfItsOwn`, `TestSyncStopsAtTheFirstFailure`, `TestSyncReportsEachFailure` | the exact rules and routes (IPv4 and IPv6 blackhole), routes before rules on, rules before routes off, idempotent, a stale own rule replaced, exit off on a clean host touches nothing; a failure of each call stops Sync there and counts the changes before it |
 | | `TestKernelShapes`, `TestKernelPolicyWithoutPrivilege` (Linux) | the netlink rule and route each one becomes (protocol 201, inverted fwmark, blackhole); unprivileged listing works and every change is refused with what it attempted (skipped as root; the kernel path itself is e2e's) |
+| `wintun` | `TestInstall`, `TestEnsureWithoutABundle` | the Windows driver is written beside the binary once and only when it matches its pin; one there that matches is kept, a changed one replaced, a bundle that misses its pin refused; a build without the `wintun` tag has nothing bundled and says how to get a binary that has it. The Windows host itself (`wg/userspace_windows.go`, `routes/table_windows.go`) needs an elevated prompt and the bundled DLL, so it has no unit test: it is checked on a Windows laptop (spec S10) |
 | `wg` | `TestDiffChangesOnlyWhatDiffers`, `TestDiffLeavesARoamingDialInPeerAlone`, `TestSyncIsIdempotent`, `TestSyncLinkRefusesAForeignInterface`, `TestSyncSurfacesHostFailures`, `TestParseKey`, `TestDesiredFromServerConfig` | the device diff and the interface steps (amendment A18) |
 | | `TestUAPISetGolden`, `TestParseUAPI`, `TestParseUAPIRejectsMalformedValues` | the userspace backend's text protocol: `testdata/uapi-set.golden.txt` for a change of every kind (an empty change renders nothing); a device's "get" answer read back with peers sorted and a zero handshake kept zero, so a re-apply diffs to nothing; malformed values named by line and key, a key's value never quoted |
 | | `TestOpenRefusesUnknownBackends`, `TestUserspaceWithoutADevice` (Linux) | `--wg-backend` takes only auto, kernel and userspace; the userspace host with no device: no interface is ours, reads and writes refused, wireguard-go's log mapped to debug and warn (creating the tun is e2e's) |
@@ -357,6 +358,13 @@ test must not change on the host it runs on). Their unprivileged paths (opening 
 unit-tested; the rest needs root and the wireguard module, and is exercised by
 `./scripts/dev.sh e2e` (`TestServerMesh`, and `TestSpokesAndExit` for exit mode and the userspace
 backend).
+
+## `internal/tools/fetchwintun`
+
+`TestFetchRefusesAnythingButThePinnedRelease`, `TestFetchKeepsAMatchingDLL`,
+`TestExtractChecksTheDLL`: a download that is not the pinned zip, or none at all, writes nothing;
+a DLL already in place that matches is kept without a download; inside a zip that matches, a DLL
+that is missing, too large or not the pinned one is refused.
 
 ## `internal/tools/vulnjudge`
 

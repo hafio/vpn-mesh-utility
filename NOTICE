@@ -1,0 +1,8 @@
+meshctl includes third-party software:
+
+- htmx 2.0.11 (internal/server/ui/static/htmx.min.js), Zero-Clause BSD:
+  docs/third-party/htmx-LICENSE.txt
+- Wintun 0.14.1 (wintun.dll, embedded in meshctl-windows-*.exe and written
+  beside it), WireGuard LLC Prebuilt Binaries License:
+  docs/third-party/wintun-LICENSE.txt. meshctl uses it only through its API,
+  by way of wireguard-go's tun package.

@@ -16,13 +16,16 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
+# The Windows binary carries wintun.dll (amendment A34): fetchwintun fetches
+# the pinned release and checks the zip and the DLL before it is embedded.
 RUN set -eu; \
     case "$VERSION" in ""|*[!A-Za-z0-9._+-]*) echo "VERSION must match [A-Za-z0-9._+-]+ (got '$VERSION')" >&2; exit 1 ;; esac; \
     mkdir -p /out/dist /out/data; \
+    go run ./internal/tools/fetchwintun -arch amd64 -out internal/agent/wintun; \
     for t in linux/amd64 linux/arm64 windows/amd64; do \
-      os="${t%/*}"; arch="${t#*/}"; out="/out/dist/meshctl-$os-$arch"; \
-      if [ "$os" = windows ]; then out="$out.exe"; fi; \
-      GOOS="$os" GOARCH="$arch" go build -ldflags "-s -w -X main.version=$VERSION" -o "$out" ./cmd/meshctl; \
+      os="${t%/*}"; arch="${t#*/}"; out="/out/dist/meshctl-$os-$arch"; tags=""; \
+      if [ "$os" = windows ]; then out="$out.exe"; tags=wintun; fi; \
+      GOOS="$os" GOARCH="$arch" go build -tags "$tags" -ldflags "-s -w -X main.version=$VERSION" -o "$out" ./cmd/meshctl; \
     done; \
     cd /out/dist && sha256sum meshctl-* > SHA256SUMS
 

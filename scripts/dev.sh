@@ -161,12 +161,18 @@ trivy_image() {
 # is in the file name because the release job merges every leg with
 # merge-multiple: identical names would silently overwrite.
 build_one() {
-  local os=$1 arch=$2 out="${DIST_DIR}/${BIN_NAME}-$1-$2"
-  [[ "${os}" == "windows" ]] && out="${out}.exe"
+  local os=$1 arch=$2 out="${DIST_DIR}/${BIN_NAME}-$1-$2" tags=""
   mkdir -p "${DIST_DIR}"
+  if [[ "${os}" == "windows" ]]; then
+    out="${out}.exe"
+    # A Windows binary carries wintun.dll (amendment A34), fetched and checked
+    # against its pins first; one already in place that matches is kept.
+    cap go run ./internal/tools/fetchwintun -arch "${arch}" -out "${REPO_ROOT}/internal/agent/wintun" || return 1
+    tags="wintun"
+  fi
   step "  ${os}/${arch} -> ${out}"
   CGO_ENABLED=0 GOOS="${os}" GOARCH="${arch}" \
-    cap go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o "${out}" ./cmd/meshctl
+    cap go build -trimpath -tags "${tags}" -ldflags "-s -w -X main.version=${VERSION}" -o "${out}" ./cmd/meshctl
 }
 
 # CI sets TARGET_OS/TARGET_ARCH (from the BUILD_TARGETS repo variable); unset

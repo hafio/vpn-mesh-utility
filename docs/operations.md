@@ -117,8 +117,8 @@ A userspace interface lives as long as the agent, so the NAS is off the mesh whi
 restarts (a kernel interface stays up). The agent changes no firewall on a spoke: allow the NAS's
 app ports from 10.77.0.0/16 in its own firewall (spec S7.5).
 
-**A Windows laptop** (M5, in progress: the agent installs and runs as a service, but cannot bring
-WireGuard up on Windows yet). Add it as a spoke on the server, then in an elevated PowerShell
+**A Windows laptop** (M5, in progress: WireGuard and the mesh routes work; exit mode and split DNS
+on Windows come next). Add it as a spoke on the server, then in an elevated PowerShell
 (Run as administrator) on the laptop, with `meshctl-windows-amd64.exe` downloaded from the
 server's `/dl/`:
 
@@ -134,6 +134,11 @@ is in `C:\ProgramData\meshctl` (SYSTEM and Administrators only), its log in `age
 named pipe `\\.\pipe\meshctl-agent`, from an elevated prompt only. `meshctl agent uninstall` stops
 and removes the service (`--purge` removes the data dir too, so the node must join again); the
 binary stays in Program Files.
+
+The agent runs WireGuard itself (wireguard-go) on a wintun adapter named `wg0`, which exists while
+the service runs. meshctl carries the wintun driver and writes `wintun.dll` beside
+`meshctl.exe`, checked against its pinned hash at every start. Windows Defender Firewall treats
+`wg0` as a public network: other nodes reach the laptop's services only where you allow them.
 
 **Exits.** Allow a server to be an exit once: `node set vps-2 --can-exit`. Its agent turns on
 forwarding and firewalld's `meshctl-exit` policy, which masquerades mesh traffic to the
@@ -391,6 +396,8 @@ simply wait. When the server is back, agents reconnect within a minute.
 | `This change did not come from the local UI's own page` | something other than the UI's page posted to it (or a browser extension strips Origin); use the page itself |
 | `... is this prompt elevated (Run as administrator)?` on Windows | the local API pipe is for Administrators and SYSTEM: open the prompt with "Run as administrator" |
 | `installing the Windows service needs an elevated prompt` | `agent install`, `agent join` and `agent uninstall` change services: run them elevated |
+| `this meshctl was built without wintun.dll` | a binary from `go build` without `-tags wintun`: use the release binary from `/dl/`, or `./scripts/dev.ps1 build` |
+| `the wintun.dll in this build is not the pinned 0.14.1` | the binary was built from a DLL that is not the release: rebuild with `./scripts/dev.ps1 build`, which fetches and checks it |
 | the Windows service stops and starts again every few seconds | read `C:\ProgramData\meshctl\agent.log`; the agent exits with what failed and the service manager restarts it |
 | `drift check: put back what changed` every few minutes | something keeps changing the host's mesh setup, usually NetworkManager managing wg0: `nmcli device set wg0 managed no` |
 

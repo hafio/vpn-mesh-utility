@@ -154,6 +154,15 @@ session, the Origin and the CSRF token before the handler runs), a template in
 agent only through `localui.Funcs`; a change of the node's settings goes through the same
 `prefs` relay as `meshctl exit`.
 
+A Windows binary embeds `wintun.dll` (amendment A34). `build` and `dist` run
+`go run ./internal/tools/fetchwintun` first, which downloads the pinned release, checks the zip
+and the DLL against the pins in `internal/agent/wintun/wintun.go` and writes
+`internal/agent/wintun/wintun_amd64.dll` (gitignored; a matching one is kept), then build the
+Windows target with `-tags wintun`. `vet`, `test` and `cov` build without the tag and need no
+network: such a binary refuses to start WireGuard with a message saying so. To update wintun:
+change `Version`, `ZipURL`, `ZipSHA256` and the DLL pins together, from the hashes wintun.net
+publishes, and replace `docs/third-party/wintun-LICENSE.txt`.
+
 To update htmx: download the release tarball from the npm registry, check it against the
 registry's `dist.integrity`, copy `dist/htmx.min.js` to `internal/server/ui/static/`, update
 `HTMXSHA256` in `render.go` and `docs/third-party/htmx-LICENSE.txt`, and re-run the gates.

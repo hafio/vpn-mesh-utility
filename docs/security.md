@@ -232,6 +232,14 @@ machine other people log in to, run the agent with `--ui-listen off`.
   `ui` need an elevated prompt. A second agent cannot take the pipe while one listens.
 - **The log file** is capped at 10 MiB plus one older copy and carries what the journal carries
   on Linux: no key, no token.
+- **wintun.dll** (amendment A34) is the one binary meshctl ships that it does not build. The
+  build fetches the wintun 0.14.1 release, refuses it unless the zip and the DLL match their
+  SHA-256 pins (`internal/agent/wintun`), and embeds the DLL; it is never committed. At every
+  start the agent writes it beside `meshctl.exe` in Program Files (writable by Administrators and
+  SYSTEM only, so nobody else can plant a DLL there) unless the file there already matches the
+  pin, and Windows loads it from that directory or System32 only. Its licence is
+  `docs/third-party/wintun-LICENSE.txt`; meshctl uses it only through its API (wireguard-go's
+  `tun` package), as the licence requires.
 
 ## Interfaces the agent did not create
 

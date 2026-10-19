@@ -253,11 +253,19 @@ function Invoke-TrivyImage($Ref) {
 # file name because the release job merges every leg with merge-multiple.
 function Build-One($os, $arch) {
   $out = Join-Path $DistDir "$BinName-$os-$arch"
-  if ($os -eq 'windows') { $out = "$out.exe" }
+  $tags = ''
   if (-not (Test-Path $DistDir)) { New-Item -ItemType Directory -Path $DistDir | Out-Null }
+  if ($os -eq 'windows') {
+    $out = "$out.exe"
+    # A Windows binary carries wintun.dll (amendment A34), fetched and checked
+    # against its pins first; one already in place that matches is kept.
+    $c = Cap go run ./internal/tools/fetchwintun -arch $arch -out (Join-Path $RepoRoot 'internal/agent/wintun')
+    if ($c -ne 0) { return $c }
+    $tags = 'wintun'
+  }
   Step "  $os/$arch -> $out"
   return (With-Env @{ CGO_ENABLED = '0'; GOOS = $os; GOARCH = $arch } {
-    Cap go build -trimpath -ldflags "-s -w -X main.version=$Version" -o $out ./cmd/meshctl
+    Cap go build -trimpath -tags $tags -ldflags "-s -w -X main.version=$Version" -o $out ./cmd/meshctl
   })
 }
 

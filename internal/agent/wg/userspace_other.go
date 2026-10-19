@@ -1,4 +1,4 @@
-//go:build !linux
+//go:build !linux && !windows
 
 package wg
 
@@ -8,7 +8,7 @@ import (
 	"runtime"
 )
 
-// NewUserspace is Linux-only until Windows gets wintun in M5.
+// NewUserspace runs on Linux and Windows only.
 func NewUserspace(*slog.Logger) (Host, error) {
-	return nil, fmt.Errorf("userspace WireGuard on %s arrives in milestone M5", runtime.GOOS)
+	return nil, fmt.Errorf("userspace WireGuard does not run on %s", runtime.GOOS)
 }

@@ -10,7 +10,7 @@ scripts/logs/
 
 # wintun.dll is fetched and hash-verified at build time (internal/tools/fetchwintun),
 # never committed: a binary blob in git has no provenance.
-internal/agent/platform/windows/wintun_*.dll
+internal/agent/wintun/wintun_*.dll
 
 # Runtime state that must never be committed: SQLite databases (they hold
 # password hashes and encrypted TOTP secrets), node keys, exports.

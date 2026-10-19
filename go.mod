@@ -24,6 +24,7 @@ require (
 	golang.org/x/term v0.47.0
 	golang.zx2c4.com/wireguard v0.0.0-20261006164505-2631ce99a06f
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20241231184526-a9ab2273dd10
+	golang.zx2c4.com/wireguard/windows v1.1.1
 	modernc.org/sqlite v1.60.1
 )
 
