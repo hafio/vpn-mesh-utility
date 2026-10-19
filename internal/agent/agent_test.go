@@ -502,6 +502,31 @@ func TestRunRefusesAnUnusableDataDir(t *testing.T) {
 	if h.Mutations() != 0 {
 		t.Errorf("a refused start changed the host: %v", h.Calls)
 	}
+
+	// With a cached config, and a pending one another agent's safe apply may
+	// be waiting on, the socket still fails first: no step is asked anything
+	// and the pending config stays. The two hash apart, as safe apply only
+	// writes a pending config that does; with equal hashes a cache boot that
+	// came first would skip the cached one as rolled back and pass here too.
+	// Every seam is a fake, so such a boot would touch nothing real either.
+	cfg, pending := withDNS(version(3)), withDNS(version(4))
+	if err := dir.SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := dir.SavePending(pending); err != nil {
+		t.Fatal(err)
+	}
+	h = agentfake.NewHost()
+	rt, fw, resolver := agentfake.NewRoutes(), &agentfake.Firewall{}, &agentfake.DNS{}
+	if err := run(Deps{DataDir: dir.Path, Host: h, Routes: rt, Exit: &agentfake.Policy{}, Sysctl: &agentfake.Sysctl{}, Firewall: fw, DNS: resolver, Socket: strings.Repeat("x", 120)}); err == nil || !strings.Contains(err.Error(), "too long") {
+		t.Errorf("an over-long socket path with a cached config: %v", err)
+	}
+	if _, asked := resolver.Last(); h.Mutations() != 0 || rt.Mutations() != 0 || len(fw.Applied) != 0 || asked {
+		t.Errorf("a refused start applied the cached config: host %v, routes %v, %d firewall applies, DNS asked %v", h.Calls, rt.Calls, len(fw.Applied), asked)
+	}
+	if !pendingExists(dir) {
+		t.Error("a refused start removed the pending config")
+	}
 }
 
 // A damaged cached or pending config is ignored, the pending one removed,

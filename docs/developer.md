@@ -30,8 +30,12 @@ of the wire contract (atomic file writes) lives in the stdlib-only `internal/fsu
 
 `scripts/dev.sh` and `scripts/dev.ps1` are behaviourally identical and are the only place
 that knows how to build, test or scan. Each task logs to `scripts/logs/<task>.log` and ends
-with a `<timestamp> | <task> | <seconds>s | OK|FAILED (exit N)` footer. Several tasks may be
-given at once; the run stops at the first failure.
+with a `<timestamp> | <task> | <seconds>s | OK|FAILED (exit N)` footer. The log holds all the
+task printed: every tool's stdout and stderr, and the scripts' own `==>`, `[ ok ]`, `[warn]` and
+`[fail]` lines (dev.ps1 adds where a PowerShell error stopped the task). Data a tool writes on
+stdout is kept beside it: `scan.json` (govulncheck), `vet.gofmt.txt` (`gofmt -l`) and
+`cov.func.txt` (coverage per function). Several tasks may be given at once; the run stops at
+the first failure.
 
 `.gitattributes` keeps every text file LF on Windows too: goldens, embedded templates and
 `gofmt -l` compare bytes, so a checkout with CRLF would fail `vet` and `test`. A Windows

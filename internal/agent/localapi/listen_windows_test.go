@@ -16,6 +16,9 @@ import (
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
 )
 
+// servePipe serves the API on path until the test ends, then fails the
+// test unless Serve stopped cleanly on its cancel: a listener that could
+// not serve must not pass as a client that was refused.
 func servePipe(t *testing.T, path, sddl string) {
 	t.Helper()
 	ln, err := listenPipe(path, sddl)
@@ -23,28 +26,42 @@ func servePipe(t *testing.T, path, sddl string) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
+	served := make(chan error, 1)
 	go func() {
-		_ = Serve(ctx, ln, Handler(Funcs{Status: func(context.Context) (proto.LocalStatus, error) { return proto.LocalStatus{MeshIP: "10.77.2.1"}, nil }}))
+		served <- Serve(ctx, ln, Handler(Funcs{Status: func(context.Context) (proto.LocalStatus, error) { return proto.LocalStatus{MeshIP: "10.77.2.1"}, nil }}))
 	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-served:
+			if err != nil {
+				t.Errorf("Serve on %s stopped with %v, want a clean stop", path, err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Errorf("Serve on %s did not stop within 5s of its cancel", path)
+		}
+	})
 	waitPipe(t, path)
 }
 
 // waitPipe waits until the pipe takes clients. go-winio's first instance
 // takes none until the listener's first Accept makes the next one; until
-// then a client finds no pipe at all. Any other answer -- a connection, or
-// access denied for a pipe this user may not open -- means it is up.
+// then a client finds no pipe, or a busy one (DialPipe reports a pipe busy
+// past its wait as ErrTimeout). A connection, or access denied for a pipe
+// this user may not open, means it is up; any other answer fails the test.
 func waitPipe(t *testing.T, path string) {
 	t.Helper()
 	wait := 100 * time.Millisecond
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
 		c, err := winio.DialPipe(path, &wait)
-		if err == nil {
+		switch {
+		case err == nil:
 			_ = c.Close()
 			return
-		}
-		if !errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
+		case errors.Is(err, windows.ERROR_ACCESS_DENIED):
 			return
+		case !errors.Is(err, windows.ERROR_FILE_NOT_FOUND) && !errors.Is(err, windows.ERROR_PIPE_BUSY) && !errors.Is(err, winio.ErrTimeout):
+			t.Fatalf("waiting for %s to take clients: %v", path, err)
 		}
 	}
 	t.Fatalf("%s took no client within 5s", path)
@@ -67,13 +84,25 @@ func TestPipeIsForAdministratorsOnly(t *testing.T) {
 		t.Fatalf("PipeSDDL reads back as %s, want only Administrators and SYSTEM", got)
 	}
 	path := pipeName()
-	servePipe(t, path, PipeSDDL)
-	st, err := NewClient(path).Status(context.Background())
-	switch elevated := windows.GetCurrentProcessToken().IsElevated(); {
-	case elevated && (err != nil || st.MeshIP != "10.77.2.1"):
-		t.Fatalf("an elevated client = %+v, %v", st, err)
-	case !elevated && (!errors.Is(err, windows.ERROR_ACCESS_DENIED) || !strings.Contains(err.Error(), "elevated")):
-		t.Fatalf("an unelevated client was not refused access: %+v, %v", st, err)
+	if windows.GetCurrentProcessToken().IsElevated() {
+		servePipe(t, path, PipeSDDL)
+		if st, err := NewClient(path).Status(context.Background()); err != nil || st.MeshIP != "10.77.2.1" {
+			t.Fatalf("an elevated client = %+v, %v", st, err)
+		}
+	} else {
+		// Unelevated, this process could not serve the pipe either: go-winio
+		// opens every instance after the first with read and write, which
+		// the DACL refuses it, so Accept would fail and take the pipe down.
+		// Unserved, the pipe keeps its first instance, and a client's open
+		// is still checked against the DACL.
+		ln, err := listenPipe(path, PipeSDDL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = ln.Close() })
+		if st, err := NewClient(path).Status(context.Background()); !errors.Is(err, windows.ERROR_ACCESS_DENIED) || !strings.Contains(err.Error(), reachHint) {
+			t.Fatalf("an unelevated client was not refused access: %+v, %v", st, err)
+		}
 	}
 	if _, err := Listen(path); err == nil {
 		t.Fatal("a second agent took the pipe")

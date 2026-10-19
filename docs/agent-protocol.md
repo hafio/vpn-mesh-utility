@@ -195,8 +195,8 @@ The agent applies a config in fixed steps, each comparing desired with observed 
 | 8 | firewall (servers, firewalld) | degraded; the tunnel stays up |
 | 9 | DNS: the resolver on the mesh IP, then the host's registration | degraded; the tunnel stays up |
 
-A config is cached (`config.json`) only after steps 1-7 succeed, and re-applied at boot before
-the server is contacted. A config that failed is not retried until a newer one arrives or five
+A config is cached (`config.json`) only after steps 1-7 succeed, and re-applied at boot, once the
+agent holds its local API socket and before the server is contacted. A config that failed is not retried until a newer one arrives or five
 minutes pass.
 
 **The drift check** applies the config on the interface again every 5 minutes, after the firewall
@@ -245,7 +245,9 @@ at boot, and a node's first config, never arm it.
 `meshctl status` reads `GET /v1/status` from the agent's Unix socket (`/run/meshctl/agent.sock`
 for the standard data dir, else `<data>/agent.sock`; mode 0660 with group `meshctl` when that
 group exists, else 0600). On Windows it is the named pipe `\\.\pipe\meshctl-agent`, which only
-Administrators and SYSTEM may open. It never listens on the network.
+Administrators and SYSTEM may open. It never listens on the network. The agent takes it before it
+applies the cached config or contacts the server: when another agent already answers on it, or the
+path is unusable, the agent stops there, leaving the running agent's interface and safe apply alone.
 
 `meshctl exit` posts a prefs request to `POST /v1/prefs`. The agent validates it, relays it to the
 server as a signed prefs request, fetches the new config at once, and answers the server's answer

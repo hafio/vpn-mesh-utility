@@ -89,10 +89,16 @@ if (Test-Path $covLog) {
 }
 
 # --- pretty helpers -----------------------------------------------------------
-function Step($m) { Write-Host "==> $m"    -ForegroundColor Cyan }
-function Ok($m)   { Write-Host "[ ok ] $m" -ForegroundColor Green }
-function Warn($m) { Write-Host "[warn] $m" -ForegroundColor Yellow }
-function Die($m)  { Write-Host "[fail] $m" -ForegroundColor Red; exit 1 }
+# Inside a task each line also goes to its log, plain, so the log holds all the
+# task printed; outside one (no LogFile) the line is console only.
+function Write-Line($m, $color) {
+  Write-Host $m -ForegroundColor $color
+  if ($script:LogFile) { Add-Content -Path $script:LogFile -Value $m -Encoding utf8 }
+}
+function Step($m) { Write-Line "==> $m"    Cyan }
+function Ok($m)   { Write-Line "[ ok ] $m" Green }
+function Warn($m) { Write-Line "[warn] $m" Yellow }
+function Die($m)  { Write-Line "[fail] $m" Red; exit 1 }
 
 # Matches dev.sh's `date +%Y-%m-%dT%H:%M:%S%z`: .NET 'zzz' renders the offset as
 # +08:00, so strip the colon or the two scripts' footers would not match.
@@ -117,12 +123,9 @@ function Note($m) {
   Write-Host $m
 }
 
-# Skip: a task that does not run says why in its log too, so an OK footer
-# never stands for a gate that did not run without a reason beside it.
-function Skip($m) {
-  Warn $m
-  Add-Content -Path $script:LogFile -Value "[warn] $m" -Encoding utf8
-}
+# Skip: a task that does not run says why (Warn puts it in its log too), so an
+# OK footer never stands for a gate that did not run without a reason beside it.
+function Skip($m) { Warn $m }
 
 # Contract footer, appended to the task log and echoed. Add-Content, never
 # Tee-Object: Tee doubles lines and writes UTF-16 into a UTF-8 file.
@@ -139,15 +142,62 @@ function Write-Finish {
 # command through Tee-Object on 5.1). Appends an ANSI-stripped copy to the log,
 # echoes it, and returns the command's exit code. No param block on purpose:
 # every token lands in $args verbatim instead of being parsed as a parameter.
+# Quote a value with a comma ('HIGH,CRITICAL'): bare, PowerShell parses it as
+# an array and the command gets one argument per element.
 function Cap {
   $ErrorActionPreference = 'Continue'
   $exe  = $args[0]
   $rest = @(); if ($args.Count -gt 1) { $rest = $args[1..($args.Count - 1)] }
-  $out  = (& $exe @rest 2>&1 | ForEach-Object { "$_" } | Out-String -Width 4096)
+  $out  = Use-Utf8 { & $exe @rest 2>&1 | ForEach-Object { Get-Text $_ } | Out-String -Width 4096 }
   $code = $LASTEXITCODE
   $clean = $out -replace "\x1b\[[0-9;?]*[a-zA-Z]", ""
   Add-Content -Path $script:LogFile -Value $clean -Encoding utf8
   if ($clean.Trim().Length -gt 0) { Write-Host $clean.TrimEnd() }
+  return $code
+}
+
+# Use-Utf8 runs a scriptblock with native output read as UTF-8, which the tools
+# write: 5.1 reads it with the console codepage, garbling anything past ASCII
+# (trivy's table borders). The console's own setting comes back after.
+function Use-Utf8([scriptblock]$Body) {
+  $prev = [Console]::OutputEncoding
+  try {
+    [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+    return (& $Body)
+  } finally {
+    [Console]::OutputEncoding = $prev
+  }
+}
+
+# Get-Text is one captured line as text. "$_" renders a blank stderr line as
+# System.Management.Automation.RemoteException; the record's message is the line.
+function Get-Text($o) {
+  if ($o -is [System.Management.Automation.ErrorRecord]) { return $o.Exception.Message }
+  return "$o"
+}
+
+# Cap-Out <file> <cmd...> is Cap for a command whose stdout is data: stdout goes
+# to the file (UTF-8 without a BOM, which json.Decoder rejects), stderr to the
+# console and the log. Returns the command's exit code.
+function Cap-Out {
+  $ErrorActionPreference = 'Continue'
+  $file = $args[0]
+  $exe  = $args[1]
+  $rest = @(); if ($args.Count -gt 2) { $rest = $args[2..($args.Count - 1)] }
+  $data = New-Object System.Collections.Generic.List[string]
+  $errs = New-Object System.Collections.Generic.List[string]
+  Use-Utf8 {
+    & $exe @rest 2>&1 | ForEach-Object {
+      if ($_ -is [System.Management.Automation.ErrorRecord]) { $errs.Add($_.Exception.Message) } else { $data.Add("$_") }
+    }
+  }
+  $code = $LASTEXITCODE
+  [System.IO.File]::WriteAllText($file, ($data -join "`n"), (New-Object System.Text.UTF8Encoding($false)))
+  $clean = ($errs -join "`n") -replace "\x1b\[[0-9;?]*[a-zA-Z]", ""
+  if ($clean.Trim().Length -gt 0) {
+    Add-Content -Path $script:LogFile -Value $clean -Encoding utf8
+    Write-Host $clean.TrimEnd()
+  }
   return $code
 }
 
@@ -189,9 +239,9 @@ function Build-Image {
 # to months ago -- unpinned AND stale.
 function Invoke-TrivyImage($Ref) {
   if (Get-Command trivy -ErrorAction SilentlyContinue) {
-    return (Cap trivy image --quiet --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed $Ref)
+    return (Cap trivy image --quiet --exit-code 1 --severity 'HIGH,CRITICAL' --ignore-unfixed $Ref)
   }
-  return (Cap docker run --rm --pull=always -e NO_COLOR=1 -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --quiet --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed $Ref)
+  return (Cap docker run --rm --pull=always -e NO_COLOR=1 -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --quiet --exit-code 1 --severity 'HIGH,CRITICAL' --ignore-unfixed $Ref)
 }
 
 # --- tasks --------------------------------------------------------------------
@@ -239,7 +289,9 @@ function Task-vet {
   if ($c -ne 0) { $rc = 1 }
   if ((Cap go tool staticcheck ./...) -ne 0) { $rc = 1 }
   $dirs = @('cmd', 'internal', 'deploy', 'ui', 'test') | ForEach-Object { Join-Path $RepoRoot $_ } | Where-Object { Test-Path $_ }
-  $unformatted = @(& gofmt -l @dirs 2>$null)
+  $list = Join-Path $LogDir 'vet.gofmt.txt'
+  if ((Cap-Out $list gofmt -l @dirs) -ne 0) { $rc = 1 }
+  $unformatted = @(Get-Content -Encoding UTF8 $list | Where-Object { $_ })
   if ($unformatted.Count -gt 0) {
     Note 'gofmt: these files need formatting (run gofmt -w on them):'
     Note ($unformatted -join "`n")
@@ -262,7 +314,10 @@ function Task-cov {
   if ($c -ne 0) { return $c }
   $c = Cap go tool cover "-html=$prof" '-o' $html
   if ($c -ne 0) { return $c }
-  $total = (& go tool cover "-func=$prof" | Select-Object -Last 1)
+  $func = Join-Path $LogDir 'cov.func.txt'
+  $c = Cap-Out $func go tool cover "-func=$prof"
+  if ($c -ne 0) { return $c }
+  $total = (Get-Content -Encoding UTF8 $func | Select-Object -Last 1)
   Note $total
   $nowPct = ($total -split '\s+')[-1]
   if (-not $PrevCov) {
@@ -282,24 +337,13 @@ function Task-cov {
 # internal/tools/vulnjudge, then trivy over a freshly built image.
 function Task-scan {
   $raw = Join-Path $LogDir 'scan.json'
-  # 5.1 decodes native output with the console codepage; read as UTF-8, then
-  # put the console back as it was.
-  $prevEnc = [Console]::OutputEncoding
-  try {
-    [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
-    # `-format json` always exits 0, even with findings, so non-zero here is a
-    # real tool failure and stays fatal.
-    $json = (& go tool govulncheck -format json ./...) -join "`n"
-    $code = $LASTEXITCODE
-  } finally {
-    [Console]::OutputEncoding = $prevEnc
-  }
+  # `-format json` always exits 0, even with findings, so non-zero here is a
+  # real tool failure and stays fatal.
+  $code = Cap-Out $raw go tool govulncheck -format json ./...
   if ($code -ne 0) {
     Warn 'govulncheck failed to run; see the output above'
     return $code
   }
-  # BOM-less: 5.1's utf8 writers prepend a BOM and json.Decoder rejects it.
-  [System.IO.File]::WriteAllText($raw, $json, (New-Object System.Text.UTF8Encoding($false)))
   $c = Cap go run ./internal/tools/vulnjudge $raw
   if ($c -ne 0) { return $c }
   if (-not (Test-Path (Join-Path $RepoRoot 'Dockerfile'))) {
@@ -417,13 +461,19 @@ foreach ($task in $queue) {
   Start-TaskLog $task
   $sw = [Diagnostics.Stopwatch]::StartNew()
   $code = 0
-  try { $code = & "Task-$task" } catch { Write-Host $_; $code = 1 }
+  try { $code = & "Task-$task" } catch {
+    # The script's own error, not a tool's: say what and where, in the log too.
+    Note "[fail] $task stopped on a PowerShell error: $($_.Exception.Message)"
+    Note $_.InvocationInfo.PositionMessage
+    $code = 1
+  }
   # A stray pipeline value inside a task would make this an array; take the
   # command's own code, which is always the last value returned.
   if ($code -is [array]) { $code = $code[-1] }
   if ($null -eq $code) { $code = 0 }
   $sw.Stop()
   Write-Finish -Task $task -Code ([int]$code) -Seconds ([int]$sw.Elapsed.TotalSeconds)
+  $script:LogFile = $null # the footer stays the log's last line
   if ([int]$code -ne 0) { Warn "$task failed; stopping"; exit 1 }
   Ok $task
 }

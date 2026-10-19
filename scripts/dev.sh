@@ -69,16 +69,19 @@ export NO_COLOR=1
 # because `cov` truncates its own log when it starts.
 PREV_COV="$(awk '/^total:/{v=$NF} END{print v}' "${LOG_DIR}/cov.log" 2>/dev/null || true)"
 
-# --- pretty helpers (console only; logs are stripped of ANSI) -----------------
+# --- pretty helpers (console; inside a task a plain copy goes to its log) -----
 if [[ -t 1 ]]; then
   B=$'\033[1m'; GRN=$'\033[32m'; YLW=$'\033[33m'; RED=$'\033[31m'; CYN=$'\033[36m'; RST=$'\033[0m'
 else
   B=""; GRN=""; YLW=""; RED=""; CYN=""; RST=""
 fi
-step() { printf '%s==>%s %s\n' "${CYN}${B}" "${RST}" "$*" >&2; }
-ok()   { printf '%s[ ok ]%s %s\n' "${GRN}" "${RST}" "$*" >&2; }
-warn() { printf '%s[warn]%s %s\n' "${YLW}" "${RST}" "$*" >&2; }
-die()  { printf '%s[fail]%s %s\n' "${RED}${B}" "${RST}" "$*" >&2; exit 1; }
+# logline <text> -- the plain copy, so the log holds all the task printed;
+# outside a task (no LOGFILE) the line is console only.
+logline() { [[ -n "${LOGFILE:-}" ]] && printf '%s\n' "$*" >> "${LOGFILE}"; return 0; }
+step() { printf '%s==>%s %s\n' "${CYN}${B}" "${RST}" "$*" >&2; logline "==> $*"; }
+ok()   { printf '%s[ ok ]%s %s\n' "${GRN}" "${RST}" "$*" >&2; logline "[ ok ] $*"; }
+warn() { printf '%s[warn]%s %s\n' "${YLW}" "${RST}" "$*" >&2; logline "[warn] $*"; }
+die()  { printf '%s[fail]%s %s\n' "${RED}${B}" "${RST}" "$*" >&2; logline "[fail] $*"; exit 1; }
 
 now() { date +%Y-%m-%dT%H:%M:%S%z; }
 
@@ -92,14 +95,21 @@ log_init() {
 }
 # note <msg> -- a plain line on the console and in the task log.
 note() { printf '%s\n' "$*" | tee -a "${LOGFILE}"; }
-# skip <msg> -- a task that does not run says why in its log too, so an OK
-# footer never stands for a gate that did not run without a reason beside it.
-skip() { warn "$*"; printf '[warn] %s\n' "$*" >> "${LOGFILE}"; }
+# skip <msg> -- a task that does not run says why (warn puts it in its log too),
+# so an OK footer never stands for a gate that did not run without a reason.
+skip() { warn "$*"; }
 # cap runs a command, streaming combined stdout+stderr to the console and
 # appending an ANSI-stripped copy to LOGFILE. Returns the command's exit code.
 # One synchronous pipeline, so the footer can never overtake the task's output.
 cap() {
   "$@" 2>&1 | sed -E $'s/\x1b\\[[0-9;?]*[a-zA-Z]//g' | tee -a "${LOGFILE}"
+  return "${PIPESTATUS[0]}"
+}
+# cap_out <file> <cmd...> -- cap for a command whose stdout is data: stdout goes
+# to <file>, stderr to the console and the log. Returns the command's exit code.
+cap_out() {
+  local out="$1"; shift
+  "$@" 2>&1 >"${out}" | sed -E $'s/\x1b\\[[0-9;?]*[a-zA-Z]//g' | tee -a "${LOGFILE}"
   return "${PIPESTATUS[0]}"
 }
 # finish <task> <exit-code> <elapsed-seconds> -- contract footer, log + console.
@@ -183,11 +193,15 @@ task_vet() {
   cap go vet ./... || rc=1
   GOOS="${other}" cap go vet ./... || rc=1
   cap go tool staticcheck ./... || rc=1
-  local unformatted
-  unformatted="$(gofmt -l "${REPO_ROOT}/cmd" "${REPO_ROOT}/internal" "${REPO_ROOT}/deploy" "${REPO_ROOT}/ui" "${REPO_ROOT}/test" 2>/dev/null || true)"
-  if [[ -n "${unformatted}" ]]; then
+  # Only the dirs that exist: gofmt fails on a missing one.
+  local dirs=() d list="${LOG_DIR}/vet.gofmt.txt"
+  for d in cmd internal deploy ui test; do
+    [[ -d "${REPO_ROOT}/${d}" ]] && dirs+=("${REPO_ROOT}/${d}")
+  done
+  cap_out "${list}" gofmt -l "${dirs[@]}" || rc=1
+  if [[ -s "${list}" ]]; then
     note "gofmt: these files need formatting (run gofmt -w on them):"
-    note "${unformatted}"
+    note "$(cat "${list}")"
     rc=1
   fi
   return "${rc}"
@@ -204,7 +218,9 @@ task_cov() {
   # -count=1 forces a real run so a cached result cannot report a stale total.
   cap go test -covermode=atomic -coverprofile="${prof}" -count=1 -timeout="${TEST_TIMEOUT}" ./... || return 1
   cap go tool cover -html="${prof}" -o "${html}" || return 1
-  local total; total="$(go tool cover -func="${prof}" | tail -n1)"
+  local func="${LOG_DIR}/cov.func.txt"
+  cap_out "${func}" go tool cover -func="${prof}" || return 1
+  local total; total="$(tail -n1 "${func}")"
   note "${total}"
   local now_pct="${total##*[[:space:]]}"
   if [[ -z "${PREV_COV}" ]]; then
@@ -228,7 +244,7 @@ task_scan() {
   local raw="${LOG_DIR}/scan.json" code=0
   # `-format json` exits 0 even with findings, so non-zero is a real tool
   # failure (bad flags, packages that will not load) and stays fatal.
-  if ! go tool govulncheck -format json ./... >"${raw}"; then
+  if ! cap_out "${raw}" go tool govulncheck -format json ./...; then
     warn "govulncheck failed to run; see the output above"
     return 1
   fi
@@ -367,6 +383,7 @@ main() {
     code=0
     "task_${t}" || code=$?
     finish "${t}" "${code}" "$((SECONDS - start))"
+    LOGFILE="" # the footer stays the log's last line
     if (( code != 0 )); then
       warn "${t} failed; stopping"
       exit 1

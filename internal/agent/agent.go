@@ -268,6 +268,17 @@ func Run(ctx context.Context, d Deps) error {
 		r.safe = &safeApply{window: d.ConfirmWindow}
 	}
 
+	// The socket first: it is the one listener the agent cannot run
+	// without, and when it fails -- another agent answers on it, or the
+	// path is unusable -- neither the host nor the pending config has been
+	// touched yet. It is served once the cache boot below is done.
+	var api net.Listener
+	if d.Socket != "" {
+		if api, err = localapi.Listen(d.Socket); err != nil {
+			return err
+		}
+	}
+
 	// Boot from cache: the mesh comes up even when the server is down. A
 	// config safe apply was still waiting on was never confirmed, so the
 	// confirmed one is what comes back.
@@ -280,14 +291,6 @@ func Run(ctx context.Context, d Deps) error {
 		r.apply(ctx, *cfg, "cache")
 	}
 
-	// The socket first: it is the one listener the agent cannot run
-	// without, and nothing has started yet when it fails.
-	var api net.Listener
-	if d.Socket != "" {
-		if api, err = localapi.Listen(d.Socket); err != nil {
-			return err
-		}
-	}
 	var loops sync.WaitGroup
 	uiToken, err := r.startUI(ctx, &loops)
 	if err != nil {
