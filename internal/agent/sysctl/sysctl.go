@@ -18,10 +18,10 @@ import (
 type Writer struct {
 	// Root is /proc/sys; tests point it at a directory of their own.
 	Root string
+	// NoProc is a host without /proc/sys (Windows), where exit mode routes
+	// by table, so src_valid_mark has nothing to do, and no node relays.
+	NoProc bool
 }
-
-// New returns the host's writer.
-func New() *Writer { return &Writer{Root: "/proc/sys"} }
 
 // Apply sets each parameter whose current value differs and returns how many
 // it changed. Keys outside the allowlist are refused before any path is
@@ -34,6 +34,12 @@ func (w *Writer) Apply(params []proto.Sysctl) (int, error) {
 		}
 		if _, err := validate.Enum("sysctl value", p.Value, "0", "1"); err != nil {
 			return n, err
+		}
+		switch {
+		case w.NoProc && p.Key == proto.SysctlSrcValidMark:
+			continue
+		case w.NoProc:
+			return n, fmt.Errorf("set %s = %s: this host has no %s; only a Linux server relays or is an exit", p.Key, p.Value, p.Key)
 		}
 		path := filepath.Join(w.Root, filepath.FromSlash(strings.ReplaceAll(p.Key, ".", "/")))
 		cur, err := os.ReadFile(path)

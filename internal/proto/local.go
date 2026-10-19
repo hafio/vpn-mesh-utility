@@ -68,8 +68,9 @@ type LocalStatus struct {
 	// than the server's (spec S6.4).
 	Rollback *Rollback `json:"rollback,omitempty"`
 	// DNS is the node's split DNS (DNSStates); DNSOff is kept across
-	// restarts until `meshctl dns on`.
-	DNS string `json:"dns,omitempty"`
+	// restarts until `meshctl dns on`. Zone is the zone it serves.
+	DNS  string `json:"dns,omitempty"`
+	Zone string `json:"zone,omitempty"`
 	// MTU and Keepalive are the applied config's (Keepalive: a spoke's, in
 	// seconds); zero before the first apply.
 	MTU       int `json:"mtu,omitempty"`

@@ -3,6 +3,7 @@ package planner
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
 	"github.com/hafio/vpn-mesh-utility/internal/validate"
@@ -159,14 +160,22 @@ func Check(in Input) []Problem {
 	return out
 }
 
-// checkDNS checks the custom records and the upstream resolvers. Node names
-// are records already, so a custom record may not take one.
+// checkDNS checks the zone, the custom records and the upstream
+// resolvers. Node names are records already, so a custom record may not
+// take one; record names are given without the zone.
 func checkDNS(in Input, nodeNames map[string]bool, byID map[int64]Node, errf func(node, format string, args ...any)) {
+	zone := in.ZoneName()
+	if _, err := validate.Zone("dns zone", zone); err != nil {
+		errf("", "%v", err)
+	}
 	seen := map[string]bool{}
 	for _, r := range in.Records {
 		if _, err := validate.DNSName("dns record", r.Name); err != nil {
 			errf("", "%v", err)
 			continue
+		}
+		if r.Name == zone || strings.HasSuffix(r.Name, "."+zone) {
+			errf("", "DNS record %q ends with the zone %q; give the name without it", r.Name, zone)
 		}
 		if nodeNames[r.Name] {
 			errf("", "DNS record %q has the name of a node, which resolves to that node already", r.Name)

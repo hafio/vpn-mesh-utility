@@ -3,9 +3,12 @@
 package wg
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/netip"
+	"slices"
 
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/conn"
@@ -13,6 +16,7 @@ import (
 	"golang.zx2c4.com/wireguard/tun"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 
+	"github.com/hafio/vpn-mesh-utility/internal/agent/routes"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/wintun"
 )
 
@@ -28,6 +32,11 @@ type userspace struct {
 	wgdev
 	tun  *tun.NativeTun
 	luid winipcfg.LUID
+	bind conn.Bind
+	// watch follows the host's default route while exit mode is on;
+	// exitIf is the interface the tunnel's own packets are bound to.
+	watch  *winipcfg.RouteChangeCallback
+	exitIf uint32
 }
 
 // NewUserspace opens the Windows backend: wintun.dll goes beside
@@ -84,8 +93,8 @@ func (u *userspace) CreateLink(name string) error {
 		_ = tdev.Close() // not the wintun device this host drives
 		return fmt.Errorf("create the WireGuard adapter %s: not a wintun device", name)
 	}
-	u.name, u.tun, u.luid = name, nt, winipcfg.LUID(nt.LUID())
-	u.dev = device.NewDevice(tdev, conn.NewDefaultBind(), u.logger(name))
+	u.name, u.tun, u.luid, u.bind = name, nt, winipcfg.LUID(nt.LUID()), conn.NewDefaultBind()
+	u.dev = device.NewDevice(tdev, u.bind, u.logger(name))
 	return nil
 }
 
@@ -149,12 +158,164 @@ func (u *userspace) Close() error {
 	return nil
 }
 
-// closeLocked closes the device, which closes the adapter. The caller
-// holds mu.
+// closeLocked closes the device, which closes the adapter and its routes.
+// The caller holds mu.
 func (u *userspace) closeLocked() {
+	if u.watch != nil {
+		_ = u.watch.Unregister() // the adapter it guarded is going
+		u.watch = nil
+	}
 	if u.dev != nil {
 		u.dev.Close()
 		u.dev = nil
 	}
-	u.name, u.tun, u.luid = "", nil, 0
+	u.name, u.tun, u.luid, u.bind, u.exitIf = "", nil, 0, nil, 0
+}
+
+// SetExit turns exit mode on or off (wg.ExitRouter): the split default
+// routes on the adapter, and the tunnel's own packets bound to the
+// physical interface so they never loop into the tunnel (amendment A11).
+func (u *userspace) SetExit(name string, on bool) (int, error) {
+	luid, _, err := u.adapter(name)
+	if err != nil {
+		return 0, err
+	}
+	have, err := exitRoutes(luid)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, p := range routes.ExitPrefixes {
+		switch {
+		case on && !have[p]:
+			if err := luid.AddRoute(p, unspecified(p), 0); err != nil {
+				return n, fmt.Errorf("exit mode: add route %s via %s: %w", p, name, err)
+			}
+			n++
+		case !on && have[p]:
+			if err := luid.DeleteRoute(p, unspecified(p)); err != nil {
+				return n, fmt.Errorf("exit mode: remove route %s via %s: %w", p, name, err)
+			}
+			n++
+		}
+	}
+	c, err := u.bindExit(on)
+	return n + c, err
+}
+
+func unspecified(p netip.Prefix) netip.Addr {
+	if p.Addr().Is4() {
+		return netip.IPv4Unspecified()
+	}
+	return netip.IPv6Unspecified()
+}
+
+// exitRoutes are the split default routes on the adapter now.
+func exitRoutes(luid winipcfg.LUID) (map[netip.Prefix]bool, error) {
+	have := map[netip.Prefix]bool{}
+	for _, family := range []winipcfg.AddressFamily{windows.AF_INET, windows.AF_INET6} {
+		rows, err := winipcfg.GetIPForwardTable2(family)
+		if err != nil {
+			return nil, fmt.Errorf("exit mode: list routes: %w", err)
+		}
+		for i := range rows {
+			r := &rows[i]
+			if p := r.DestinationPrefix.Prefix(); r.InterfaceLUID == luid && slices.Contains(routes.ExitPrefixes, p) {
+				have[p] = true
+			}
+		}
+	}
+	return have, nil
+}
+
+// bindExit binds the tunnel's socket to the interface of the host's
+// default route, and binds it again whenever that route moves (another
+// Wi-Fi network); off, it lets the socket go back to routing.
+func (u *userspace) bindExit(on bool) (int, error) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	b, ok := u.bind.(conn.BindSocketToInterface)
+	switch {
+	case !ok && on:
+		return 0, errors.New("exit mode: this WireGuard socket cannot be bound to an interface")
+	case !ok, on == (u.watch != nil):
+		return 0, nil // nothing to change: the callback keeps an "on" bound
+	case !on:
+		_ = u.watch.Unregister() // it only rebinds a socket that is being released
+		u.watch, u.exitIf = nil, 0
+		if err := b.BindSocketToInterface4(0, false); err != nil {
+			return 1, fmt.Errorf("exit mode: release the tunnel's socket: %w", err)
+		}
+		return 1, nil
+	}
+	idx, err := defaultInterface(u.luid)
+	if err != nil {
+		return 0, err
+	}
+	if err := b.BindSocketToInterface4(idx, false); err != nil {
+		return 0, fmt.Errorf("exit mode: bind the tunnel's socket to interface %d: %w", idx, err)
+	}
+	w, err := winipcfg.RegisterRouteChangeCallback(func(_ winipcfg.MibNotificationType, r *winipcfg.MibIPforwardRow2) {
+		if r != nil && r.DestinationPrefix.PrefixLength == 0 {
+			go u.rebind()
+		}
+	})
+	if err != nil {
+		_ = b.BindSocketToInterface4(0, false) // back to routing; exit mode is not on
+		return 0, fmt.Errorf("exit mode: watch the default route: %w", err)
+	}
+	u.watch, u.exitIf = w, idx
+	return 1, nil
+}
+
+// rebind follows the default route to its new interface.
+func (u *userspace) rebind() {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	b, ok := u.bind.(conn.BindSocketToInterface)
+	if u.watch == nil || !ok {
+		return
+	}
+	idx, err := defaultInterface(u.luid)
+	switch {
+	case err != nil:
+		u.log.Warn("exit mode: the host has no default route now; the tunnel waits for one", "err", err)
+		return
+	case idx == u.exitIf:
+		return
+	}
+	if err := b.BindSocketToInterface4(idx, false); err != nil {
+		u.log.Error("exit mode: could not follow the default route to its new interface", "interface", idx, "err", err)
+		return
+	}
+	u.exitIf = idx
+	u.log.Info("exit mode: the host's default route moved; the tunnel follows it", "interface", idx)
+}
+
+// defaultInterface is the interface of the host's IPv4 default route,
+// leaving out the tunnel's own adapter: the lowest route plus interface
+// metric, as Windows picks it.
+func defaultInterface(tunnel winipcfg.LUID) (uint32, error) {
+	rows, err := winipcfg.GetIPForwardTable2(windows.AF_INET)
+	if err != nil {
+		return 0, fmt.Errorf("exit mode: list routes: %w", err)
+	}
+	best, bestMetric := uint32(0), uint32(math.MaxUint32)
+	for i := range rows {
+		r := &rows[i]
+		if r.InterfaceLUID == tunnel || r.DestinationPrefix.PrefixLength != 0 {
+			continue
+		}
+		ipif, err := r.InterfaceLUID.IPInterface(windows.AF_INET)
+		if err != nil || !ipif.Connected {
+			continue
+		}
+		if m := r.Metric + ipif.Metric; m < bestMetric {
+			best, bestMetric = r.InterfaceIndex, m
+		}
+	}
+	if best == 0 {
+		return 0, errors.New("exit mode: this host has no IPv4 default route to carry the tunnel")
+	}
+	return best, nil
 }

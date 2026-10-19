@@ -191,7 +191,10 @@ func (t *Tx) Restore(s Snapshot) error {
 	for _, k := range DesiredSettings {
 		v, ok := s.Settings[k]
 		if !ok {
-			continue
+			// A snapshot older than the setting had its default.
+			if v, ok = settingDefaults[k]; !ok {
+				continue
+			}
 		}
 		if err := t.SetSetting(k, v); err != nil {
 			return fmt.Errorf("restore: %w", err)

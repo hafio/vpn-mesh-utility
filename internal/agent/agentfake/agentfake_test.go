@@ -192,7 +192,7 @@ func TestRoutesSysctlAndFirewall(t *testing.T) {
 func TestDNS(t *testing.T) {
 	d := &DNS{}
 	ctx := context.Background()
-	on := dns.Want{Iface: "wg0", IP: netip.MustParseAddr("10.77.2.1"), Config: &proto.DNS{Zone: proto.Zone}}
+	on := dns.Want{Iface: "wg0", IP: netip.MustParseAddr("10.77.2.1"), Config: &proto.DNS{Zone: proto.DefaultZone}}
 	off := on
 	off.Off = true
 	for _, c := range []struct {

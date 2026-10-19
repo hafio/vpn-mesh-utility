@@ -11,10 +11,12 @@
 //
 // The registration is systemd-resolved's per-link DNS on Linux: the mesh IP
 // as wg0's server and ~mesh as its routing domain, plus ~. and default-route
-// in exit mode. Nothing else on the host changes: /etc/hosts and
-// /etc/resolv.conf are never written. Without systemd-resolved the resolver
-// still serves the mesh and the state is "unavailable"; `meshctl dns off`
-// takes the registration back and leaves the resolver serving the others.
+// in exit mode. On Windows it is two NRPT rules, .mesh and, in exit mode,
+// every name (nrpt_windows.go). Nothing else on the host changes:
+// /etc/hosts and /etc/resolv.conf are never written. Without a host
+// resolver to register with the resolver still serves the mesh and the
+// state is "unavailable"; `meshctl dns off` takes the registration back and
+// leaves the resolver serving the others.
 package dns
 
 import (
@@ -156,7 +158,11 @@ func (s *Service) Apply(ctx context.Context, w Want) (string, int, error) {
 // desired is the registration for w: the resolver for the mesh zone, and in
 // exit mode for every name.
 func desired(w Want) Registration {
-	r := Registration{DNS: []netip.Addr{w.IP}, Domains: []Domain{{Name: proto.Zone, RouteOnly: true}}}
+	zone := proto.DefaultZone
+	if w.Config != nil {
+		zone = w.Config.Zone
+	}
+	r := Registration{DNS: []netip.Addr{w.IP}, Domains: []Domain{{Name: zone, RouteOnly: true}}}
 	if w.Exit {
 		r.Domains = append(r.Domains, Domain{Name: ".", RouteOnly: true})
 		r.DefaultRoute = true
@@ -209,7 +215,7 @@ func (s *Service) register(ctx context.Context, w Want) (string, int, error) {
 		s.log().Debug("split DNS unavailable; .mesh resolves only through the mesh IP", "reason", err)
 		return proto.DNSUnavailable, 0, nil
 	case err != nil:
-		return "", 0, fmt.Errorf("dns: read %s's DNS from systemd-resolved: %w", w.Iface, err)
+		return "", 0, fmt.Errorf("dns: read %s's DNS from the host's resolver: %w", w.Iface, err)
 	}
 	if w.Off {
 		if len(cur.DNS) == 0 && len(cur.Domains) == 0 {
@@ -217,7 +223,7 @@ func (s *Service) register(ctx context.Context, w Want) (string, int, error) {
 			return proto.DNSOff, 0, nil
 		}
 		if err := s.Registrar.Revert(ctx, w.Iface); err != nil {
-			return "", 0, fmt.Errorf("dns: take %s's DNS back from systemd-resolved: %w", w.Iface, err)
+			return "", 0, fmt.Errorf("dns: take %s's DNS back from the host's resolver: %w", w.Iface, err)
 		}
 		s.registered = false
 		return proto.DNSOff, 1, nil
@@ -228,7 +234,7 @@ func (s *Service) register(ctx context.Context, w Want) (string, int, error) {
 		return proto.DNSOn, 0, nil
 	}
 	if err := s.Registrar.Set(ctx, w.Iface, want); err != nil {
-		return "", 0, fmt.Errorf("dns: register %s with systemd-resolved: %w", w.Iface, err)
+		return "", 0, fmt.Errorf("dns: register %s with the host's resolver: %w", w.Iface, err)
 	}
 	s.registered = true
 	return proto.DNSOn, 1, nil

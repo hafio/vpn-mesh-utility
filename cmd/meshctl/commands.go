@@ -32,7 +32,7 @@ type action func(ctx context.Context, args []string) error
 func commands() []command {
 	return []command{
 		{name: "agent", summary: "join this node to a mesh, or run the agent", sub: agentCommands()},
-		{name: "dns", args: "[on|off]", summary: "show or switch this node's split DNS for .mesh names (stays on the node)", setup: setupDNS},
+		{name: "dns", args: "[on|off]", summary: "show or switch this node's split DNS for the mesh zone's names (stays on the node)", setup: setupDNS},
 		{name: "exit", args: "[<server>|off]", summary: "show or switch this spoke's internet exit (through the local agent)", setup: setupExit},
 		{name: "export", summary: "write the mesh's desired state as YAML (reads the database directly)", setup: setupExport},
 		{name: "healthcheck", summary: "exit 0 when the local server or agent answers", sub: healthCommands()},

@@ -236,6 +236,9 @@ func ToSnapshot(d Document) (store.Snapshot, error) {
 				_, err := validate.IPv4(f, strings.TrimSpace(ip))
 				bad(err)
 			}
+		case store.SettingDNSZone:
+			_, err := validate.Zone(f, v)
+			bad(err)
 		case store.SettingDefaultMTU:
 			mtu, err := strconv.Atoi(v)
 			if err == nil {

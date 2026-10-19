@@ -175,10 +175,17 @@ func (e *Engine) Apply(ctx context.Context, cfg proto.NodeConfig) (Result, error
 
 	// 6. Exit mode: the policy rules follow the config, so exit off (every
 	// server's case) removes rules a previous config left.
+	// Where the platform has no policy routing (Windows), the host does it.
 	exitOn := cfg.Exit != nil && cfg.Exit.Via != ""
-	switch {
+	switch router, ok := e.d.Host.(wg.ExitRouter); {
 	case e.d.Exit != nil:
 		n, err := exitmode.Sync(e.d.Exit, e.d.Iface, exitOn)
+		res.Changes += n
+		if err != nil {
+			return fail(StepExit, err)
+		}
+	case ok:
+		n, err := router.SetExit(e.d.Iface, exitOn)
 		res.Changes += n
 		if err != nil {
 			return fail(StepExit, err)

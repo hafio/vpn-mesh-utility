@@ -97,12 +97,13 @@ const maxNote = 120
 
 // DNS returns the mesh zone.
 func (s *Nodes) DNS(ctx context.Context) (DNSView, error) {
-	v := DNSView{Zone: proto.Zone, Records: []DNSEntry{}, Upstream: []string{}, Nodes: []string{}}
+	v := DNSView{Records: []DNSEntry{}, Upstream: []string{}, Nodes: []string{}}
 	err := s.db.Tx(ctx, func(tx *store.Tx) error {
 		in, nodes, err := LoadInput(tx)
 		if err != nil {
 			return err
 		}
+		v.Zone = in.ZoneName()
 		live := func(n store.Node) bool { return n.Enrolled && !n.Disabled && n.WGPubKey != "" }
 		byID := map[int64]store.Node{}
 		for _, n := range nodes {

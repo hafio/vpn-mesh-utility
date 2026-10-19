@@ -53,7 +53,7 @@ func TestDNSName(t *testing.T) {
 	}{
 		{"immich", "immich", true},
 		{"photos.nas", "photos.nas", true},
-		{"photos.nas.mesh", "photos.nas", true},
+		{"photos.nas.mesh", "photos.nas.mesh", true},
 		{"", "", false},
 		{"a..b", "", false},
 		{"-a.b", "", false},
@@ -205,6 +205,19 @@ func TestLocalTokenMasksTheValue(t *testing.T) {
 	for _, s := range append([]string{"", strings.Repeat("a", 42), strings.Repeat("a", 44)}, hostile...) {
 		if _, err := LocalToken("t", s); err == nil || (len(s) > 8 && strings.Contains(err.Error(), s)) {
 			t.Errorf("LocalToken(%q) = %v", s, err)
+		}
+	}
+}
+
+func TestZone(t *testing.T) {
+	for _, s := range []string{"mesh", "home.arpa", "corp.internal", "a.b.c.d"} {
+		if got, err := Zone("dns_zone", s); err != nil || got != s {
+			t.Errorf("Zone(%q) = %q, %v", s, got, err)
+		}
+	}
+	for _, s := range append([]string{"", ".mesh", "mesh.", "a.b.c.d.e", "Mesh", "local", "office.local", "localhost", strings.Repeat("a", 101)}, hostile...) {
+		if _, err := Zone("dns_zone", s); err == nil {
+			t.Errorf("Zone(%q) accepted it", s)
 		}
 	}
 }

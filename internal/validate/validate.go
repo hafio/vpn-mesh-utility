@@ -74,8 +74,8 @@ var (
 )
 
 // Name validates a node name: a lowercase DNS label of 1-32 characters. Node
-// names become `<name>.mesh` records, compose service names and file names, so
-// the grammar is the strictest of all of those sinks.
+// names become records in the mesh's DNS zone, compose service names and
+// file names, so the grammar is the strictest of all of those sinks.
 func Name(field, s string) (string, error) {
 	if !reName.MatchString(s) {
 		return "", fail(field, s, "must be 1-32 chars of a-z, 0-9 and '-', not starting or ending with '-'")
@@ -84,9 +84,8 @@ func Name(field, s string) (string, error) {
 }
 
 // DNSName validates a record name inside the mesh zone: one or more labels
-// separated by dots, without the zone suffix, at most 200 characters.
+// separated by dots, given without the zone, at most 200 characters.
 func DNSName(field, s string) (string, error) {
-	s = strings.TrimSuffix(s, ".mesh")
 	if s == "" || len(s) > 200 {
 		return "", fail(field, s, "must be 1-200 chars")
 	}
@@ -94,6 +93,26 @@ func DNSName(field, s string) (string, error) {
 		if !reLabel.MatchString(l) {
 			return "", fail(field, s, "each dot-separated label must be 1-63 chars of a-z, 0-9 and '-', not starting or ending with '-'")
 		}
+	}
+	return s, nil
+}
+
+// Zone validates the mesh's DNS zone (amendment A36): one to four labels
+// as in DNSName, at most 100 characters, without a leading or trailing dot.
+// local and localhost are refused: hosts resolve those themselves (mDNS,
+// loopback).
+func Zone(field, s string) (string, error) {
+	labels := strings.Split(s, ".")
+	if s == "" || len(s) > 100 || len(labels) > 4 {
+		return "", fail(field, s, "must be 1-4 dot-separated labels, at most 100 chars, such as mesh or home.arpa")
+	}
+	for _, l := range labels {
+		if !reLabel.MatchString(l) {
+			return "", fail(field, s, "each dot-separated label must be 1-63 chars of a-z, 0-9 and '-', not starting or ending with '-'")
+		}
+	}
+	if last := labels[len(labels)-1]; last == "local" || last == "localhost" {
+		return "", fail(field, s, "must not end in local or localhost, which hosts resolve themselves (mDNS, loopback)")
 	}
 	return s, nil
 }

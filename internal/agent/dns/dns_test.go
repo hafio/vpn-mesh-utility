@@ -16,7 +16,7 @@ import (
 )
 
 func meshDNS(split bool, upstream ...string) *proto.DNS {
-	return &proto.DNS{Zone: proto.Zone, Split: split, Upstream: upstream, ForwardFor: []string{"10.77.3.1/32"},
+	return &proto.DNS{Zone: proto.DefaultZone, Split: split, Upstream: upstream, ForwardFor: []string{"10.77.3.1/32"},
 		Records: []proto.Record{{Name: "nas", IP: "10.77.1.1"}, {Name: "printer.office", IP: "10.77.1.200"}, {Name: "vps-1", IP: "10.77.0.1"}}}
 }
 
@@ -98,7 +98,7 @@ func TestZoneAnswers(t *testing.T) {
 
 func TestNewZoneRejects(t *testing.T) {
 	for name, edit := range map[string]func(*proto.DNS){
-		"zone":        func(d *proto.DNS) { d.Zone = "lan" },
+		"zone":        func(d *proto.DNS) { d.Zone = "office.local" },
 		"record ip":   func(d *proto.DNS) { d.Records[0].IP = "2001:db8::1" },
 		"upstream":    func(d *proto.DNS) { d.Upstream = []string{"one.one.one.one"} },
 		"forward_for": func(d *proto.DNS) { d.ForwardFor = []string{"10.77.3.1"} },
@@ -108,6 +108,30 @@ func TestNewZoneRejects(t *testing.T) {
 		if _, err := newZone(d, 53); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+// The zone is the config's: another one answers its own names and leaves
+// the default's to forwarding, and the registration names it.
+func TestZoneFollowsTheConfig(t *testing.T) {
+	d := meshDNS(true, "1.1.1.1")
+	d.Zone = "home.arpa"
+	z, err := newZone(d, 53)
+	if err != nil {
+		t.Fatal(err)
+	}
+	laptop := netip.MustParseAddr("10.77.2.1")
+	if resp, fwd := z.answer(query("nas.home.arpa.", mdns.TypeA), laptop); fwd || len(resp.Answer) != 1 {
+		t.Fatalf("nas.home.arpa = %v, forward %v", resp, fwd)
+	}
+	if resp, fwd := z.answer(query("nas.mesh.", mdns.TypeA), laptop); fwd || resp.Rcode != mdns.RcodeRefused {
+		t.Fatalf("nas.mesh in the home.arpa zone = %v, forward %v", resp, fwd)
+	}
+	if r := desired(Want{IP: laptop, Config: d}); len(r.Domains) != 1 || r.Domains[0].Name != "home.arpa" {
+		t.Fatalf("registration = %+v", r)
+	}
+	if rules := rulesFor(desired(Want{IP: laptop, Config: d, Exit: true})); len(rules) != 2 || rules[0].Name != ".home.arpa" {
+		t.Fatalf("NRPT rules = %+v", rules)
 	}
 }
 

@@ -34,8 +34,9 @@ const (
 	FwMark = 51820
 	// RouteTable holds the exit-mode default route (spec S7.3).
 	RouteTable = 51820
-	// Zone is the DNS zone every node serves.
-	Zone = "mesh"
+	// DefaultZone is the DNS zone a mesh serves until its settings name
+	// another (amendment A36).
+	DefaultZone = "mesh"
 	// MinMTU and MaxMTU bound the per-node override.
 	MinMTU = 1280
 	MaxMTU = 1500

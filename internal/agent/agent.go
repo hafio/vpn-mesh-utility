@@ -886,6 +886,9 @@ func (r *runner) localStatus(context.Context) (proto.LocalStatus, error) {
 	}
 	if r.applied != nil {
 		st.MTU = r.applied.Interface.MTU
+		if r.applied.DNS != nil {
+			st.Zone = r.applied.DNS.Zone
+		}
 		if r.enr.Role == proto.RoleSpoke && len(r.applied.Peers) > 0 {
 			st.Keepalive = r.applied.Peers[0].Keepalive
 		}

@@ -49,6 +49,9 @@ type Input struct {
 	// Upstream are the resolvers non-mesh queries are forwarded to (spec
 	// S7.4), in the operator's order.
 	Upstream []netip.Addr
+	// Zone is the DNS zone every node serves; empty means
+	// proto.DefaultZone (amendment A36).
+	Zone string
 	// Records are the custom DNS records, Rules the custom firewall
 	// openings.
 	Records []Record
@@ -318,12 +321,20 @@ func ruleNote(r Rule) string {
 	return "custom: " + r.Note
 }
 
+// ZoneName is the zone the mesh serves: Zone, or the default.
+func (in Input) ZoneName() string {
+	if in.Zone == "" {
+		return proto.DefaultZone
+	}
+	return in.Zone
+}
+
 // dns is the resolver config of a server or spoke: the whole zone, and
 // forwarding of other names in exit mode (all of the node's lookups go
 // through the tunnel) or, on a server, for the phones whose hub it is (their
 // profile names it as their resolver).
 func (p *plan) dns(n Node, exitOn bool) *proto.DNS {
-	d := &proto.DNS{Zone: proto.Zone, Records: slices.Clone(p.records), Split: !exitOn}
+	d := &proto.DNS{Zone: p.in.ZoneName(), Records: slices.Clone(p.records), Split: !exitOn}
 	for _, u := range p.in.Upstream {
 		d.Upstream = append(d.Upstream, u.String())
 	}

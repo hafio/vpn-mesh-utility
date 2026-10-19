@@ -39,13 +39,17 @@ func setupDNS(fs *flag.FlagSet, e *env) action {
 
 // dnsLine says what the node's DNS state means on this host.
 func dnsLine(st proto.LocalStatus) string {
+	zone := st.Zone
+	if zone == "" {
+		zone = proto.DefaultZone
+	}
 	switch st.DNS {
 	case proto.DNSOn:
-		return "on: this host sends .mesh lookups to the resolver on " + st.MeshIP
+		return "on: this host sends ." + zone + " lookups to the resolver on " + st.MeshIP
 	case proto.DNSOff:
 		return "off on this node; the resolver on " + st.MeshIP + " still answers the others (`meshctl dns on` turns it back on)"
 	case proto.DNSUnavailable:
-		return "unavailable: the resolver answers .mesh on " + st.MeshIP + ", but this host has no systemd-resolved to send its own lookups there"
+		return "unavailable: the resolver answers ." + zone + " on " + st.MeshIP + ", but this host has no systemd-resolved to send its own lookups there"
 	}
 	return "not set up yet: the node has no DNS in its config"
 }

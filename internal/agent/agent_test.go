@@ -800,7 +800,7 @@ func TestIsPublic(t *testing.T) {
 
 // withDNS adds a DNS section to a config.
 func withDNS(cfg proto.NodeConfig) proto.NodeConfig {
-	cfg.DNS = &proto.DNS{Zone: proto.Zone, Split: true, Records: []proto.Record{{Name: "vps-1", IP: testfix.VPS1.MeshIP}}}
+	cfg.DNS = &proto.DNS{Zone: proto.DefaultZone, Split: true, Records: []proto.Record{{Name: "vps-1", IP: testfix.VPS1.MeshIP}}}
 	return cfg
 }
 

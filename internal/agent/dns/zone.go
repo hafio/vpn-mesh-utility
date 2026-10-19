@@ -10,17 +10,17 @@ import (
 	mdns "github.com/miekg/dns"
 
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
+	"github.com/hafio/vpn-mesh-utility/internal/validate"
 )
 
-const (
-	apex = proto.Zone + "."
-	// ttl is short so a name follows its node's mesh IP within a minute.
-	ttl = 60
-)
+// ttl is short so a name follows its node's mesh IP within a minute.
+const ttl = 60
 
 // zone answers queries from one config's DNS section. It never changes once
 // built; Apply swaps in a new one.
 type zone struct {
+	// apex is the zone's own name, fully qualified ("mesh.").
+	apex string
 	// names holds every name in the zone, lower case and fully qualified.
 	// An empty non-terminal (office.mesh. above printer.office.mesh.) has
 	// the zero address: it exists, but has no record.
@@ -31,10 +31,11 @@ type zone struct {
 }
 
 func newZone(d *proto.DNS, upstreamPort int) (*zone, error) {
-	if d.Zone != proto.Zone {
-		return nil, fmt.Errorf("dns: zone %q is not %q", d.Zone, proto.Zone)
+	if _, err := validate.Zone("dns: zone", d.Zone); err != nil {
+		return nil, err
 	}
-	z := &zone{names: map[string]netip.Addr{apex: {}}, split: d.Split}
+	apex := d.Zone + "."
+	z := &zone{apex: apex, names: map[string]netip.Addr{apex: {}}, split: d.Split}
 	for _, r := range d.Records {
 		ip, err := netip.ParseAddr(r.IP)
 		if err != nil || !ip.Is4() {
@@ -68,9 +69,9 @@ func newZone(d *proto.DNS, upstreamPort int) (*zone, error) {
 // parent drops the first label of a fully qualified name.
 func parent(name string) string { return name[strings.IndexByte(name, '.')+1:] }
 
-func soa() mdns.RR {
-	return &mdns.SOA{Hdr: mdns.RR_Header{Name: apex, Rrtype: mdns.TypeSOA, Class: mdns.ClassINET, Ttl: ttl},
-		Ns: apex, Mbox: "hostmaster." + apex, Serial: 1, Refresh: 3600, Retry: 600, Expire: 86400, Minttl: ttl}
+func (z *zone) soa() mdns.RR {
+	return &mdns.SOA{Hdr: mdns.RR_Header{Name: z.apex, Rrtype: mdns.TypeSOA, Class: mdns.ClassINET, Ttl: ttl},
+		Ns: z.apex, Mbox: "hostmaster." + z.apex, Serial: 1, Refresh: 3600, Retry: 600, Expire: 86400, Minttl: ttl}
 }
 
 // mayForward reports whether a query from src for another zone is
@@ -98,7 +99,7 @@ func (z *zone) answer(req *mdns.Msg, src netip.Addr) (resp *mdns.Msg, forward bo
 	}
 	q := req.Question[0]
 	name := strings.ToLower(q.Name)
-	if name != apex && !strings.HasSuffix(name, "."+apex) {
+	if name != z.apex && !strings.HasSuffix(name, "."+z.apex) {
 		if z.mayForward(src) {
 			return nil, true
 		}
@@ -111,16 +112,16 @@ func (z *zone) answer(req *mdns.Msg, src netip.Addr) (resp *mdns.Msg, forward bo
 	case q.Qclass != mdns.ClassINET && q.Qclass != mdns.ClassANY:
 		resp.Authoritative, resp.Rcode = false, mdns.RcodeRefused
 	case !ok:
-		resp.Rcode, resp.Ns = mdns.RcodeNameError, []mdns.RR{soa()}
+		resp.Rcode, resp.Ns = mdns.RcodeNameError, []mdns.RR{z.soa()}
 	case ip.IsValid() && (q.Qtype == mdns.TypeA || q.Qtype == mdns.TypeANY):
 		// The name as asked: resolvers that randomise its case check it.
 		resp.Answer = []mdns.RR{&mdns.A{Hdr: mdns.RR_Header{Name: q.Name, Rrtype: mdns.TypeA, Class: mdns.ClassINET, Ttl: ttl},
 			A: net.IP(ip.AsSlice())}}
-	case name == apex && q.Qtype == mdns.TypeSOA:
-		resp.Answer = []mdns.RR{soa()}
+	case name == z.apex && q.Qtype == mdns.TypeSOA:
+		resp.Answer = []mdns.RR{z.soa()}
 	default:
 		// The name exists without a record of this type (AAAA, say).
-		resp.Ns = []mdns.RR{soa()}
+		resp.Ns = []mdns.RR{z.soa()}
 	}
 	return resp, false
 }

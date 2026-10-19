@@ -127,16 +127,18 @@ func TestValidateRejects(t *testing.T) {
 		{"firewall zone", func(c *proto.NodeConfig) { c.Firewall.Rules[0].Zone = "trusted" }, "zone"},
 		{"firewall source", func(c *proto.NodeConfig) { c.Firewall.Rules[0].Source = "0.0.0.0/0 accept" }, "source"},
 		{"firewall note newline", func(c *proto.NodeConfig) { c.Firewall.Rules[0].Note = "x\nrule accept" }, "note"},
-		{"dns zone", func(c *proto.NodeConfig) { c.DNS = &proto.DNS{Zone: "corp"} }, "dns.zone"},
+		{"dns zone", func(c *proto.NodeConfig) { c.DNS = &proto.DNS{Zone: "corp.local"} }, "dns.zone"},
 		{"dns record ip", func(c *proto.NodeConfig) {
-			c.DNS = &proto.DNS{Zone: proto.Zone, Records: []proto.Record{{Name: "nas", IP: "nas.local"}}}
+			c.DNS = &proto.DNS{Zone: proto.DefaultZone, Records: []proto.Record{{Name: "nas", IP: "nas.local"}}}
 		}, "dns.records[0].ip"},
 		{"dns record name", func(c *proto.NodeConfig) {
-			c.DNS = &proto.DNS{Zone: proto.Zone, Records: []proto.Record{{Name: "nas;reboot", IP: "10.77.1.1"}}}
+			c.DNS = &proto.DNS{Zone: proto.DefaultZone, Records: []proto.Record{{Name: "nas;reboot", IP: "10.77.1.1"}}}
 		}, "dns.records[0].name"},
-		{"dns upstream", func(c *proto.NodeConfig) { c.DNS = &proto.DNS{Zone: proto.Zone, Upstream: []string{"dns.google"}} }, "dns.upstream[0]"},
+		{"dns upstream", func(c *proto.NodeConfig) {
+			c.DNS = &proto.DNS{Zone: proto.DefaultZone, Upstream: []string{"dns.google"}}
+		}, "dns.upstream[0]"},
 		{"dns forward_for", func(c *proto.NodeConfig) {
-			c.DNS = &proto.DNS{Zone: proto.Zone, ForwardFor: []string{"10.77.3.0/33"}}
+			c.DNS = &proto.DNS{Zone: proto.DefaultZone, ForwardFor: []string{"10.77.3.0/33"}}
 		}, "dns.forward_for[0]"},
 	}
 	for _, c := range cases {

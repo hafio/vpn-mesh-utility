@@ -643,6 +643,7 @@ func TestSettings(t *testing.T) {
 		"cidr with host":    form("mesh_cidr", "10.88.0.1/16"),
 		"cidr too large":    form("mesh_cidr", "10.0.0.0/8"),
 		"no upstream":       form("upstream_dns", " , "),
+		"zone":              form("dns_zone", "office.local"),
 	} {
 		if w := r.do(http.MethodPost, "/settings", cookie, f); w.Code != http.StatusBadRequest {
 			t.Errorf("%s = %d\n%s", name, w.Code, w.Body)
@@ -664,6 +665,16 @@ func TestSettings(t *testing.T) {
 	}
 	if w := r.do(http.MethodPost, "/settings", cookie, form("default_hub", "vps-2")); w.Code != http.StatusOK {
 		t.Fatalf("default hub = %d", w.Code)
+	}
+	// The zone renames every node's name; the DNS page shows the new one.
+	if !strings.Contains(r.do(http.MethodGet, "/settings", cookie, nil).Body.String(), `name="dns_zone" value="mesh"`) {
+		t.Fatal("the settings page does not show the default zone")
+	}
+	if w := r.do(http.MethodPost, "/settings", cookie, form("dns_zone", "home.arpa")); w.Code != http.StatusOK {
+		t.Fatalf("dns zone = %d\n%s", w.Code, w.Body)
+	}
+	if body := r.do(http.MethodGet, "/dns", cookie, nil).Body.String(); !strings.Contains(body, "vps-1.home.arpa") {
+		t.Fatalf("the DNS page after the zone change:\n%s", body)
 	}
 }
 

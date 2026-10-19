@@ -232,6 +232,14 @@ machine other people log in to, run the agent with `--ui-listen off`.
   `ui` need an elevated prompt. A second agent cannot take the pipe while one listens.
 - **The log file** is capped at 10 MiB plus one older copy and carries what the journal carries
   on Linux: no key, no token.
+- **Split DNS** is two NRPT rules under the agent's own fixed keys in
+  `HKLM\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters\DnsPolicyConfig`: `.mesh`, and
+  in exit mode `.` (every name), both to the mesh IP. The agent writes, reads and removes only
+  those two keys, and takes them back on `meshctl dns off` and when it stops.
+- **Exit mode** routes 0.0.0.0/1 and 128.0.0.0/1 into the tunnel, and ::/1 and 8000::/1 too,
+  with no IPv6 peer behind them, so IPv6 cannot leak around the exit (amendment A11). The
+  tunnel's own packets are bound to the interface of the host's default route, so they never
+  loop into the tunnel; the agent rebinds them when that route moves.
 - **wintun.dll** (amendment A34) is the one binary meshctl ships that it does not build. The
   build fetches the wintun 0.14.1 release, refuses it unless the zip and the DLL match their
   SHA-256 pins (`internal/agent/wintun`), and embeds the DLL; it is never committed. At every

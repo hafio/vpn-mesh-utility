@@ -28,6 +28,16 @@ type Table interface {
 
 var defaultRoute = netip.MustParsePrefix("0.0.0.0/0")
 
+// ExitPrefixes are the split default routes exit mode puts on the tunnel
+// where it routes by table instead of by policy (Windows): more specific
+// than any default route, so they win without touching the host's. The
+// IPv6 pair has no peer behind it, so IPv6 is blackholed (amendment A11).
+// They belong to exit mode, never to Sync.
+var ExitPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/1"), netip.MustParsePrefix("128.0.0.0/1"),
+	netip.MustParsePrefix("::/1"), netip.MustParsePrefix("8000::/1"),
+}
+
 // Desired is every peer's AllowedIPs except the default route, sorted and
 // without duplicates.
 func Desired(cfg proto.NodeConfig) ([]netip.Prefix, error) {

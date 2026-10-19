@@ -70,7 +70,7 @@ meshctl agent uninstall [flags]
 
 ## meshctl dns
 
-Show or switch this node's split DNS for .mesh names (stays on the node).
+Show or switch this node's split DNS for the mesh zone's names (stays on the node).
 
 ```
 meshctl dns [on|off] [flags]

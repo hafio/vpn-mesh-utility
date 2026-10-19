@@ -117,8 +117,8 @@ A userspace interface lives as long as the agent, so the NAS is off the mesh whi
 restarts (a kernel interface stays up). The agent changes no firewall on a spoke: allow the NAS's
 app ports from 10.77.0.0/16 in its own firewall (spec S7.5).
 
-**A Windows laptop** (M5, in progress: WireGuard and the mesh routes work; exit mode and split DNS
-on Windows come next). Add it as a spoke on the server, then in an elevated PowerShell
+**A Windows laptop** (M5: everything below works; it has yet to pass the live test on a real
+laptop). Add it as a spoke on the server, then in an elevated PowerShell
 (Run as administrator) on the laptop, with `meshctl-windows-amd64.exe` downloaded from the
 server's `/dl/`:
 
@@ -139,6 +139,10 @@ The agent runs WireGuard itself (wireguard-go) on a wintun adapter named `wg0`, 
 the service runs. meshctl carries the wintun driver and writes `wintun.dll` beside
 `meshctl.exe`, checked against its pinned hash at every start. Windows Defender Firewall treats
 `wg0` as a public network: other nodes reach the laptop's services only where you allow them.
+`.mesh` names resolve through an NRPT rule that sends them to the laptop's own resolver
+(`Get-DnsClientNrptPolicy` lists it); `meshctl dns off` removes it. `meshctl exit vps-2` works as
+on Linux: the laptop routes everything but the mesh through vps-2, IPv6 is blocked meanwhile, and
+the tunnel follows the laptop from one network to the next.
 
 **Exits.** Allow a server to be an exit once: `node set vps-2 --can-exit`. Its agent turns on
 forwarding and firewalld's `meshctl-exit` policy, which masquerades mesh traffic to the
@@ -212,6 +216,12 @@ Every server and spoke answers the `mesh` zone on its mesh IP, port 53: one name
 follows a node's mesh IP, or a fixed mesh IP. The answers come from the node's cached config, so
 `nas.mesh` keeps resolving while the server is down. Names of the other zones are REFUSED, so
 the host keeps its usual resolver for them.
+
+The zone is `mesh` until Settings names another (amendment A36): `home.arpa` or a name under a
+domain you own, never `local` (mDNS) or a public TLD you do not control. Changing it renames every
+node's names at once (`nas.mesh` becomes `nas.home.arpa`) and every node picks it up with its next
+config; the examples below use the default. Custom records are given without the zone: `files`,
+not `files.mesh`.
 
 The host's own lookups of `.mesh` go there through systemd-resolved, on wg0 only (`resolvectl
 status wg0` shows the mesh IP and `~mesh`). Nothing else on the host changes; `/etc/hosts` and

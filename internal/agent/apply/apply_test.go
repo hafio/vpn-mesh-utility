@@ -45,7 +45,7 @@ func (r *rig) mutations() int {
 
 // meshDNS is a DNS section for the reference servers.
 func meshDNS() *proto.DNS {
-	return &proto.DNS{Zone: proto.Zone, Split: true, Upstream: []string{"1.1.1.1"},
+	return &proto.DNS{Zone: proto.DefaultZone, Split: true, Upstream: []string{"1.1.1.1"},
 		Records: []proto.Record{{Name: "vps-1", IP: testfix.VPS1.MeshIP}, {Name: "vps-2", IP: testfix.VPS2.MeshIP}}}
 }
 
@@ -273,6 +273,55 @@ func TestExitModeFailureIsFatal(t *testing.T) {
 	}
 	if _, err := e.Apply(context.Background(), testfix.SpokeConfig("")); err != nil {
 		t.Fatalf("exit off without a policy = %v", err)
+	}
+}
+
+// exitHost is a host that does exit mode itself, as the Windows one does
+// (wg.ExitRouter): it records each call and changes only when asked to
+// change.
+type exitHost struct {
+	*agentfake.Host
+	on    bool
+	calls []bool
+	err   error
+}
+
+func (h *exitHost) SetExit(_ string, on bool) (int, error) {
+	h.calls = append(h.calls, on)
+	if h.err != nil {
+		return 0, h.err
+	}
+	if h.on == on {
+		return 0, nil
+	}
+	h.on = on
+	return 1, nil
+}
+
+// Without policy routing, step 6 hands exit mode to the host when it does
+// it: on with an exit, off without, nothing on a repeat, and a failure is
+// fatal.
+func TestExitModeThroughTheHost(t *testing.T) {
+	k, err := wg.ParseKey(testfix.WGKey(5))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &exitHost{Host: agentfake.NewHost()}
+	e := apply.New(apply.Deps{Host: h, Routes: agentfake.NewRoutes(), Sysctl: &agentfake.Sysctl{}, Iface: "wg0", Key: k})
+	if _, err := e.Apply(context.Background(), testfix.SpokeConfig("vps-2")); err != nil || !h.on {
+		t.Fatalf("exit on = %v, host on %v", err, h.on)
+	}
+	res, err := e.Apply(context.Background(), testfix.SpokeConfig("vps-2"))
+	if err != nil || res.Changes != 0 || !slices.Equal(h.calls, []bool{true, true}) {
+		t.Fatalf("a repeat = %+v, %v, calls %v", res, err, h.calls)
+	}
+	if _, err := e.Apply(context.Background(), testfix.SpokeConfig("")); err != nil || h.on {
+		t.Fatalf("exit off = %v, host on %v", err, h.on)
+	}
+	h.err = errors.New("exit mode: this host has no IPv4 default route to carry the tunnel")
+	var se *apply.StepError
+	if _, err := e.Apply(context.Background(), testfix.SpokeConfig("vps-3")); !errors.As(err, &se) || se.Step != apply.StepExit {
+		t.Fatalf("a failing host = %v", err)
 	}
 }
 

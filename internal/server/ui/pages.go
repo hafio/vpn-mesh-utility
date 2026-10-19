@@ -596,6 +596,7 @@ type settingsData struct {
 	DefaultMTU  string
 	DefaultHub  string
 	UpstreamDNS string
+	DNSZone     string
 	Servers     []string
 }
 
@@ -611,6 +612,7 @@ func (u *ui) settingsView(r *http.Request) (settingsData, error) {
 			return err
 		}
 		d.MeshCIDR, d.DefaultMTU, d.UpstreamDNS = all[store.SettingMeshCIDR], all[store.SettingDefaultMTU], all[store.SettingUpstreamDNS]
+		d.DNSZone = planner.Input{Zone: all[store.SettingDNSZone]}.ZoneName()
 		d.CIDRLocked = len(nodes) > 0
 		for _, n := range nodes {
 			if n.Role == string(proto.RoleServer) {
@@ -661,6 +663,11 @@ func (u *ui) saveSettings(w http.ResponseWriter, r *http.Request, s auth.Session
 		err = &validate.Error{Field: "upstream_dns", Reason: "give one to four IPv4 addresses, comma separated"}
 	}
 	hub, cidr := r.PostFormValue("default_hub"), strings.TrimSpace(r.PostFormValue("mesh_cidr"))
+	// The zone stays as it is when the form leaves it out.
+	zone := strings.TrimSpace(r.PostFormValue("dns_zone"))
+	if zone != "" && err == nil {
+		_, err = validate.Zone("dns_zone", zone)
+	}
 	if err != nil {
 		status, msg := message(err)
 		u.renderSettings(w, r, s, status, page{Error: msg})
@@ -669,6 +676,9 @@ func (u *ui) saveSettings(w http.ResponseWriter, r *http.Request, s auth.Session
 	res, err := u.Reconciler.Apply(r.Context(), api.Change{Actor: actor(s).Name, UserID: s.UserID, Action: "settings.set"},
 		func(tx *store.Tx, c *api.Change) error {
 			values := map[string]string{store.SettingDefaultMTU: strconv.Itoa(mtu), store.SettingUpstreamDNS: strings.Join(upstream, ",")}
+			if zone != "" {
+				values[store.SettingDNSZone] = zone
+			}
 			values[store.SettingDefaultHub] = ""
 			if hub != "" {
 				n, err := tx.NodeByName(hub)

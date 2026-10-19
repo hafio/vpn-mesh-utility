@@ -13,12 +13,18 @@ const (
 	SettingDefaultMTU  = "default_mtu"
 	SettingDefaultHub  = "default_hub"
 	SettingServerURL   = "server_url"
+	// SettingDNSZone is the zone every node serves (amendment A36).
+	SettingDNSZone = "dns_zone"
 )
 
 // DesiredSettings are the settings that shape computed configs. They are
 // part of every snapshot; deployment settings such as server_url are not, so
 // a rollback never moves the server.
-var DesiredSettings = []string{SettingMeshCIDR, SettingUpstreamDNS, SettingDefaultMTU, SettingDefaultHub}
+var DesiredSettings = []string{SettingMeshCIDR, SettingUpstreamDNS, SettingDefaultMTU, SettingDefaultHub, SettingDNSZone}
+
+// settingDefaults are what a setting held before it existed: restoring a
+// snapshot taken then puts the default back. "mesh" is proto.DefaultZone.
+var settingDefaults = map[string]string{SettingDNSZone: "mesh"}
 
 // Settings returns every setting.
 func (t *Tx) Settings() (map[string]string, error) {

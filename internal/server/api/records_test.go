@@ -54,7 +54,7 @@ func TestCustomDNSRecords(t *testing.T) {
 	h := meshHarness(t)
 	s, ctx, by := h.nodes(), context.Background(), Actor{Name: "user:ops", UserID: 1}
 
-	ch, err := s.AddRecord(ctx, by, RecordRequest{Name: "files.mesh", Node: "nas"})
+	ch, err := s.AddRecord(ctx, by, RecordRequest{Name: "files", Node: "nas"})
 	if err != nil || ch.Version == 0 {
 		t.Fatalf("alias of the nas = %+v, %v", ch, err)
 	}
@@ -118,6 +118,9 @@ func TestCustomDNSRecords(t *testing.T) {
 	refused(t, err, http.StatusConflict, "has the name of a node")
 	_, err = s.AddRecord(ctx, by, RecordRequest{Name: "router", IP: "192.168.1.1"})
 	refused(t, err, http.StatusConflict, "outside the mesh")
+	// Names are given without the zone.
+	_, err = s.AddRecord(ctx, by, RecordRequest{Name: "photos.mesh", IP: "10.77.1.60"})
+	refused(t, err, http.StatusConflict, "ends with the zone")
 	_, err = s.AddRecord(ctx, by, RecordRequest{Name: "x", Node: "ghost"})
 	refused(t, err, http.StatusNotFound, "ghost")
 	if h.latestVersion(t) != before || h.audits(t, "dns.add") != 3 {

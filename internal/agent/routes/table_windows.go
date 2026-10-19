@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"slices"
 
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
@@ -14,7 +15,8 @@ import (
 // winTable is the routing table on Windows: the static routes on the mesh
 // adapter. Every one is the agent's -- so is the adapter -- so where Linux
 // tags its routes with Protocol, Windows needs only to leave alone the
-// routes it makes itself for the adapter's address (protocol "local").
+// routes it makes itself for the adapter's address (protocol "local"), and
+// the split default routes, which are exit mode's (ExitPrefixes).
 type winTable struct{}
 
 // NewTable returns the host's routing table.
@@ -43,8 +45,9 @@ func (winTable) List(link string) ([]netip.Prefix, error) {
 	}
 	var out []netip.Prefix
 	for i := range rows {
-		if r := &rows[i]; r.InterfaceLUID == luid && r.Protocol == winipcfg.RouteProtocolNetMgmt {
-			out = append(out, r.DestinationPrefix.Prefix())
+		r := &rows[i]
+		if p := r.DestinationPrefix.Prefix(); r.InterfaceLUID == luid && r.Protocol == winipcfg.RouteProtocolNetMgmt && !slices.Contains(ExitPrefixes, p) {
+			out = append(out, p)
 		}
 	}
 	return out, nil

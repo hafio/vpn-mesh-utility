@@ -190,10 +190,10 @@ The agent applies a config in fixed steps, each comparing desired with observed 
 | 3 | address: the node's /32 is the only address | fatal |
 | 4 | WireGuard: key, port, fwmark, then per-peer changes (no full replace) | fatal |
 | 5 | routes: every AllowedIP except 0.0.0.0/0, protocol 201 | fatal |
-| 6 | exit mode: policy rules and table 51820 (below), or their removal | fatal |
+| 6 | exit mode: policy rules and table 51820 (below), or their removal; on Windows split default routes and a bound socket (amendment A35) | fatal |
 | 7 | sysctls (relay and exit servers) | fatal |
 | 8 | firewall (servers, firewalld) | degraded; the tunnel stays up |
-| 9 | DNS: the resolver on the mesh IP, then the host's registration | degraded; the tunnel stays up |
+| 9 | DNS: the resolver on the mesh IP, then the host's registration (systemd-resolved; NRPT on Windows) | degraded; the tunnel stays up |
 
 A config is cached (`config.json`) only after steps 1-7 succeed, and re-applied at boot, once the
 agent holds its local API socket and before the server is contacted. A config that failed is not retried until a newer one arrives or five

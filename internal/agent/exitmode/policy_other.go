@@ -1,11 +1,11 @@
-//go:build !linux
+//go:build !linux && !windows
 
 package exitmode
 
 import "errors"
 
-// errPlatform is why exit mode cannot be turned on here yet.
-var errPlatform = errors.New("exit mode on this platform arrives with the Windows agent (milestone M5)")
+// errPlatform is why exit mode cannot be turned on here.
+var errPlatform = errors.New("exit mode runs on Linux and Windows only")
 
 // otherPolicy has nothing installed and cannot install anything, so exit
 // mode off is a no-op and on fails with errPlatform.

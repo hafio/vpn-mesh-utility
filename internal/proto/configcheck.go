@@ -145,8 +145,8 @@ func (e Exit) validate(peers []Peer) error {
 
 func (d DNS) validate() error {
 	var errs []error
-	if d.Zone != Zone {
-		errs = append(errs, fmt.Errorf("dns.zone: must be %q (got %q)", Zone, d.Zone))
+	if _, err := validate.Zone("dns.zone", d.Zone); err != nil {
+		errs = append(errs, err)
 	}
 	for i, r := range d.Records {
 		field := fmt.Sprintf("dns.records[%d]", i)

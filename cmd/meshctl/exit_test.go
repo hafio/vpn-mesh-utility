@@ -142,7 +142,15 @@ func TestDNSCommand(t *testing.T) {
 	if a.dnsCalls != 2 {
 		t.Fatalf("the agent was asked %d times, want 2", a.dnsCalls)
 	}
+	a.mu.Lock()
+	a.st.DNS, a.st.Zone = proto.DNSOn, "home.arpa"
+	a.mu.Unlock()
+	if code, out, _ := runArgs("dns", "--socket", sock); code != exitOK || !strings.Contains(out, "sends .home.arpa lookups") {
+		t.Fatalf("dns in another zone = %d %q", code, out)
+	}
+	a.mu.Lock()
 	a.st.DNS = ""
+	a.mu.Unlock()
 	if code, out, _ := runArgs("dns", "--socket", sock); code != exitOK || !strings.Contains(out, "no DNS in its config") {
 		t.Fatalf("dns before a config = %d %q", code, out)
 	}

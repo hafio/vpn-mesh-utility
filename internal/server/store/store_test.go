@@ -75,15 +75,19 @@ func TestOpenAppliesMigrations(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if v != 1 {
-			t.Errorf("schema version = %d, want 1", v)
+		if v != 2 {
+			t.Errorf("schema version = %d, want 2", v)
 		}
 		cidr, err := t2.Setting(SettingMeshCIDR)
 		if err != nil {
 			return err
 		}
-		if cidr != "10.77.0.0/16" {
-			t.Errorf("default mesh_cidr = %q", cidr)
+		zone, err := t2.Setting(SettingDNSZone)
+		if err != nil {
+			return err
+		}
+		if cidr != "10.77.0.0/16" || zone != "mesh" {
+			t.Errorf("default mesh_cidr = %q, dns_zone = %q", cidr, zone)
 		}
 		return nil
 	})
@@ -101,8 +105,8 @@ func TestOpenIsIdempotent(t *testing.T) {
 	defer s2.Close()
 	tx(t, s2, func(t2 *Tx) error {
 		v, err := t2.SchemaVersion()
-		if v != 1 {
-			t.Errorf("schema version after reopen = %d, want 1", v)
+		if v != 2 {
+			t.Errorf("schema version after reopen = %d, want 2", v)
 		}
 		return err
 	})
@@ -495,6 +499,30 @@ func TestSnapshotRestoreRoundTrip(t *testing.T) {
 			t.Errorf("restored laptop lost its id or exit: %+v", laptop)
 		}
 		return nil
+	})
+}
+
+// A snapshot taken before a setting existed puts the setting's default
+// back: rolling back past the DNS zone setting serves mesh again.
+func TestRestoreOfAnOlderSnapshot(t *testing.T) {
+	s, _, _ := openTest(t)
+	tx(t, s, func(t2 *Tx) error {
+		snap, err := t2.Snapshot()
+		if err != nil {
+			return err
+		}
+		delete(snap.Settings, SettingDNSZone)
+		if err := t2.SetSetting(SettingDNSZone, "home.arpa"); err != nil {
+			return err
+		}
+		if err := t2.Restore(snap); err != nil {
+			return err
+		}
+		zone, err := t2.Setting(SettingDNSZone)
+		if err == nil && zone != "mesh" {
+			t.Errorf("dns_zone after restoring an older snapshot = %q, want mesh", zone)
+		}
+		return err
 	})
 }
 

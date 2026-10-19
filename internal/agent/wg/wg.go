@@ -231,6 +231,14 @@ type Host interface {
 	Close() error
 }
 
+// ExitRouter is a Host that does exit mode itself, where the platform has
+// no policy routing for it (Windows): on, everything but the mesh's own
+// routes goes into the tunnel; off, that stops. It says how many changes it
+// made, so a repeat is a no-op.
+type ExitRouter interface {
+	SetExit(name string, on bool) (int, error)
+}
+
 // ErrNotOurs means an interface of that name exists but the agent did not
 // create it.
 var ErrNotOurs = errors.New("interface exists but was not created by meshctl")

@@ -62,3 +62,21 @@ func TestApplyReportsAMissingParameter(t *testing.T) {
 		t.Fatal("Apply without /proc/sys/net/ipv4/ip_forward succeeded")
 	}
 }
+
+// Without /proc/sys (Windows), an exit-mode spoke's src_valid_mark has
+// nothing to do; ip_forward is refused, since only a Linux server relays.
+func TestApplyWithoutProc(t *testing.T) {
+	w := &Writer{NoProc: true}
+	if n, err := w.Apply([]proto.Sysctl{{Key: proto.SysctlSrcValidMark, Value: "1"}}); n != 0 || err != nil {
+		t.Fatalf("src_valid_mark = %d, %v", n, err)
+	}
+	if _, err := w.Apply([]proto.Sysctl{{Key: proto.SysctlIPForward, Value: "1"}}); err == nil {
+		t.Fatal("ip_forward was accepted on a host without /proc/sys")
+	}
+	if _, err := w.Apply([]proto.Sysctl{{Key: "kernel.panic", Value: "1"}}); err == nil {
+		t.Fatal("an unknown key was accepted")
+	}
+	if New().Root == "" && !New().NoProc {
+		t.Fatal("New has neither /proc/sys nor NoProc")
+	}
+}

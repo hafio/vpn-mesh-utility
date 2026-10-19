@@ -8,6 +8,8 @@
 {{- end}}
 <label>Default MTU <input name="default_mtu" value="{{.DefaultMTU}}"></label>
 <label>Upstream DNS <input name="upstream_dns" value="{{.UpstreamDNS}}"></label>
+<label>DNS zone <input name="dns_zone" value="{{.DNSZone}}"></label>
+<p class="hint">The zone every node answers, such as mesh or home.arpa. Changing it renames every node's name at once: <code>nas.{{.DNSZone}}</code> becomes <code>nas.</code> and the new zone.</p>
 <label>Default hub <select name="default_hub">
 <option value="">lowest-id server</option>
 {{- range .Servers}}

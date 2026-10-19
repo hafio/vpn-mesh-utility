@@ -211,7 +211,7 @@ func LoadInput(tx *store.Tx) (planner.Input, []store.Node, error) {
 	if err != nil {
 		return planner.Input{}, nil, fmt.Errorf("setting %s = %q is not a CIDR: %w", store.SettingMeshCIDR, settings[store.SettingMeshCIDR], err)
 	}
-	in := planner.Input{MeshCIDR: mesh}
+	in := planner.Input{MeshCIDR: mesh, Zone: settings[store.SettingDNSZone]}
 	if s := settings[store.SettingDefaultHub]; s != "" {
 		if in.DefaultHub, err = strconv.ParseInt(s, 10, 64); err != nil {
 			return planner.Input{}, nil, fmt.Errorf("setting %s = %q is not a node id: %w", store.SettingDefaultHub, s, err)

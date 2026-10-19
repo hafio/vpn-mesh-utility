@@ -378,6 +378,8 @@ func TestCheckRejects(t *testing.T) {
 		{"rule note", func(in *Input) { in.Rules[0].Note = "a\nb" }, "", "control characters"},
 		{"upstream in the mesh", func(in *Input) { in.Upstream = []netip.Addr{netip.MustParseAddr("10.77.0.1")} }, "", "would loop"},
 		{"upstream not ipv4", func(in *Input) { in.Upstream = []netip.Addr{netip.MustParseAddr("2001:db8::1")} }, "", "not an IPv4"},
+		{"zone", func(in *Input) { in.Zone = "office.local" }, "", "dns zone"},
+		{"record with the zone", func(in *Input) { in.Records[0].Name = "files.mesh" }, "", "ends with the zone"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -420,6 +422,20 @@ func TestDNS(t *testing.T) {
 		}
 		if strings.Join(c.DNS.Upstream, ",") != "1.1.1.1,9.9.9.9" {
 			t.Errorf("node %d upstream = %v, want the operator's order", id, c.DNS.Upstream)
+		}
+	}
+	// Every config names the default zone; another zone set for the mesh
+	// reaches every node.
+	for _, c := range full {
+		if c.DNS != nil && c.DNS.Zone != proto.DefaultZone {
+			t.Errorf("zone %q, want the default %q", c.DNS.Zone, proto.DefaultZone)
+		}
+	}
+	in := topology("full")
+	in.Zone = "home.arpa"
+	for _, c := range mustCompute(t, in) {
+		if c.DNS != nil && c.DNS.Zone != "home.arpa" {
+			t.Errorf("zone %q with the mesh set to home.arpa", c.DNS.Zone)
 		}
 	}
 	// A disabled node's name, and an alias of it, resolve no more.
