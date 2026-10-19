@@ -30,30 +30,39 @@ import (
 	"github.com/hafio/vpn-mesh-utility/internal/fsutil"
 )
 
-func main() {
-	arch := flag.String("arch", "amd64", "the Windows architecture to fetch the driver for (amd64 or arm64)")
-	out := flag.String("out", filepath.Join("internal", "agent", "wintun"), "where to write wintun_<arch>.dll")
-	flag.Parse()
+func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr, download)) }
+
+// run is the command with its flags, output and download as seams.
+func run(args []string, stdout, stderr io.Writer, get func(string) ([]byte, error)) int {
+	fs := flag.NewFlagSet("fetchwintun", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	arch := fs.String("arch", "amd64", "the Windows architecture to fetch the driver for (amd64 or arm64)")
+	out := fs.String("out", filepath.Join("internal", "agent", "wintun"), "where to write wintun_<arch>.dll")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
 	pin, ok := wintun.DLLs[*arch]
-	if !ok || flag.NArg() != 0 {
-		fmt.Fprintf(os.Stderr, "fetchwintun: -arch must be amd64 or arm64, with no arguments\n")
-		os.Exit(2)
+	if !ok || fs.NArg() != 0 {
+		fmt.Fprintln(stderr, "fetchwintun: -arch must be amd64 or arm64, with no arguments")
+		return 2
 	}
-	path, fetched, err := fetch(download, pin, *out, "wintun_"+*arch+".dll")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "fetchwintun: %v\n", err)
-		os.Exit(1)
+	path, fetched, err := fetch(get, wintun.ZipSHA256, pin, *out, "wintun_"+*arch+".dll")
+	switch {
+	case err != nil:
+		fmt.Fprintf(stderr, "fetchwintun: %v\n", err)
+		return 1
+	case fetched:
+		fmt.Fprintf(stdout, "fetched wintun %s into %s\n", wintun.Version, path)
+	default:
+		fmt.Fprintf(stdout, "%s is already the pinned wintun %s\n", path, wintun.Version)
 	}
-	if fetched {
-		fmt.Printf("fetched wintun %s into %s\n", wintun.Version, path)
-	} else {
-		fmt.Printf("%s is already the pinned wintun %s\n", path, wintun.Version)
-	}
+	return 0
 }
 
-// fetch writes the DLL pin names to dir/name, from the zip get returns,
-// unless the file there already matches. It reports whether it fetched.
-func fetch(get func(url string) ([]byte, error), pin wintun.Pin, dir, name string) (string, bool, error) {
+// fetch writes the DLL pin names to dir/name, from the zip get returns
+// (checked against zipSum), unless the file there already matches. It
+// reports whether it fetched.
+func fetch(get func(url string) ([]byte, error), zipSum string, pin wintun.Pin, dir, name string) (string, bool, error) {
 	path := filepath.Join(dir, name)
 	if cur, err := os.ReadFile(path); err == nil && wintun.Sum(cur) == pin.SHA256 {
 		return path, false, nil
@@ -62,7 +71,7 @@ func fetch(get func(url string) ([]byte, error), pin wintun.Pin, dir, name strin
 	if err != nil {
 		return path, false, err
 	}
-	dll, err := extract(z, wintun.ZipSHA256, pin)
+	dll, err := extract(z, zipSum, pin)
 	if err != nil {
 		return path, false, err
 	}

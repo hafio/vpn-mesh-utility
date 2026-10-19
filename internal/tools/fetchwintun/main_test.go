@@ -4,6 +4,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,14 +39,14 @@ func TestFetchRefusesAnythingButThePinnedRelease(t *testing.T) {
 	dir := t.TempDir()
 	pin := wintun.DLLs["amd64"]
 	fake := zipOf(t, map[string][]byte{pin.Path: []byte("MZ not wintun")})
-	if _, _, err := fetch(func(string) ([]byte, error) { return fake, nil }, pin, dir, "wintun_amd64.dll"); err == nil ||
+	if _, _, err := fetch(func(string) ([]byte, error) { return fake, nil }, wintun.ZipSHA256, pin, dir, "wintun_amd64.dll"); err == nil ||
 		!strings.Contains(err.Error(), "not the pinned") {
 		t.Fatalf("fetch of an unpinned zip = %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "wintun_amd64.dll")); err == nil {
 		t.Fatal("an unpinned download was written")
 	}
-	if _, _, err := fetch(func(string) ([]byte, error) { return nil, errors.New("no network") }, pin, dir, "wintun_amd64.dll"); err == nil ||
+	if _, _, err := fetch(func(string) ([]byte, error) { return nil, errors.New("no network") }, wintun.ZipSHA256, pin, dir, "wintun_amd64.dll"); err == nil ||
 		!strings.Contains(err.Error(), "no network") {
 		t.Fatalf("fetch offline = %v", err)
 	}
@@ -63,7 +65,7 @@ func TestFetchKeepsAMatchingDLL(t *testing.T) {
 		called = true
 		return nil, errors.New("no download expected")
 	}
-	path, fetched, err := fetch(get, pin, dir, "wintun_amd64.dll")
+	path, fetched, err := fetch(get, wintun.ZipSHA256, pin, dir, "wintun_amd64.dll")
 	if err != nil || fetched || called || path != filepath.Join(dir, "wintun_amd64.dll") {
 		t.Fatalf("fetch with the DLL in place = %s, %v, %v (download called: %v)", path, fetched, err, called)
 	}
@@ -90,5 +92,71 @@ func TestExtractChecksTheDLL(t *testing.T) {
 		if _, err := extract(z, wintun.Sum(z), pin); err == nil {
 			t.Errorf("%s: extract accepted it", name)
 		}
+	}
+}
+
+// The command: bad flags are exit 2; a download that is not the pinned
+// release is exit 1 with the reason, and writes nothing.
+func TestRun(t *testing.T) {
+	var out, errOut bytes.Buffer
+	for _, args := range [][]string{{"-arch", "x86"}, {"extra"}, {"-nope"}} {
+		if code := run(args, &out, &errOut, nil); code != 2 {
+			t.Errorf("run(%q) = %d, want 2", args, code)
+		}
+	}
+	dir := t.TempDir()
+	fake := func(string) ([]byte, error) { return []byte("not the release"), nil }
+	if code := run([]string{"-out", dir}, &out, &errOut, fake); code != 1 || !strings.Contains(errOut.String(), "not the pinned") {
+		t.Fatalf("run with an unpinned download = %d\n%s", code, errOut.String())
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("a refused download left %v", entries)
+	}
+}
+
+// download reads an https answer up to the size limit, and reports a
+// failed status, an oversize body and an unreachable server.
+func TestDownload(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ok":
+			_, _ = w.Write([]byte("zip bytes"))
+		case "/big":
+			_, _ = w.Write(bytes.Repeat([]byte("x"), wintun.MaxZip+1))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	if b, err := download(srv.URL + "/ok"); err != nil || string(b) != "zip bytes" {
+		t.Fatalf("download = %q, %v", b, err)
+	}
+	for path, want := range map[string]string{"/missing": "404", "/big": "size limit"} {
+		if _, err := download(srv.URL + path); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("download %s = %v, want %q", path, err, want)
+		}
+	}
+	srv.Close()
+	if _, err := download(srv.URL + "/ok"); err == nil {
+		t.Fatal("download from a server that is gone succeeded")
+	}
+}
+
+// A zip and DLL that match are written; a DLL that cannot be written is the
+// error, after the checks passed.
+func TestFetchWritesACheckedDLL(t *testing.T) {
+	dll := []byte("MZ a driver")
+	pin := wintun.Pin{Path: "wintun/bin/amd64/wintun.dll", SHA256: wintun.Sum(dll)}
+	z := zipOf(t, map[string][]byte{pin.Path: dll})
+	get := func(string) ([]byte, error) { return z, nil }
+	if _, _, err := fetch(get, wintun.Sum(z), pin, filepath.Join(t.TempDir(), "missing"), "wintun_amd64.dll"); err == nil || strings.Contains(err.Error(), "pinned") {
+		t.Fatalf("fetch into a missing dir = %v", err)
+	}
+	dir := t.TempDir()
+	if path, fetched, err := fetch(get, wintun.Sum(z), pin, dir, "wintun_amd64.dll"); err != nil || !fetched {
+		t.Fatalf("fetch of a matching zip = %s, %v, %v", path, fetched, err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "wintun_amd64.dll")); err != nil || !bytes.Equal(b, dll) {
+		t.Fatalf("the written DLL = %q, %v", b, err)
 	}
 }

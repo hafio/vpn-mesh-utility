@@ -362,9 +362,12 @@ backend).
 ## `internal/tools/fetchwintun`
 
 `TestFetchRefusesAnythingButThePinnedRelease`, `TestFetchKeepsAMatchingDLL`,
-`TestExtractChecksTheDLL`: a download that is not the pinned zip, or none at all, writes nothing;
-a DLL already in place that matches is kept without a download; inside a zip that matches, a DLL
-that is missing, too large or not the pinned one is refused.
+`TestExtractChecksTheDLL`, `TestFetchWritesACheckedDLL`, `TestRun`, `TestDownload`: a download
+that is not the pinned zip, or none at all, writes nothing; a DLL already in place that matches is
+kept without a download; inside a zip that matches, a DLL that is missing, too large or not the
+pinned one is refused; one that matches is written, and an unwritable dir is the error; bad flags
+are exit 2, an unpinned download exit 1; the download reads up to its size limit and reports a
+failed status, an oversize body and an unreachable server.
 
 ## `internal/tools/vulnjudge`
 
