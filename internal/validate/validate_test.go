@@ -2,6 +2,7 @@ package validate
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -218,6 +219,46 @@ func TestZone(t *testing.T) {
 	for _, s := range append([]string{"", ".mesh", "mesh.", "a.b.c.d.e", "Mesh", "local", "office.local", "localhost", strings.Repeat("a", 101)}, hostile...) {
 		if _, err := Zone("dns_zone", s); err == nil {
 			t.Errorf("Zone(%q) accepted it", s)
+		}
+	}
+}
+
+func TestDomains(t *testing.T) {
+	got, err := Domains("dns_extra_domains", "mesh", []string{"Example.Lan.", " home.arpa", "lab.home.arpa.example", "corp.internal"})
+	if want := []string{"corp.internal", "example.lan", "home.arpa", "lab.home.arpa.example"}; err != nil || !slices.Equal(got, want) {
+		t.Fatalf("Domains = %v, %v; want %v", got, err, want)
+	}
+	if got, err := Domains("dns_extra_domains", "mesh", nil); err != nil || len(got) != 0 {
+		t.Fatalf("no domains = %v, %v", got, err)
+	}
+	if _, err := Domains("dns_extra_domains", "", []string{"lab.home.arpa"}); err != nil {
+		t.Fatalf("under home.arpa, no zone given: %v", err)
+	}
+	for name, c := range map[string]struct {
+		zone string
+		ds   []string
+		want string
+	}{
+		"too many":        {"mesh", []string{"a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9"}, "at most 8"},
+		"the zone":        {"home.arpa", []string{"home.arpa"}, "the mesh's zone"},
+		"inside the zone": {"mesh", []string{"lab.mesh"}, "the mesh's zone"},
+		"around the zone": {"lab.home.arpa", []string{"home.arpa"}, "the mesh's zone"},
+		"twice":           {"mesh", []string{"lan", "LAN"}, "listed twice"},
+		"inside another":  {"mesh", []string{"example.lan", "web.example.lan"}, "inside example.lan"},
+		"reverse zone":    {"mesh", []string{"10.in-addr.arpa"}, ".arpa"},
+		"arpa itself":     {"mesh", []string{"arpa"}, ".arpa"},
+		"local":           {"mesh", []string{"office.local"}, "local"},
+		"a metacharacter": {"mesh", []string{"lan;id"}, "label"},
+		"empty":           {"mesh", []string{""}, "1-4"},
+	} {
+		if _, err := Domains("dns_extra_domains", c.zone, c.ds); err == nil || !strings.Contains(err.Error(), c.want) ||
+			!strings.HasPrefix(err.Error(), "dns_extra_domains: ") {
+			t.Errorf("%s: Domains = %v, want %q", name, err, c.want)
+		}
+	}
+	for _, h := range hostile {
+		if _, err := Domains("dns_extra_domains", "mesh", []string{h}); err == nil {
+			t.Errorf("Domains accepted %q", h)
 		}
 	}
 }

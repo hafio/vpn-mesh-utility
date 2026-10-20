@@ -29,6 +29,8 @@ func Health(n NodeInfo, now time.Time) (string, string) {
 		return phoneHealth(n, now)
 	case !n.Enrolled:
 		return proto.HealthOff, "not joined"
+	case n.DownSince > 0:
+		return proto.HealthBad, "down since " + time.Unix(n.DownSince, 0).UTC().Format("2006-01-02 15:04 UTC") + "; its pairs relay through other hubs"
 	case n.LastSeen == 0:
 		return proto.HealthBad, "no heartbeat yet"
 	case age > silentHeartbeat:

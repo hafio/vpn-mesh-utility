@@ -77,12 +77,26 @@ func TestHashIgnoresVersionOnly(t *testing.T) {
 	}
 }
 
+func withDomains(c proto.NodeConfig, ds ...string) proto.NodeConfig {
+	c.DNS = &proto.DNS{Zone: proto.DefaultZone, Split: true, Domains: ds}
+	return c
+}
+
 func TestValidateAcceptsFixtures(t *testing.T) {
+	// A host-mode server whose containers are on the mesh: its firewall
+	// forwards to their bridge (amendment A37).
+	hosting := testfix.ServerConfig()
+	hosting.Containers = testfix.Containers(proto.ModeHost)
+	hosting.Firewall.Bridge, hosting.Firewall.Relay = proto.ContainerBridge, true
+	hosting.Sysctl = []proto.Sysctl{{Key: proto.SysctlIPForward, Value: "1"}}
 	for name, c := range map[string]proto.NodeConfig{
 		"golden":                     goldenConfig(),
 		"testfix server":             testfix.ServerConfig(),
 		"testfix spoke":              testfix.SpokeConfig(""),
 		"testfix spoke with an exit": testfix.SpokeConfig(testfix.VPS2.Name),
+		"container-mode spoke":       testfix.ContainerSpokeConfig(),
+		"server with containers":     hosting,
+		"extra domains":              withDomains(testfix.SpokeConfig(""), "example.lan", "home.arpa"),
 	} {
 		c := c
 		if err := c.Validate(); err != nil {
@@ -140,6 +154,46 @@ func TestValidateRejects(t *testing.T) {
 		{"dns forward_for", func(c *proto.NodeConfig) {
 			c.DNS = &proto.DNS{Zone: proto.DefaultZone, ForwardFor: []string{"10.77.3.0/33"}}
 		}, "dns.forward_for[0]"},
+		{"dns domain inside the zone", func(c *proto.NodeConfig) {
+			c.DNS = &proto.DNS{Zone: proto.DefaultZone, Domains: []string{"lab.mesh"}}
+		}, "dns.domains"},
+		{"dns domains unsorted", func(c *proto.NodeConfig) {
+			c.DNS = &proto.DNS{Zone: proto.DefaultZone, Domains: []string{"home.arpa", "example.lan"}}
+		}, "sorted"},
+		{"firewall bridge", func(c *proto.NodeConfig) { c.Firewall.Bridge = "docker0" }, "firewall.bridge"},
+		{"containers mode", func(c *proto.NodeConfig) { c.Containers = withMode("bridge") }, "containers.mode"},
+		{"containers subnet garbage", func(c *proto.NodeConfig) {
+			c.Containers = testfix.Containers(proto.ModeHost)
+			c.Containers.Subnet = "10.77.128.0/24;reboot"
+		}, "containers.subnet"},
+		{"containers subnet not a /24", func(c *proto.NodeConfig) {
+			c.Containers = testfix.Containers(proto.ModeHost)
+			c.Containers.Subnet = "10.77.128.0/25"
+		}, "must be a /24"},
+		{"containers network without the subnet", func(c *proto.NodeConfig) {
+			c.Containers = testfix.Containers(proto.ModeHost)
+			c.Containers.Network = "10.88.0.0/16"
+		}, "does not contain the subnet"},
+		{"containers range outside the subnet", func(c *proto.NodeConfig) {
+			c.Containers = testfix.Containers(proto.ModeHost)
+			c.Containers.Range = "10.77.129.128/25"
+		}, "is not a part of the subnet"},
+		{"containers gateway in the range", func(c *proto.NodeConfig) {
+			c.Containers = testfix.Containers(proto.ModeContainer)
+			c.Containers.Gateway = "10.77.128.130"
+		}, "outside the range"},
+		{"host mode gateway is not the bridge", func(c *proto.NodeConfig) {
+			c.Containers = testfix.Containers(proto.ModeHost)
+			c.Containers.Gateway = "10.77.128.2"
+		}, "the gateway is the bridge"},
+		{"container mode gateway is the bridge", func(c *proto.NodeConfig) {
+			c.Containers = testfix.Containers(proto.ModeContainer)
+			c.Containers.Gateway = c.Containers.Bridge
+		}, "the gateway is the agent"},
+		{"containers subnet holds the node", func(c *proto.NodeConfig) {
+			c.Containers = testfix.Containers(proto.ModeHost)
+			c.Interface.Address = "10.77.128.9/32"
+		}, "holds the node's own mesh IP"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -154,6 +208,12 @@ func TestValidateRejects(t *testing.T) {
 			}
 		})
 	}
+}
+
+func withMode(mode string) *proto.Containers {
+	k := testfix.Containers(proto.ModeHost)
+	k.Mode = mode
+	return k
 }
 
 func TestValidateReportsEveryProblem(t *testing.T) {

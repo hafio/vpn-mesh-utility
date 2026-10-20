@@ -11,6 +11,7 @@ import (
 // The agent checks the server's mesh view before it caches or shows it.
 func TestMeshViewValidate(t *testing.T) {
 	v := testfix.MeshView()
+	v.Names = testfix.MeshNames()
 	if err := v.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -29,9 +30,14 @@ func TestMeshViewValidate(t *testing.T) {
 		"state too long":     {func(v *proto.MeshView) { v.Nodes[0].State = strings.Repeat("x", 201) }, "nodes[0].state"},
 		"negative last seen": {func(v *proto.MeshView) { v.Nodes[1].LastSeen = -1 }, "nodes[1]"},
 		"too many nodes":     {func(v *proto.MeshView) { v.Nodes = make([]proto.MeshNode, 1<<16+1) }, "at most 65536"},
+		"name injected":      {func(v *proto.MeshView) { v.Names[0].Name = "db\nx" }, "names[0].name"},
+		"name of no node":    {func(v *proto.MeshView) { v.Names[1].Node = "Laptop" }, "names[1].node"},
+		"name not IPv4":      {func(v *proto.MeshView) { v.Names[2].IP = "web" }, "names[2].ip"},
+		"too many names":     {func(v *proto.MeshView) { v.Names = make([]proto.MeshName, 1<<16+1) }, "names: at most"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			v := testfix.MeshView()
+			v.Names = testfix.MeshNames()
 			c.edit(&v)
 			if err := v.Validate(); err == nil || !strings.Contains(err.Error(), c.field) {
 				t.Fatalf("Validate = %v, want an error naming %s", err, c.field)

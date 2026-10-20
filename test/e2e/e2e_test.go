@@ -84,7 +84,7 @@ var (
 )
 
 // spaces are every namespace a lab may create.
-var spaces = []string{"a", "b", "c", "d", "e", "f", "g", "br"}
+var spaces = []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "br"}
 
 func TestMain(m *testing.M) {
 	if os.Getenv("E2E_ROLE") == "proxy" {
@@ -116,6 +116,12 @@ type lab struct {
 	bin   string
 	ca    string
 	procs map[string]*exec.Cmd
+	// runtimes are the container runtime sockets agents read names from,
+	// by namespace; every other agent reads none (never the host's).
+	runtimes map[string]string
+	// serverArgs and agentArgs are a test's extra flags for every server
+	// and agent it starts.
+	serverArgs, agentArgs []string
 }
 
 func ns(n string) string { return nsPrefix + n }
@@ -138,7 +144,7 @@ func newLab(t *testing.T) *lab {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l := &lab{t: t, dir: t.TempDir(), bin: bin, procs: map[string]*exec.Cmd{}}
+	l := &lab{t: t, dir: t.TempDir(), bin: bin, procs: map[string]*exec.Cmd{}, runtimes: map[string]string{}}
 	deleteNamespaces()
 	t.Cleanup(l.teardown)
 
@@ -175,7 +181,7 @@ func (l *lab) teardown() {
 	}
 	deleteNamespaces()
 	if l.t.Failed() {
-		for _, f := range []string{"server", "proxy", "agent-a", "agent-b", "agent-c", "agent-d", "agent-f"} {
+		for _, f := range []string{"server", "proxy", "agent-a", "agent-b", "agent-c", "agent-d", "agent-f", "agent-h", "agent-k"} {
 			b, _ := os.ReadFile(filepath.Join(l.dir, f+".log"))
 			l.t.Logf("--- %s.log (tail) ---\n%s", f, tail(string(b), 40))
 		}
@@ -270,8 +276,9 @@ func (l *lab) meshctl(space string, env []string, args ...string) (string, error
 func (l *lab) data(name string) string { return filepath.Join(l.dir, name) }
 
 func (l *lab) startServer() {
-	l.start("server", "a", nil, l.bin, "server", "--data", l.data("server"), "--listen", "127.0.0.1:8080",
-		"--url", "https://192.0.2.1:8443", "--trusted-proxies", "127.0.0.1/32", "--log-level", "debug")
+	args := []string{"server", "--data", l.data("server"), "--listen", "127.0.0.1:8080",
+		"--url", "https://192.0.2.1:8443", "--trusted-proxies", "127.0.0.1/32", "--log-level", "debug"}
+	l.start("server", "a", nil, l.bin, append(args, l.serverArgs...)...)
 	self, err := os.Executable()
 	if err != nil {
 		l.t.Fatal(err)
@@ -285,14 +292,20 @@ func (l *lab) startServer() {
 }
 
 // startAgent runs a node's agent: the NAS on the userspace backend,
-// everyone else on the kernel's.
+// everyone else on the kernel's; a fake container runtime where the test
+// gave one.
 func (l *lab) startAgent(space string) {
 	backend := "kernel"
 	if space == nas.ns {
 		backend = "userspace"
 	}
-	l.start("agent-"+space, space, []string{"SSL_CERT_FILE=" + l.ca}, l.bin, "agent", "run", "--data", l.data(space),
-		"--socket", filepath.Join(l.data(space), "agent.sock"), "--no-firewall", "--wg-backend", backend, "--log-level", "debug")
+	sock := "off"
+	if s, ok := l.runtimes[space]; ok {
+		sock = s
+	}
+	args := []string{"agent", "run", "--data", l.data(space), "--socket", filepath.Join(l.data(space), "agent.sock"), "--no-firewall",
+		"--wg-backend", backend, "--log-level", "debug", "--runtime-socket", sock}
+	l.start("agent-"+space, space, []string{"SSL_CERT_FILE=" + l.ca}, l.bin, append(args, l.agentArgs...)...)
 }
 
 // uapiGet asks a userspace device for its state over WireGuard's UAPI

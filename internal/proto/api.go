@@ -294,7 +294,7 @@ type PrefsResponse struct {
 }
 
 // DegradableSteps are the apply steps whose failure leaves the tunnel up.
-var DegradableSteps = []string{"firewall", "dns"}
+var DegradableSteps = []string{"firewall", "containers", "dns"}
 
 // The states of a node's split DNS (spec S7.4). Each one means the resolver
 // serves the mesh zone on the node's mesh IP; they differ in whether the

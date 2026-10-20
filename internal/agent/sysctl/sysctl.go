@@ -1,5 +1,6 @@
 // Package sysctl sets the kernel parameters a config asks for: ip_forward on
-// relay and exit servers (amendment A4), src_valid_mark on exit-mode spokes.
+// relay and exit servers (amendment A4), src_valid_mark on exit-mode spokes,
+// and the container network's forwarding and proxy ARP (amendment A37).
 // It writes /proc/sys directly -- no sysctl binary, no /etc/sysctl.d -- and
 // the agent re-asserts the values on every boot from its cached config.
 package sysctl
@@ -29,7 +30,7 @@ type Writer struct {
 func (w *Writer) Apply(params []proto.Sysctl) (int, error) {
 	n := 0
 	for _, p := range params {
-		if _, err := validate.Enum("sysctl key", p.Key, proto.SysctlIPForward, proto.SysctlSrcValidMark); err != nil {
+		if _, err := validate.Enum("sysctl key", p.Key, proto.SysctlKeys()...); err != nil {
 			return n, err
 		}
 		if _, err := validate.Enum("sysctl value", p.Value, "0", "1"); err != nil {
@@ -50,7 +51,9 @@ func (w *Writer) Apply(params []proto.Sysctl) (int, error) {
 			continue
 		}
 		if err := os.WriteFile(path, []byte(p.Value+"\n"), 0o644); err != nil {
-			return n, fmt.Errorf("set %s = %s: %w (the agent needs root, and ProtectKernelTunables must stay off)", p.Key, p.Value, err)
+			return n, fmt.Errorf("set %s = %s: %w (on a host the agent needs root, and ProtectKernelTunables must stay off; "+
+				"in a container /proc/sys is read-only, so the compose file's sysctls must set it: render it again with `meshctl node compose`)",
+				p.Key, p.Value, err)
 		}
 		n++
 	}

@@ -92,6 +92,13 @@ func (f *Firewall) Apply(ctx context.Context, fw *proto.Firewall) (n int, err er
 		if err != nil {
 			return c, err
 		}
+		if fw.Bridge != "" {
+			b, err := f.ensureBridge(ctx, fw.Bridge)
+			c += b
+			if err != nil {
+				return c, err
+			}
+		}
 		if st.Rules, err = f.present(ctx, st.Rules); err != nil {
 			return c, err
 		}
@@ -386,6 +393,30 @@ func (f *Firewall) ensureZone(ctx context.Context) (int, error) {
 	return n, nil
 }
 
+// ensureBridge puts the containers' bridge in the mesh zone when no zone
+// holds it (amendment A37), at runtime and permanently, so the relay policy
+// forwards between it and wg0. Docker puts its own bridges in its docker
+// zone, whose policy forwards from any zone; an operator's zone is left
+// alone too. firewalld takes an interface by name before it exists, so the
+// first apply may bind the bridge the containers step creates after it.
+func (f *Firewall) ensureBridge(ctx context.Context, bridge string) (int, error) {
+	// --get-zone-of-interface fails with "no zone" when none holds it.
+	if out, err := f.Run.Run(ctx, []string{program, "--get-zone-of-interface=" + bridge}); err == nil && strings.TrimSpace(out) != "" {
+		return 0, nil
+	}
+	n := 0
+	for _, argv := range [][]string{
+		{program, "--zone=" + proto.ZoneMesh, "--add-interface=" + bridge},
+		{program, "--permanent", "--zone=" + proto.ZoneMesh, "--add-interface=" + bridge},
+	} {
+		if _, err := f.Run.Run(ctx, argv); err != nil {
+			return n, fmt.Errorf("firewall: put the containers' bridge %s in zone %s: %w", bridge, proto.ZoneMesh, err)
+		}
+		n++
+	}
+	return n, nil
+}
+
 // atLeast compares a firewalld version string ("1.3.4") with major.minor.
 func atLeast(v string, major, minor int) bool {
 	parts := strings.Split(strings.TrimSpace(v), ".")
@@ -407,8 +438,12 @@ func check(fw proto.Firewall) error {
 			errs = append(errs, err)
 		}
 	}
-	_, err := validate.Enum("firewall.backend", fw.Backend, "firewalld")
+	_, err := validate.Enum("firewall.backend", fw.Backend, proto.FirewallFirewalld)
 	add(err)
+	if fw.Bridge != "" {
+		_, err = validate.Enum("firewall.bridge", fw.Bridge, proto.ContainerBridge)
+		add(err)
+	}
 	for i, r := range fw.Rules {
 		field := fmt.Sprintf("firewall.rules[%d]", i)
 		_, err = validate.Enum(field+".zone", r.Zone, proto.ZonePublic, proto.ZoneMesh)

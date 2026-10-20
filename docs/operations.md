@@ -139,8 +139,8 @@ The agent runs WireGuard itself (wireguard-go) on a wintun adapter named `wg0`, 
 the service runs. meshctl carries the wintun driver and writes `wintun.dll` beside
 `meshctl.exe`, checked against its pinned hash at every start. Windows Defender Firewall treats
 `wg0` as a public network: other nodes reach the laptop's services only where you allow them.
-`.mesh` names resolve through an NRPT rule that sends them to the laptop's own resolver
-(`Get-DnsClientNrptPolicy` lists it); `meshctl dns off` removes it. `meshctl exit vps-2` works as
+`.mesh` names, and the extra domains, resolve through NRPT rules that send them to the laptop's own
+resolver (`Get-DnsClientNrptPolicy` lists them); `meshctl dns off` removes them. `meshctl exit vps-2` works as
 on Linux: the laptop routes everything but the mesh through vps-2, IPv6 is blocked meanwhile, and
 the tunnel follows the laptop from one network to the next.
 
@@ -189,6 +189,107 @@ The node then shows `rolled back` (red on the dashboard; `node show` says why) a
 old config until the server's config changes again. Fix what cut it off, then make the next
 change -- or roll back to a good version in the UI.
 
+### Container mode
+
+(Amendment A37; M6, in progress: the live tests on real hosts are next.)
+
+A node in container mode runs its WireGuard in the agent's container, in that container's own
+network namespace. Only the containers attached to the node's `meshctl-mesh` network are on the
+mesh; the host, its addresses and its LAN are not. A server in container mode is still a hub
+with a public endpoint (the host publishes its WireGuard port); a client only dials out.
+
+```
+docker exec <container> /app/meshctl node add box --role spoke --mode container --hub vps-1
+docker exec <container> /app/meshctl node add hub4 --role server --mode container --endpoint 198.51.100.7:51820
+docker exec <container> /app/meshctl node compose box --runtime docker > compose.yml
+```
+
+The node gets a mesh IP as any node and a /24 for its containers (10.77.128.0/24, then .129, ...;
+the mesh needs to be a /21 or larger). A container-mode server needs `--endpoint`: inside its
+container the agent cannot see the host's public address. `--runtime` is `docker` (the
+default), `podman` (rootful or, for a client, rootless) or `swarm` (Swarm services attach; the
+agent itself runs from this compose file on each node). The file's header has the three steps:
+create the mesh network once (the exact command for the runtime), join with the token, start.
+The compose file is also on the node's page in the web UI.
+
+To put a service on the mesh, attach the network and make the agent its resolver:
+
+```
+services:
+  web:
+    networks: [default, meshctl-mesh]
+    dns: [10.77.128.2]
+    dns_search: [mesh]
+    dns_opt: ["ndots:1"]
+networks:
+  meshctl-mesh:
+    external: true
+```
+
+It gets an address from the subnet's upper half and reaches every mesh address -- other nodes,
+their containers, phones -- through the agent, with no route of its own; its own internet stays on
+its other network. `dns` and `dns_search` make `<name>.<zone>` and short names resolve through
+the agent (`ndots:1`, because Docker writes `ndots:0`).
+
+The agent claims `.2` on its mesh-network interface itself (a Swarm-scoped network ignores a fixed
+address) and isolates by policy routing in its own namespace: the host reaches no mesh address
+and no mesh peer reaches the host. `meshctl status` shows `degraded: containers` when the agent is
+not on the mesh network -- create it with the header's command and recreate the agent's
+container.
+
+A container-mode node is never an exit and uses none, and the custom firewall rules do not apply
+to it (its containers are reached directly). A Windows laptop is in host mode only.
+
+**Rootful Podman next to Docker.** Docker loads `br_netfilter` and sets the kernel's FORWARD
+policy to DROP, which drops traffic between containers on a Podman bridge. On such a host, let
+the mesh bridge through both Docker's chain and firewalld:
+
+```
+iptables -I DOCKER-USER -i meshctl0 -j ACCEPT
+iptables -I DOCKER-USER -o meshctl0 -j ACCEPT
+firewall-cmd --permanent --zone=trusted --add-interface=meshctl0 && firewall-cmd --reload
+```
+
+**A host-mode node's containers.** `node add ... --containers`, or `node set <name>
+--containers` later, gives a host-mode node a container subnet too: the host stays on the mesh
+(a Swarm VPS keeps Swarm over it) and its containers get mesh addresses. The agent owns the
+bridge `meshctl0`: it makes it when it is missing, gives it the subnet's `.1`, turns on its
+forwarding and proxy ARP, and adds four rules so that only the mesh, the bridge and the host
+reach the subnet -- never the host's LAN. Create the runtime's network on that bridge once; the
+commands are on the node's page in the web UI, or:
+
+```
+docker exec <container> /app/meshctl node network vps-1 --runtime docker
+```
+
+Docker takes the existing bridge without masquerading or filtering ports (`inhibit_ipv4`,
+`nat-unprotected`), Podman attaches to it unmanaged, Swarm uses a config-only network with the
+same options. A service then attaches as above, with the bridge's `.1` as its `dns`; a Swarm
+service, whose tasks run on several nodes, names the servers' mesh IPs instead (`node network
+--runtime swarm` prints them), since every node's resolver answers every node's containers. On a
+firewalld server the agent puts an unzoned `meshctl0` into the mesh zone (Docker's own bridges
+stay in its docker zone). `--containers=false` takes the rules away; the bridge stays until you
+remove the runtime's network.
+
+**Container names** (amendment A38). Every node resolves the containers on the mesh networks by
+name: `web.mesh` answers every node's `web` containers, rotated on each answer (as Swarm does
+across tasks), and `web.nas.mesh` only the NAS's. A container's names are its compose service,
+its Swarm service (without the stack's prefix), its container name, its aliases on
+`meshctl-mesh`, its `hostname:` and, with `domainname:` set to the zone, `hostname.<zone>`;
+names in other domains are published only inside an extra domain (DNS, below). A node's name, a custom record and the server's own
+address keep theirs: a container called `vps-1` gets no name, and the DNS page in the web UI
+lists every reported name with why one is not published. Names follow the containers within a few
+seconds (TTL 10 s) and keep resolving from each node's cache while the server is down.
+
+The agent reads them from the runtime's API socket, GET requests only. The container-mode compose
+file mounts the host's socket at `/var/run/docker.sock` (rootful Podman's for `--runtime podman`:
+`systemctl enable --now podman.socket`; a rootless client mounts
+`/run/user/<uid>/podman/podman.sock` instead); `meshctl node compose --no-names` leaves it out
+and the node's containers get no names. A host-mode agent finds Docker's or rootful Podman's
+socket by itself; `meshctl agent run --runtime-socket off` (or a path) changes that. On a host
+whose runtime labels containers for SELinux, the runtime may refuse the agent's container the
+socket; `--no-names` is then the way out.
+
 ## 5. Day to day
 
 All node commands run against the server's admin socket: `docker exec <container> /app/meshctl
@@ -203,6 +304,20 @@ node ...`. Each change is versioned, audited and pushed to the affected agents a
 | re-install a node from scratch | `node token vps-3`, then the install command again |
 | a phone's new profile (a new key) | `node phone <name>`, `--exit vps-2` for all its traffic |
 | remove a node | `node rm vps-3` |
+
+**Relay failover** (amendment A40). Two spokes with different hubs talk through one of them (the
+lower-id spoke's hub). When that hub goes down, the server moves the pair to the other spoke's hub,
+else the default hub, else the lowest-id server that is up, as a new config version audited
+`relay.failover` by `system`; the dashboard shows the hub "down since ...". A hub counts as down
+when its agent has not reported for 2 minutes AND no node has seen a handshake with it for 3: an
+agent that merely stopped, or a server that cannot reach the hub, moves nothing while its tunnels
+work. It comes back (`relay.restore`) once its agent has reported steadily for 5 minutes, so a
+flapping hub does not bounce the pairs. `meshctl server --hub-down-after 2m` sets the first
+threshold (the others follow it; `0` turns failover off) and must stay above the agents'
+heartbeat (`agent run --status-every`, 30 s). The down hub stays every node's peer, so traffic to
+the hub itself resumes on its own. Failover needs the server: run it on a host other than the
+hubs it protects, or accept that losing that host stops failover too. Phones do not move: their
+profile names one hub.
 
 On a node, `meshctl status` (root, or a member of group `meshctl`) shows the applied version, the
 DNS state and each peer's endpoint, last handshake and traffic. `meshctl logs` prints the agent's
@@ -249,8 +364,19 @@ resolver (`~.` on wg0), which forwards the other zones to the upstream resolvers
 in exit mode, lookups go to that resolver, outside the tunnel. Phones use their hub's resolver,
 which forwards for them.
 
-Containers (Docker, the NAS's apps) have their own resolver and do not see `.mesh` names; use mesh
-IPs there.
+Containers have their own resolver: one attached to a node's mesh network uses the agent's (above,
+Container mode) and resolves every mesh name and the containers' names; any other container does
+not see `.mesh` names, so use mesh IPs there.
+
+**Extra domains** (Settings, amendment A39) are domains the mesh takes over besides the zone,
+such as `example.lan`: every node answers the containers' names in them -- a container with
+`hostname: web` and `domainname: example.lan`, or an alias `web.example.lan` -- and forwards every
+other name in them to the upstream resolvers, and each host-mode node's resolver registration
+sends the whole domain to the mesh (`~example.lan` in `resolvectl status wg0`, an NRPT rule on
+Windows). So a host stops asking its own resolver for those names: choose domains the mesh owns,
+not your LAN's or your company's. At most 8; never the zone, inside it or around it, no `.arpa`
+but `home.arpa`, and never the domain of the server's own address. The DNS page lists them with
+every container name and how it resolves.
 
 ## 7. Firewall
 
@@ -361,7 +487,8 @@ Agents keep their last config (`/var/lib/meshctl/config.json`) and re-apply it a
 the server, so the mesh survives a server outage and reboots, and every node keeps answering
 `.mesh` names. Each node also keeps the last view of the mesh it fetched (`mesh.json`, at most
 5 minutes old when the server went down), which it shows marked with the server's absence. Changes
-simply wait. When the server is back, agents reconnect within a minute.
+simply wait, and so does relay failover: a hub that goes down meanwhile keeps its pairs until the
+server is back. When it is, agents reconnect within a minute.
 
 ## 12. Troubleshooting
 

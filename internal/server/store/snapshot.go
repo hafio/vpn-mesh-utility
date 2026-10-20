@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+
+	"github.com/hafio/vpn-mesh-utility/internal/proto"
 )
 
 // SnapshotFormat tags the snapshot encoding so a future change is detected
@@ -43,16 +45,24 @@ type SnapNode struct {
 	Hostname       string `json:"hostname,omitempty"`
 	WGBackend      string `json:"wg_backend,omitempty"`
 	CreatedAt      int64  `json:"created_at"`
+	// Mode is empty for proto.ModeHost, so a snapshot of a mesh without
+	// container networks encodes as before (amendment A37).
+	Mode            string `json:"mode,omitempty"`
+	ContainerSubnet string `json:"container_subnet,omitempty"`
 }
 
 func snapNode(n Node) SnapNode {
-	return SnapNode{
+	s := SnapNode{
 		ID: n.ID, Name: n.Name, Role: n.Role, MeshIP: n.MeshIP, WGPubKey: n.WGPubKey,
 		IdentityPubKey: n.IdentityPubKey, Endpoint: n.Endpoint, ListenPort: n.ListenPort,
 		PrimaryHubID: n.PrimaryHubID, CanExit: n.CanExit, ExitVia: n.ExitVia, Keepalive: n.Keepalive,
 		MTU: n.MTU, Enrolled: n.Enrolled, Disabled: n.Disabled, OS: n.OS, Arch: n.Arch,
-		Hostname: n.Hostname, WGBackend: n.WGBackend, CreatedAt: n.CreatedAt,
+		Hostname: n.Hostname, WGBackend: n.WGBackend, CreatedAt: n.CreatedAt, ContainerSubnet: n.ContainerSubnet,
 	}
+	if n.Mode != proto.ModeHost {
+		s.Mode = n.Mode
+	}
+	return s
 }
 
 // Snapshot reads the current desired state.
@@ -144,19 +154,24 @@ func (t *Tx) Restore(s Snapshot) error {
 	// Pass 1: rows without cross-references (a node may point at one that is
 	// restored later in the list).
 	for _, n := range s.Nodes {
+		mode := n.Mode
+		if mode == "" {
+			mode = proto.ModeHost
+		}
 		args := []any{n.Name, n.Role, n.MeshIP, nullStr(n.WGPubKey), nullStr(n.IdentityPubKey), n.Endpoint,
 			n.ListenPort, boolInt(n.CanExit), n.Keepalive, n.MTU, boolInt(n.Enrolled), boolInt(n.Disabled),
-			n.OS, n.Arch, n.Hostname, n.WGBackend}
+			n.OS, n.Arch, n.Hostname, n.WGBackend, mode, n.ContainerSubnet}
 		if exists[n.ID] {
 			_, err = t.exec(`UPDATE nodes SET name = ?, role = ?, mesh_ip = ?, wg_pubkey = ?, identity_pubkey = ?,
 					endpoint = ?, listen_port = ?, can_exit = ?, keepalive = ?, mtu = ?, enrolled = ?, disabled = ?,
-					os = ?, arch = ?, hostname = ?, wg_backend = ?, primary_hub_id = NULL, exit_via = NULL
+					os = ?, arch = ?, hostname = ?, wg_backend = ?, mode = ?, container_subnet = ?,
+					primary_hub_id = NULL, exit_via = NULL
 				WHERE id = ?`, append(args, n.ID)...)
 		} else {
 			_, err = t.exec(`INSERT INTO nodes (name, role, mesh_ip, wg_pubkey, identity_pubkey, endpoint,
 					listen_port, can_exit, keepalive, mtu, enrolled, disabled, os, arch, hostname, wg_backend,
-					id, created_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, append(args, n.ID, n.CreatedAt)...)
+					mode, container_subnet, id, created_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, append(args, n.ID, n.CreatedAt)...)
 		}
 		if err != nil {
 			return fmt.Errorf("restore node %q: %w", n.Name, err)
@@ -191,8 +206,15 @@ func (t *Tx) Restore(s Snapshot) error {
 	for _, k := range DesiredSettings {
 		v, ok := s.Settings[k]
 		if !ok {
-			// A snapshot older than the setting had its default.
+			// A snapshot older than the setting had its default; an empty
+			// one is no row at all, as before the setting existed.
 			if v, ok = settingDefaults[k]; !ok {
+				continue
+			}
+			if v == "" {
+				if _, err := t.exec(`DELETE FROM settings WHERE key = ?`, k); err != nil {
+					return fmt.Errorf("restore setting %q: %w", k, err)
+				}
 				continue
 			}
 		}

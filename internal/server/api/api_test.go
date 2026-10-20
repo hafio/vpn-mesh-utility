@@ -273,7 +273,7 @@ func TestJoinEnrollsAndConsumesTheToken(t *testing.T) {
 	h := newHarness(t)
 	h.seed(t, storeNode(testfix.VPS1, true), storeNode(testfix.VPS2, false))
 	tok := h.issue(t, "vps-2")
-	events, _, cancel := h.hub.Subscribe(testfix.VPS1.ID)
+	events, _, _, cancel := h.hub.Subscribe(testfix.VPS1.ID)
 	defer cancel()
 
 	w, eb := postJoin(h, joinBody(t, tok, testfix.VPS2, func(r *proto.JoinRequest) { r.PublicIP = "198.51.100.7" }))

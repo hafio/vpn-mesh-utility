@@ -69,6 +69,7 @@ func (a *api) adminRoutes() []route {
 		{Route{http.MethodPost, one + "/enable", "socket"}, a.adminEnable},
 		{Route{http.MethodPost, one + "/token", "socket"}, a.adminToken},
 		{Route{http.MethodGet, one + "/compose", "socket"}, a.adminCompose},
+		{Route{http.MethodGet, one + "/network", "socket"}, a.adminNetwork},
 		{Route{http.MethodPost, one + "/phone", "socket"}, a.adminPhone},
 	}
 }
@@ -134,7 +135,13 @@ func (a *api) adminToken(w http.ResponseWriter, r *http.Request) {
 
 func (a *api) adminCompose(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	out, err := a.nodes.Compose(r.Context(), r.PathValue("name"), q.Get("backend"), q.Get("data"))
+	out, err := a.nodes.Compose(r.Context(), r.PathValue("name"),
+		ComposeOptions{Backend: q.Get("backend"), DataDir: q.Get("data"), Runtime: q.Get("runtime"), NoNames: q.Get("names") == "off"})
+	a.reply(w, r, out, err)
+}
+
+func (a *api) adminNetwork(w http.ResponseWriter, r *http.Request) {
+	out, err := a.nodes.Network(r.Context(), r.PathValue("name"), r.URL.Query().Get("runtime"))
 	a.reply(w, r, out, err)
 }
 
@@ -146,39 +153,130 @@ func (a *api) readJSON(w http.ResponseWriter, r *http.Request, v any) error {
 	return decodeJSON(body, v)
 }
 
-// Compose renders the compose file that runs a spoke's agent as a container
-// (spec S12, amendments A13 and A19): backend userspace (the default) or
-// kernel, the agent's data in dataDir on the host (default
-// deploy.DefaultNASData). Servers install with install.sh instead.
-func (s *Nodes) Compose(ctx context.Context, name, backend, dataDir string) (ComposeFile, error) {
+// Compose renders the compose file that runs a node's agent in a
+// container (spec S12): a container-mode node's in its own network
+// namespace (amendment A37; runtime docker, podman or swarm, backend auto,
+// kernel or userspace, data in a named volume unless DataDir names a host
+// directory), or a host-mode spoke's on the host network, the NAS
+// (amendments A13 and A19; backend userspace or kernel, data in
+// deploy.DefaultNASData by default). A host-mode server installs with
+// install.sh instead.
+func (s *Nodes) Compose(ctx context.Context, name string, o ComposeOptions) (ComposeFile, error) {
 	name, err := checkName(name)
 	if err != nil {
 		return ComposeFile{}, err
 	}
-	var n store.Node
+	var (
+		n  store.Node
+		in planner.Input
+	)
 	err = s.db.Tx(ctx, func(tx *store.Tx) error {
 		var err error
-		n, err = nodeByName(tx, name, "node")
+		if n, err = nodeByName(tx, name, "node"); err != nil {
+			return err
+		}
+		in, _, err = LoadInput(tx)
 		return err
 	})
 	if err != nil {
 		return ComposeFile{}, err
 	}
+	if n.Mode == proto.ModeContainer {
+		return s.containerCompose(n, in, o)
+	}
 	if n.Role != string(proto.RoleSpoke) {
 		return ComposeFile{}, errorf(http.StatusConflict, proto.CodeConflict,
-			"%s is a %s; only spokes run in a container (a server installs with the command `meshctl node add` printed)", name, n.Role)
+			"%s is a %s in host mode; a host-mode server installs with the command `meshctl node add` printed, and only a container-mode node or a spoke (the NAS) runs its agent from a compose file",
+			name, n.Role)
 	}
-	if backend == "" {
-		backend = deploy.NASUserspace
+	if o.Runtime != "" {
+		return ComposeFile{}, invalid(fmt.Errorf("runtime: %s is in host mode, whose compose file runs on the host network with any runtime; leave --runtime out", name))
 	}
-	if dataDir == "" {
-		dataDir = deploy.DefaultNASData
+	if o.Backend == "" {
+		o.Backend = deploy.NASUserspace
 	}
-	b, err := deploy.RenderNASCompose(deploy.NASParams{Node: name, Server: s.serverURL, Version: s.version, Backend: backend, DataDir: dataDir})
+	if o.DataDir == "" {
+		o.DataDir = deploy.DefaultNASData
+	}
+	b, err := deploy.RenderNASCompose(deploy.NASParams{Node: name, Server: s.serverURL, Version: s.version, Backend: o.Backend, DataDir: o.DataDir})
 	if err != nil {
 		return ComposeFile{}, invalid(err)
 	}
-	return ComposeFile{Backend: backend, DataDir: dataDir, YAML: string(b)}, nil
+	return ComposeFile{Backend: o.Backend, DataDir: o.DataDir, YAML: string(b)}, nil
+}
+
+// Network returns the commands that create a node's mesh network on its
+// host, for runtime (docker, the default; podman; swarm), and the compose
+// lines that attach a service to it (amendment A37): a container-mode node's
+// (the compose file's header has them too) or a host-mode node's, whose
+// bridge the agent owns.
+func (s *Nodes) Network(ctx context.Context, name, runtime string) (NetworkInfo, error) {
+	name, err := checkName(name)
+	if err != nil {
+		return NetworkInfo{}, err
+	}
+	var (
+		n  store.Node
+		in planner.Input
+	)
+	err = s.db.Tx(ctx, func(tx *store.Tx) error {
+		var err error
+		if n, err = nodeByName(tx, name, "node"); err != nil {
+			return err
+		}
+		in, _, err = LoadInput(tx)
+		return err
+	})
+	if err != nil {
+		return NetworkInfo{}, err
+	}
+	k := planner.ContainerNetwork(in.MeshCIDR, plannerNode(n))
+	if k == nil {
+		return NetworkInfo{}, errorf(http.StatusConflict, proto.CodeConflict,
+			"%s has no container network; give it one with `meshctl node set %s --containers`", name, name)
+	}
+	if runtime == "" {
+		runtime = deploy.RuntimeDocker
+	}
+	setup, err := deploy.MeshNetworkSetup(deploy.NetworkParams{Runtime: runtime, Host: k.Mode == proto.ModeHost,
+		Network: k.Network, Range: k.Range, Bridge: k.Bridge, Gateway: k.Gateway, Zone: in.ZoneName(), Resolvers: planner.ServerIPs(in)})
+	if err != nil {
+		return NetworkInfo{}, invalid(err)
+	}
+	return NetworkInfo{Runtime: runtime, Mode: k.Mode, Subnet: k.Subnet, Commands: setup.Commands, Service: setup.Service}, nil
+}
+
+// containerCompose is Compose for a container-mode node.
+func (s *Nodes) containerCompose(n store.Node, in planner.Input, o ComposeOptions) (ComposeFile, error) {
+	k := planner.ContainerNetwork(in.MeshCIDR, plannerNode(n))
+	if k == nil {
+		return ComposeFile{}, errorf(http.StatusConflict, proto.CodeConflict, "%s is in container mode but has no container subnet; remove it and add it again", n.Name)
+	}
+	if o.Backend == "" {
+		o.Backend = deploy.ContainerAuto
+	}
+	if o.Runtime == "" {
+		o.Runtime = deploy.RuntimeDocker
+	}
+	p := deploy.ContainerParams{
+		Node: n.Name, Server: s.serverURL, Version: s.version, Hub: n.Role == string(proto.RoleServer),
+		ListenPort: n.ListenPort, Backend: o.Backend, Runtime: o.Runtime, DataDir: o.DataDir, NoNames: o.NoNames,
+		Network: k.Network, Subnet: k.Subnet, Range: k.Range, Bridge: k.Bridge, Gateway: k.Gateway, Zone: in.ZoneName(),
+		Resolvers: planner.ServerIPs(in),
+	}
+	if p.Hub {
+		ep, err := netip.ParseAddrPort(n.Endpoint)
+		if err != nil {
+			return ComposeFile{}, errorf(http.StatusConflict, proto.CodeConflict,
+				"%s has no endpoint, so there is no port to publish; set it with `meshctl node set %s --endpoint <public IPv4>:<port>`", n.Name, n.Name)
+		}
+		p.PublishPort = int(ep.Port())
+	}
+	b, err := deploy.RenderContainerCompose(p)
+	if err != nil {
+		return ComposeFile{}, invalid(err)
+	}
+	return ComposeFile{Backend: o.Backend, DataDir: o.DataDir, Runtime: o.Runtime, YAML: string(b)}, nil
 }
 
 // List returns every node and the plan's problems.
@@ -279,6 +377,12 @@ func (s *Nodes) Add(ctx context.Context, by Actor, req NodeAddRequest) (NodeChan
 			}
 			n.MeshIP = ip.String()
 		}
+		if n.Mode == proto.ModeContainer || req.Containers {
+			used[netip.MustParseAddr(n.MeshIP)] = true
+			if n.ContainerSubnet, err = containerSubnet(in.MeshCIDR, nodes, used); err != nil {
+				return err
+			}
+		}
 		if n.MTU == 0 {
 			if n.MTU, err = defaultMTU(tx); err != nil {
 				return err
@@ -297,7 +401,14 @@ func (s *Nodes) Add(ctx context.Context, by Actor, req NodeAddRequest) (NodeChan
 			}
 			return err
 		}
-		c.Detail = map[string]any{"role": n.Role, "mesh_ip": n.MeshIP, "endpoint": n.Endpoint, "hub": req.Hub, "can_exit": n.CanExit}
+		detail := map[string]any{"role": n.Role, "mesh_ip": n.MeshIP, "endpoint": n.Endpoint, "hub": req.Hub, "can_exit": n.CanExit}
+		if n.Mode != proto.ModeHost {
+			detail["mode"] = n.Mode
+		}
+		if n.ContainerSubnet != "" {
+			detail["container_subnet"] = n.ContainerSubnet
+		}
+		c.Detail = detail
 		if n.Role == string(proto.RolePhone) {
 			return nil
 		}
@@ -364,6 +475,12 @@ func (s *Nodes) Set(ctx context.Context, by Actor, name string, req NodeSetReque
 		if req.MTU != nil {
 			n.MTU = *req.MTU
 			detail["mtu"] = n.MTU
+		}
+		if req.Containers != nil {
+			if err := setContainers(tx, &n, *req.Containers); err != nil {
+				return err
+			}
+			detail["container_subnet"] = n.ContainerSubnet
 		}
 		c.Detail = detail
 		return tx.UpdateNode(n)
@@ -529,10 +646,69 @@ func newNode(req NodeAddRequest) (store.Node, netip.Addr, error) {
 		keep(err)
 	}
 	n.CanExit = req.CanExit
+	n.Mode = proto.ModeHost
+	if req.Mode != "" {
+		n.Mode, err = validate.Enum("mode", req.Mode, proto.ModeHost, proto.ModeContainer)
+		keep(err)
+	}
+	container := n.Mode == proto.ModeContainer
+	switch {
+	case n.Role == string(proto.RolePhone) && (container || req.Containers):
+		keep(errors.New("a phone has no agent, so it has no container network; mode and containers apply to servers and spokes"))
+	case container && n.Role == string(proto.RoleServer) && req.Endpoint == "":
+		keep(errors.New("a container-mode server needs an endpoint, <public IPv4>:<port the host publishes>: inside its container the agent cannot see the host's address"))
+	case container && req.CanExit:
+		keep(errors.New("a container-mode server cannot be an exit: its host is not on the mesh"))
+	}
 	if err := errors.Join(errs...); err != nil {
 		return store.Node{}, netip.Addr{}, invalid(err)
 	}
 	return n, ip, nil
+}
+
+// containerSubnet allocates the lowest free container /24 (amendment A37);
+// ips are the mesh IPs in use, the new node's included.
+func containerSubnet(mesh netip.Prefix, nodes []store.Node, ips map[netip.Addr]bool) (string, error) {
+	taken := map[netip.Prefix]bool{}
+	for _, o := range nodes {
+		if k, err := netip.ParsePrefix(o.ContainerSubnet); err == nil {
+			taken[k] = true
+		}
+	}
+	k, err := planner.AllocateContainers(mesh, taken, ips)
+	if err != nil {
+		return "", errorf(http.StatusConflict, proto.CodeConflict, "%v", err)
+	}
+	return k.String(), nil
+}
+
+// setContainers gives a host-mode node a container subnet (on) or takes it
+// away; a container-mode node keeps its own, and a phone has none.
+func setContainers(tx *store.Tx, n *store.Node, on bool) error {
+	switch {
+	case n.Role == string(proto.RolePhone):
+		return errorf(http.StatusBadRequest, proto.CodeBadRequest, "%s is a phone; a phone has no agent, so it has no container network", n.Name)
+	case n.Mode == proto.ModeContainer && !on:
+		return errorf(http.StatusBadRequest, proto.CodeBadRequest,
+			"%s is in container mode, where its containers are always on the mesh; to change its mode, remove the node and add it again", n.Name)
+	case !on:
+		n.ContainerSubnet = ""
+		return nil
+	case n.ContainerSubnet != "":
+		return nil
+	}
+	in, nodes, err := LoadInput(tx)
+	if err != nil {
+		return err
+	}
+	ips := map[netip.Addr]bool{}
+	for _, o := range nodes {
+		if ip, err := netip.ParseAddr(o.MeshIP); err == nil {
+			ips[ip] = true
+		}
+	}
+	n.ContainerSubnet, err = containerSubnet(in.MeshCIDR, nodes, ips)
+	return err
 }
 
 func defaultMTU(tx *store.Tx) (int, error) {
@@ -635,6 +811,7 @@ func nodeInfo(n store.Node, all []store.Node) NodeInfo {
 		Enrolled: n.Enrolled, Disabled: n.Disabled, OS: n.OS, Arch: n.Arch, Hostname: n.Hostname,
 		WGBackend: n.WGBackend, AgentVersion: n.AgentVersion, ConfigVersion: n.ConfigVersion,
 		AppliedVersion: n.AppliedVersion, InSync: n.ConfigHash != "" && n.AppliedHash == n.ConfigHash, LastSeen: n.LastSeen,
+		Mode: n.Mode, ContainerSubnet: n.ContainerSubnet, DownSince: n.DownSince,
 	}
 	// The heartbeat's display-only part; written by status(), so it parses.
 	var d statusDetail

@@ -59,6 +59,38 @@ func TestAllocateLowestFree(t *testing.T) {
 	}
 }
 
+// Container /24s come from the upper half of the mesh (amendment A37): the
+// lowest free one, past the ones taken and the ones holding a node's IP;
+// a /22 has no room.
+func TestAllocateContainers(t *testing.T) {
+	mesh := netip.MustParsePrefix("10.77.0.0/16")
+	got, err := AllocateContainers(mesh, nil, nil)
+	if err != nil || got.String() != "10.77.128.0/24" {
+		t.Fatalf("first = %v, %v", got, err)
+	}
+	used := map[netip.Prefix]bool{netip.MustParsePrefix("10.77.128.0/24"): true}
+	ips := map[netip.Addr]bool{netip.MustParseAddr("10.77.129.7"): true}
+	if got, err = AllocateContainers(mesh, used, ips); err != nil || got.String() != "10.77.130.0/24" {
+		t.Errorf("past a used block and a fixed IP = %v, %v", got, err)
+	}
+	if got, err = AllocateContainers(netip.MustParsePrefix("10.77.0.0/21"), nil, nil); err != nil || got.String() != "10.77.4.0/24" {
+		t.Errorf("a /21 = %v, %v", got, err)
+	}
+	if _, err = AllocateContainers(netip.MustParsePrefix("10.77.0.0/22"), nil, nil); err == nil || !strings.Contains(err.Error(), "/21 or larger") {
+		t.Errorf("a /22: %v", err)
+	}
+	full := map[netip.Prefix]bool{}
+	for r := 4; r < 8; r++ {
+		full[Block(netip.MustParsePrefix("10.77.0.0/21"), Range(r))] = true
+	}
+	if _, err = AllocateContainers(netip.MustParsePrefix("10.77.0.0/21"), full, nil); err == nil || !strings.Contains(err.Error(), "is taken") {
+		t.Errorf("all taken: %v", err)
+	}
+	if _, err = AllocateContainers(netip.MustParsePrefix("10.0.0.0/8"), nil, nil); err == nil {
+		t.Error("a mesh outside /16-/22 was accepted")
+	}
+}
+
 func TestCheckRequested(t *testing.T) {
 	mesh := netip.MustParsePrefix("10.77.0.0/16")
 	used := map[netip.Addr]bool{netip.MustParseAddr("10.77.1.1"): true}

@@ -51,6 +51,9 @@ type Config struct {
 	Version        string
 	Log            *slog.Logger
 	Now            func() time.Time
+	// HubDownAfter is how long a hub may be silent before relay failover
+	// moves its pairs (amendment A40); zero turns failover off.
+	HubDownAfter time.Duration
 	// Ready, when set, is called once both listeners accept connections.
 	Ready func(addr net.Addr)
 }
@@ -152,6 +155,8 @@ func Run(ctx context.Context, c Config) error {
 	exportCtx, stopExports := context.WithCancel(ctx)
 	defer stopExports()
 	go exports.Run(exportCtx)
+	failover := &api.Failover{DB: st, Reconciler: rec, Now: c.Now, Log: c.Log, DownAfter: c.HubDownAfter}
+	go failover.Run(exportCtx)
 	c.Log.Info("meshctl server listening", "addr", ln.Addr().String(), "url", origin, "admin_socket", adminPath, "version", c.Version)
 	if c.Ready != nil {
 		c.Ready(ln.Addr())

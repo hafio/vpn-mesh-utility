@@ -97,6 +97,29 @@ func TestPrefsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestNamesRoundTrip(t *testing.T) {
+	c := newClient(t, verifying(t, func(w http.ResponseWriter, r *http.Request) {
+		var req proto.NamesRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || r.Method != http.MethodPut || r.URL.Path != proto.PathNames ||
+			len(req.Names) != 1 || req.Names[0].Name != "web" {
+			t.Errorf("names %s %s %+v, %v", r.Method, r.URL.Path, req, err)
+		}
+		_ = json.NewEncoder(w).Encode(proto.NamesResponse{Stored: 1})
+	}))
+	resp, err := c.Names(context.Background(), proto.NamesRequest{Names: []proto.ContainerName{{Name: "web", Kind: proto.NameService, IP: "10.77.128.129"}}})
+	if err != nil || resp.Stored != 1 {
+		t.Fatalf("Names = %+v, %v", resp, err)
+	}
+	refused := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(proto.ErrorBody{Code: proto.CodeConflict, Message: "no container network"})
+	}))
+	var ce *Error
+	if _, err := refused.Names(context.Background(), proto.NamesRequest{}); !errors.As(err, &ce) || ce.Code != proto.CodeConflict {
+		t.Fatalf("a refusal = %v", err)
+	}
+}
+
 // The mesh view is signed for, and one that does not validate never
 // reaches the cache or the page.
 func TestMeshIsCheckedBeforeUse(t *testing.T) {
@@ -176,7 +199,7 @@ func TestUnreachableAndMalformedAnswers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Events(context.Background(), func(proto.ConfigEvent) {}); err == nil || !strings.Contains(err.Error(), "open event stream") {
+	if err := c.Events(context.Background(), func(proto.ConfigEvent) {}, func() {}); err == nil || !strings.Contains(err.Error(), "open event stream") {
 		t.Errorf("Events with the server down = %v", err)
 	}
 
@@ -192,7 +215,7 @@ func TestUnreachableAndMalformedAnswers(t *testing.T) {
 		t.Errorf("a 200 that is not JSON = %v", err)
 	}
 	called := false
-	if err := junk.Events(context.Background(), func(proto.ConfigEvent) { called = true }); err == nil || !strings.Contains(err.Error(), "malformed config event") || called {
+	if err := junk.Events(context.Background(), func(proto.ConfigEvent) { called = true }, func() {}); err == nil || !strings.Contains(err.Error(), "malformed config event") || called {
 		t.Errorf("a malformed event = %v (delivered %v)", err, called)
 	}
 }
@@ -204,12 +227,14 @@ func TestEventsDeliversConfigEvents(t *testing.T) {
 		_ = proto.WriteComment(w, "ka")
 		_ = proto.WriteEvent(w, proto.Event{Name: "other", Data: []byte("{}")})
 		_ = proto.WriteEvent(w, proto.Event{Name: proto.EventConfig, Data: []byte(`{"version":4,"hash":"h4"}`)})
+		_ = proto.WriteEvent(w, proto.Event{Name: proto.EventMesh, Data: []byte("{}")})
 		_ = proto.WriteEvent(w, proto.Event{Name: proto.EventConfig, Data: []byte(`{"version":5,"hash":"h5"}`)})
 	}))
 	var got []proto.ConfigEvent
-	err := c.Events(context.Background(), func(ev proto.ConfigEvent) { got = append(got, ev) })
-	if err == nil || len(got) != 2 || got[1].Version != 5 {
-		t.Fatalf("Events = %v, got %+v", err, got)
+	nudges := 0
+	err := c.Events(context.Background(), func(ev proto.ConfigEvent) { got = append(got, ev) }, func() { nudges++ })
+	if err == nil || len(got) != 2 || got[1].Version != 5 || nudges != 1 {
+		t.Fatalf("Events = %v, got %+v and %d mesh events", err, got, nudges)
 	}
 }
 
@@ -221,7 +246,7 @@ func TestEventsRefusesAnythingButAStream(t *testing.T) {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = w.Write([]byte("<html>login</html>"))
 	}))
-	if err := c.Events(context.Background(), func(proto.ConfigEvent) {}); err == nil || !strings.Contains(err.Error(), "proxy") {
+	if err := c.Events(context.Background(), func(proto.ConfigEvent) {}, func() {}); err == nil || !strings.Contains(err.Error(), "proxy") {
 		t.Fatalf("Events = %v", err)
 	}
 	disabled := newClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -229,7 +254,7 @@ func TestEventsRefusesAnythingButAStream(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(proto.ErrorBody{Code: proto.CodeNodeDisabled, Message: "disabled"})
 	}))
 	var ce *Error
-	if err := disabled.Events(context.Background(), func(proto.ConfigEvent) {}); !errors.As(err, &ce) || ce.Code != proto.CodeNodeDisabled {
+	if err := disabled.Events(context.Background(), func(proto.ConfigEvent) {}, func() {}); !errors.As(err, &ce) || ce.Code != proto.CodeNodeDisabled {
 		t.Fatalf("Events on a disabled node = %v", err)
 	}
 }

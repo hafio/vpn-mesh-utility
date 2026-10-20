@@ -3,6 +3,7 @@ package sysctl
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
@@ -53,6 +54,41 @@ func TestApplyRefusesUnknownKeysBeforeTouchingAPath(t *testing.T) {
 	b, _ := os.ReadFile(filepath.Join(w.Root, "kernel", "core_pattern"))
 	if string(b) != "core\n" {
 		t.Fatalf("a refused parameter was written: %q", b)
+	}
+}
+
+// The container network's keys (amendment A37) map to their own files:
+// the bridge's and wg0's forwarding and proxy ARP, the gateway's proxy ARP.
+func TestApplyContainerKeys(t *testing.T) {
+	w := fakeProc(t, map[string]string{"net/ipv4/conf/meshctl0/forwarding": "0", "net/ipv4/conf/meshctl0/proxy_arp": "0",
+		"net/ipv4/conf/wg0/forwarding": "0", "net/ipv4/conf/all/proxy_arp": "0"})
+	var params []proto.Sysctl
+	for _, k := range []string{proto.SysctlBridgeForwarding, proto.SysctlBridgeProxyARP, proto.SysctlWGForwarding, proto.SysctlProxyARP} {
+		params = append(params, proto.Sysctl{Key: k, Value: "1"})
+	}
+	if n, err := w.Apply(params); err != nil || n != 4 {
+		t.Fatalf("Apply = %d, %v; want 4 changes", n, err)
+	}
+	for _, rel := range []string{"conf/meshctl0/forwarding", "conf/meshctl0/proxy_arp", "conf/wg0/forwarding", "conf/all/proxy_arp"} {
+		if b, _ := os.ReadFile(filepath.Join(w.Root, "net", "ipv4", filepath.FromSlash(rel))); string(b) != "1\n" {
+			t.Errorf("%s = %q", rel, b)
+		}
+	}
+}
+
+// A parameter the agent may not write -- /proc/sys is read-only in a
+// container -- fails with what sets it there: the compose file.
+func TestApplyReportsAReadOnlyParameter(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes a read-only file")
+	}
+	w := fakeProc(t, map[string]string{"net/ipv4/conf/all/proxy_arp": "0"})
+	if err := os.Chmod(filepath.Join(w.Root, "net", "ipv4", "conf", "all", "proxy_arp"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	_, err := w.Apply([]proto.Sysctl{{Key: proto.SysctlProxyARP, Value: "1"}})
+	if err == nil || !strings.Contains(err.Error(), "compose file's sysctls") {
+		t.Fatalf("Apply = %v", err)
 	}
 }
 

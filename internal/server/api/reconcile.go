@@ -211,7 +211,7 @@ func LoadInput(tx *store.Tx) (planner.Input, []store.Node, error) {
 	if err != nil {
 		return planner.Input{}, nil, fmt.Errorf("setting %s = %q is not a CIDR: %w", store.SettingMeshCIDR, settings[store.SettingMeshCIDR], err)
 	}
-	in := planner.Input{MeshCIDR: mesh, Zone: settings[store.SettingDNSZone]}
+	in := planner.Input{MeshCIDR: mesh, Zone: settings[store.SettingDNSZone], Domains: store.SplitDomains(settings[store.SettingDNSExtraDomains])}
 	if s := settings[store.SettingDefaultHub]; s != "" {
 		if in.DefaultHub, err = strconv.ParseInt(s, 10, 64); err != nil {
 			return planner.Input{}, nil, fmt.Errorf("setting %s = %q is not a node id: %w", store.SettingDefaultHub, s, err)
@@ -264,6 +264,11 @@ func plannerNode(n store.Node) planner.Node {
 	if ap, err := netip.ParseAddrPort(n.Endpoint); err == nil {
 		p.Endpoint = ap
 	}
+	p.Mode = n.Mode
+	if k, err := netip.ParsePrefix(n.ContainerSubnet); err == nil {
+		p.Containers = k
+	}
+	p.Down = n.Role == string(proto.RoleServer) && n.DownSince > 0
 	return p
 }
 

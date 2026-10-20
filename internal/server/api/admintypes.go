@@ -43,6 +43,13 @@ type NodeInfo struct {
 	Errors   []string        `json:"errors,omitempty"`
 	Rollback *proto.Rollback `json:"rollback,omitempty"`
 	DNS      string          `json:"dns,omitempty"`
+	// Mode is where the node's WireGuard lives; ContainerSubnet is its /24
+	// for containers, empty while they are not on the mesh (amendment A37).
+	Mode            string `json:"mode"`
+	ContainerSubnet string `json:"container_subnet,omitempty"`
+	// DownSince is when relay failover judged this server down (amendment
+	// A40); 0 while it is up.
+	DownSince int64 `json:"down_since,omitempty"`
 }
 
 // NodeList is GET /admin/v1/nodes.
@@ -67,6 +74,11 @@ type NodeAddRequest struct {
 	AlwaysOn  bool `json:"always_on,omitempty"`
 	Keepalive int  `json:"keepalive,omitempty"`
 	MTU       int  `json:"mtu,omitempty"`
+	// Mode is proto.ModeHost (the default) or proto.ModeContainer; a
+	// container-mode node always has a container subnet, a host-mode one
+	// when Containers is set (amendment A37).
+	Mode       string `json:"mode,omitempty"`
+	Containers bool   `json:"containers,omitempty"`
 }
 
 // NodeSetRequest is PATCH /admin/v1/nodes/{name}: only non-nil fields
@@ -79,6 +91,9 @@ type NodeSetRequest struct {
 	Exit       *string `json:"exit,omitempty"`
 	Keepalive  *int    `json:"keepalive,omitempty"`
 	MTU        *int    `json:"mtu,omitempty"`
+	// Containers gives a host-mode node a container subnet, or takes it
+	// away; a node's mode is chosen when it is added.
+	Containers *bool `json:"containers,omitempty"`
 }
 
 // Enrollment is a freshly issued join token and the commands that use it.
@@ -120,12 +135,38 @@ type PhoneProfile struct {
 	Warnings []string `json:"warnings,omitempty"`
 }
 
-// ComposeFile is GET /admin/v1/nodes/{name}/compose?backend=&data=: a
-// spoke's container compose file and the choices it was rendered with.
+// ComposeFile is GET /admin/v1/nodes/{name}/compose?backend=&data=&runtime=:
+// the compose file that runs a node's agent in a container -- a host-mode
+// spoke on the host network (the NAS), or a container-mode node -- and the
+// choices it was rendered with.
 type ComposeFile struct {
 	Backend string `json:"backend"`
 	DataDir string `json:"data_dir"`
+	// Runtime is docker, podman or swarm, for a container-mode node.
+	Runtime string `json:"runtime,omitempty"`
 	YAML    string `json:"yaml"`
+}
+
+// NetworkInfo is GET /admin/v1/nodes/{name}/network?runtime=: the
+// commands that create a node's mesh network on its host, and the compose
+// lines that attach a service to it (amendment A37).
+type NetworkInfo struct {
+	Runtime  string   `json:"runtime"`
+	Mode     string   `json:"mode"`
+	Subnet   string   `json:"subnet"`
+	Commands []string `json:"commands"`
+	Service  []string `json:"service"`
+}
+
+// ComposeOptions are the choices a compose file is rendered with; empty
+// means the default for the node's mode.
+type ComposeOptions struct {
+	Backend string
+	DataDir string
+	Runtime string
+	// NoNames leaves the runtime's socket out of a container-mode file
+	// (amendment A38): its containers get no names on the mesh.
+	NoNames bool
 }
 
 // NodeDetail is GET /admin/v1/nodes/{name}: the node, what the server

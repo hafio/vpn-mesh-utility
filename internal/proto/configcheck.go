@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
 
 	"github.com/hafio/vpn-mesh-utility/internal/validate"
 )
@@ -81,9 +82,12 @@ func (c *NodeConfig) Validate() error {
 	if c.Firewall != nil {
 		add(c.Firewall.validate())
 	}
+	if c.Containers != nil {
+		add(c.Containers.validate(c.Interface.Address))
+	}
 	for i, s := range c.Sysctl {
 		field := fmt.Sprintf("sysctl[%d]", i)
-		_, err := validate.Enum(field+".key", s.Key, SysctlIPForward, SysctlSrcValidMark)
+		_, err := validate.Enum(field+".key", s.Key, SysctlKeys()...)
 		add(err)
 		_, err = validate.Enum(field+".value", s.Value, "0", "1")
 		add(err)
@@ -167,13 +171,23 @@ func (d DNS) validate() error {
 			errs = append(errs, err)
 		}
 	}
+	if got, err := validate.Domains("dns.domains", d.Zone, d.Domains); err != nil {
+		errs = append(errs, err)
+	} else if !slices.Equal(got, d.Domains) {
+		errs = append(errs, fmt.Errorf("dns.domains: must be lower case and sorted (got %v)", d.Domains))
+	}
 	return errors.Join(errs...)
 }
 
 func (f Firewall) validate() error {
 	var errs []error
-	if _, err := validate.Enum("firewall.backend", f.Backend, "firewalld"); err != nil {
+	if _, err := validate.Enum("firewall.backend", f.Backend, FirewallFirewalld); err != nil {
 		errs = append(errs, err)
+	}
+	if f.Bridge != "" {
+		if _, err := validate.Enum("firewall.bridge", f.Bridge, ContainerBridge); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	for i, r := range f.Rules {
 		field := fmt.Sprintf("firewall.rules[%d]", i)
@@ -194,6 +208,63 @@ func (f Firewall) validate() error {
 		if _, err := validate.Text(field+".note", r.Note, 200); err != nil {
 			errs = append(errs, err)
 		}
+	}
+	return errors.Join(errs...)
+}
+
+// validate checks a container network against its own shape (amendment
+// A37): a /24 inside the on-link network, the runtime's range in its upper
+// half, the bridge and the gateway in the subnet but outside the range (so
+// the runtime never hands them out), the gateway the bridge in host mode
+// and the agent's own address in container mode, and the node's mesh IP
+// outside the subnet.
+func (k Containers) validate(address string) error {
+	var errs []error
+	bad := func(err error) {
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	_, err := validate.Enum("containers.mode", k.Mode, ModeHost, ModeContainer)
+	bad(err)
+	subnet, err := validate.Prefix4("containers.subnet", k.Subnet)
+	bad(err)
+	network, err := validate.Prefix4("containers.network", k.Network)
+	bad(err)
+	rng, err := validate.Prefix4("containers.range", k.Range)
+	bad(err)
+	bridge, err := validate.IPv4("containers.bridge", k.Bridge)
+	bad(err)
+	gateway, err := validate.IPv4("containers.gateway", k.Gateway)
+	bad(err)
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	if subnet.Bits() != 24 {
+		bad(fmt.Errorf("containers.subnet: must be a /24 (got %s)", subnet))
+	}
+	if network.Bits() > subnet.Bits() || !network.Contains(subnet.Addr()) {
+		bad(fmt.Errorf("containers.network: %s does not contain the subnet %s", network, subnet))
+	}
+	if rng.Bits() <= subnet.Bits() || !subnet.Contains(rng.Addr()) {
+		bad(fmt.Errorf("containers.range: %s is not a part of the subnet %s", rng, subnet))
+	}
+	for _, a := range []struct {
+		field string
+		ip    netip.Addr
+	}{{"containers.bridge", bridge}, {"containers.gateway", gateway}} {
+		if !subnet.Contains(a.ip) || rng.Contains(a.ip) {
+			bad(fmt.Errorf("%s: %s must be in %s and outside the range %s", a.field, a.ip, subnet, rng))
+		}
+	}
+	switch {
+	case k.Mode == ModeHost && gateway != bridge:
+		bad(fmt.Errorf("containers.gateway: in host mode the gateway is the bridge %s (got %s)", bridge, gateway))
+	case k.Mode == ModeContainer && gateway == bridge:
+		bad(fmt.Errorf("containers.gateway: in container mode the gateway is the agent, not the bridge %s", bridge))
+	}
+	if self, err := netip.ParsePrefix(address); err == nil && subnet.Contains(self.Addr()) {
+		bad(fmt.Errorf("containers.subnet: %s holds the node's own mesh IP %s", subnet, self.Addr()))
 	}
 	return errors.Join(errs...)
 }

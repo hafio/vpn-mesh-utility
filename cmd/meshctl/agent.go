@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"time"
 
 	"github.com/hafio/vpn-mesh-utility/internal/agent"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/localui"
@@ -13,6 +14,7 @@ import (
 	"github.com/hafio/vpn-mesh-utility/internal/agent/service"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/state"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/wg"
+	"github.com/hafio/vpn-mesh-utility/internal/validate"
 )
 
 func agentCommands() []command {
@@ -94,9 +96,21 @@ func setupAgentRun(fs *flag.FlagSet, e *env) action {
 	backend := fs.String("wg-backend", wg.BackendAuto, "WireGuard backend: auto (kernel when the module is there), kernel or userspace (wireguard-go on /dev/net/tun)")
 	level := fs.String("log-level", "info", "debug, info, warn or error")
 	ui := fs.String("ui-listen", "127.0.0.1:7443", "the local UI's loopback address, or off; meshctl ui prints a sign-in link")
+	runtime := fs.String("runtime-socket", agent.RuntimeAuto,
+		"the container runtime's API socket the containers' names are read from (GET only): auto (Docker's, then Podman's), off, or a path")
+	statusEvery := fs.Duration("status-every", 30*time.Second,
+		"how often the agent reports to the server; the server's --hub-down-after must be longer on a server")
 	return func(ctx context.Context, args []string) error {
 		if err := wantArgs(args, 0, ""); err != nil {
 			return err
+		}
+		if *statusEvery < time.Second || *statusEvery > 5*time.Minute {
+			return usagef("--status-every must be between 1s and 5m (got %s)", *statusEvery)
+		}
+		if *runtime != agent.RuntimeAuto && *runtime != agent.RuntimeOff {
+			if _, err := validate.POSIXPath("--runtime-socket", *runtime); err != nil {
+				return usagef("%v", err)
+			}
 		}
 		uiListen := ""
 		if *ui != "off" {
@@ -121,7 +135,8 @@ func setupAgentRun(fs *flag.FlagSet, e *env) action {
 		}
 		d := agent.Deps{
 			DataDir: *data, Socket: sock(), UIListen: uiListen, Version: e.version,
-			NoFirewall: *noFirewall, Backend: *backend, Log: log, Logs: ring, Now: e.now,
+			NoFirewall: *noFirewall, Backend: *backend, Log: log, Logs: ring, Now: e.now, RuntimeSocket: *runtime,
+			StatusEvery: *statusEvery,
 		}
 		if asService {
 			return service.RunWindowsService(func(ctx context.Context) error { return agent.Run(ctx, d) })

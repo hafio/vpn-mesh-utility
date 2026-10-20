@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/hafio/vpn-mesh-utility/deploy"
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
@@ -122,8 +123,9 @@ func (u *ui) nodesFragment(w http.ResponseWriter, r *http.Request, s auth.Sessio
 type nodeForm struct {
 	Name, Role, IP, Endpoint string
 	ListenPort, Hub          string
-	Keepalive, MTU           string
+	Keepalive, MTU, Mode     string
 	CanExit, AlwaysOn        bool
+	Containers               bool
 }
 
 type nodesData struct {
@@ -171,10 +173,12 @@ func (u *ui) addNode(w http.ResponseWriter, r *http.Request, s auth.Session) {
 	f := nodeForm{
 		Name: strings.TrimSpace(r.PostFormValue("name")), Role: r.PostFormValue("role"), IP: strings.TrimSpace(r.PostFormValue("ip")),
 		Endpoint: strings.TrimSpace(r.PostFormValue("endpoint")), ListenPort: r.PostFormValue("listen_port"), Hub: r.PostFormValue("hub"),
-		Keepalive: r.PostFormValue("keepalive"), MTU: r.PostFormValue("mtu"),
+		Keepalive: r.PostFormValue("keepalive"), MTU: r.PostFormValue("mtu"), Mode: r.PostFormValue("mode"),
 		CanExit: r.PostFormValue("can_exit") != "", AlwaysOn: r.PostFormValue("always_on") != "",
+		Containers: r.PostFormValue("containers") != "",
 	}
-	req := api.NodeAddRequest{Name: f.Name, Role: f.Role, IP: f.IP, Endpoint: f.Endpoint, Hub: f.Hub, CanExit: f.CanExit, AlwaysOn: f.AlwaysOn}
+	req := api.NodeAddRequest{Name: f.Name, Role: f.Role, IP: f.IP, Endpoint: f.Endpoint, Hub: f.Hub, CanExit: f.CanExit, AlwaysOn: f.AlwaysOn,
+		Mode: f.Mode, Containers: f.Containers}
 	var err error
 	if req.ListenPort, err = atoi("listen_port", f.ListenPort); err == nil {
 		if req.Keepalive, err = atoi("keepalive", f.Keepalive); err == nil {
@@ -234,12 +238,24 @@ type nodeData struct {
 	IsServer bool
 	IsSpoke  bool
 	IsPhone  bool
+	// InContainer is a container-mode node (amendment A37).
+	InContainer bool
+	// Networks are, for a host-mode node with a container network, the
+	// commands that create it per runtime; Service attaches a service, and
+	// SwarmService a Swarm service, which resolves through the servers.
+	Networks     []networkBlock
+	Service      string
+	SwarmService string
 	// NASData is the compose form's default host directory.
 	NASData string
 	// DNS explains the node's split DNS as it last reported it.
 	DNS string
 	// Profile says, for a phone, whether the profile it holds is current.
 	Profile string
+}
+
+type networkBlock struct {
+	Runtime, Text string
 }
 
 type peerRow struct {
@@ -257,11 +273,29 @@ func (u *ui) nodeView(r *http.Request, name string) (nodeData, error) {
 	}
 	now := u.Now()
 	out := nodeData{Node: d.Node, Seen: ago(d.Node.Seen(), now), Warnings: d.Warnings, IsServer: d.Node.Role == string(proto.RoleServer),
-		IsSpoke: d.Node.Role == string(proto.RoleSpoke), IsPhone: d.Node.Role == string(proto.RolePhone), NASData: deploy.DefaultNASData}
+		IsSpoke: d.Node.Role == string(proto.RoleSpoke), IsPhone: d.Node.Role == string(proto.RolePhone), NASData: deploy.DefaultNASData,
+		InContainer: d.Node.Mode == proto.ModeContainer}
 	out.Class, out.State = api.Health(d.Node, now)
 	out.DNS = dnsState(d.Node.DNS)
 	if out.IsPhone {
 		out.Profile = phoneState(d.Node)
+	}
+	if d.Node.ContainerSubnet != "" && !out.InContainer {
+		for _, rt := range []string{deploy.RuntimeDocker, deploy.RuntimePodman, deploy.RuntimeSwarm} {
+			n, err := u.Nodes.Network(r.Context(), name, rt)
+			if err != nil {
+				return nodeData{}, err
+			}
+			out.Networks = append(out.Networks, networkBlock{Runtime: rt, Text: strings.Join(n.Commands, "\n")})
+			// A Swarm service's tasks resolve through the servers, any other
+			// service through this node.
+			switch svc := strings.Join(n.Service, "\n"); {
+			case rt == deploy.RuntimeDocker:
+				out.Service = svc
+			case rt == deploy.RuntimeSwarm && svc != out.Service:
+				out.SwarmService = svc
+			}
+		}
 	}
 	if d.Config != nil {
 		b, err := json.MarshalIndent(d.Config, "", "  ")
@@ -349,6 +383,11 @@ func (u *ui) editNode(w http.ResponseWriter, r *http.Request, s auth.Session) {
 			ka, err = atoi("keepalive", r.PostFormValue("keepalive"))
 			req.Keepalive = &ka
 		}
+	}
+	// A container-mode node's containers are always on the mesh.
+	if cur.Node.Role != string(proto.RolePhone) && cur.Node.Mode != proto.ModeContainer {
+		containers := r.PostFormValue("containers") != ""
+		req.Containers = &containers
 	}
 	var ch api.NodeChange
 	if err == nil {
@@ -597,7 +636,9 @@ type settingsData struct {
 	DefaultHub  string
 	UpstreamDNS string
 	DNSZone     string
-	Servers     []string
+	// ExtraDomains are the extra DNS domains, as the form shows them.
+	ExtraDomains string
+	Servers      []string
 }
 
 func (u *ui) settingsView(r *http.Request) (settingsData, error) {
@@ -613,6 +654,7 @@ func (u *ui) settingsView(r *http.Request) (settingsData, error) {
 		}
 		d.MeshCIDR, d.DefaultMTU, d.UpstreamDNS = all[store.SettingMeshCIDR], all[store.SettingDefaultMTU], all[store.SettingUpstreamDNS]
 		d.DNSZone = planner.Input{Zone: all[store.SettingDNSZone]}.ZoneName()
+		d.ExtraDomains = strings.Join(store.SplitDomains(all[store.SettingDNSExtraDomains]), ", ")
 		d.CIDRLocked = len(nodes) > 0
 		for _, n := range nodes {
 			if n.Role == string(proto.RoleServer) {
@@ -663,10 +705,20 @@ func (u *ui) saveSettings(w http.ResponseWriter, r *http.Request, s auth.Session
 		err = &validate.Error{Field: "upstream_dns", Reason: "give one to four IPv4 addresses, comma separated"}
 	}
 	hub, cidr := r.PostFormValue("default_hub"), strings.TrimSpace(r.PostFormValue("mesh_cidr"))
-	// The zone stays as it is when the form leaves it out.
+	// The zone stays as it is when the form leaves it out, and so do the
+	// extra domains; an empty field clears them. How they sit with the zone
+	// the reconciler checks, which knows the zone in effect.
 	zone := strings.TrimSpace(r.PostFormValue("dns_zone"))
 	if zone != "" && err == nil {
 		_, err = validate.Zone("dns_zone", zone)
+	}
+	_, setDomains := r.PostForm["dns_extra_domains"]
+	var domains []string
+	if setDomains && err == nil {
+		fields := strings.FieldsFunc(r.PostFormValue("dns_extra_domains"), func(c rune) bool { return c == ',' || unicode.IsSpace(c) })
+		if domains, err = validate.Domains("dns_extra_domains", "", fields); err == nil {
+			err = api.CheckServerDomains(u.ServerURL, domains)
+		}
 	}
 	if err != nil {
 		status, msg := message(err)
@@ -678,6 +730,9 @@ func (u *ui) saveSettings(w http.ResponseWriter, r *http.Request, s auth.Session
 			values := map[string]string{store.SettingDefaultMTU: strconv.Itoa(mtu), store.SettingUpstreamDNS: strings.Join(upstream, ",")}
 			if zone != "" {
 				values[store.SettingDNSZone] = zone
+			}
+			if setDomains {
+				values[store.SettingDNSExtraDomains] = strings.Join(domains, ",")
 			}
 			values[store.SettingDefaultHub] = ""
 			if hub != "" {
@@ -828,12 +883,13 @@ func (u *ui) changePassword(w http.ResponseWriter, r *http.Request, s auth.Sessi
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
-// exportYAML downloads the desired state, as `meshctl export` writes it.
-// composeYAML downloads a spoke's container compose file; a refusal (a
-// server, a bad directory) comes back on the node page.
+// composeYAML downloads the compose file that runs a node's agent in a
+// container; a refusal (a host-mode server, a bad directory) comes back on
+// the node page.
 func (u *ui) composeYAML(w http.ResponseWriter, r *http.Request, s auth.Session) {
 	q := r.URL.Query()
-	f, err := u.Nodes.Compose(r.Context(), r.PathValue("name"), q.Get("backend"), q.Get("data"))
+	f, err := u.Nodes.Compose(r.Context(), r.PathValue("name"),
+		api.ComposeOptions{Backend: q.Get("backend"), DataDir: q.Get("data"), Runtime: q.Get("runtime"), NoNames: q.Get("names") == "off"})
 	if err != nil {
 		status, msg := message(err)
 		u.renderNode(w, r, s, status, page{Error: msg})
@@ -844,6 +900,7 @@ func (u *ui) composeYAML(w http.ResponseWriter, r *http.Request, s auth.Session)
 	_, _ = w.Write([]byte(f.YAML)) // the browser went away; nothing to do
 }
 
+// exportYAML downloads the desired state, as `meshctl export` writes it.
 func (u *ui) exportYAML(w http.ResponseWriter, r *http.Request, s auth.Session) {
 	var snap store.Snapshot
 	if err := u.DB.Tx(r.Context(), func(tx *store.Tx) error {

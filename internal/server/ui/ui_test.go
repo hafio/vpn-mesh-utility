@@ -408,7 +408,7 @@ func TestSpokeComposeDownload(t *testing.T) {
 		!strings.Contains(w.Body.String(), "/srv/meshctl:/data") || !strings.Contains(w.Body.String(), "--wg-backend") {
 		t.Fatalf("download = %d %v\n%s", w.Code, w.Header(), w.Body)
 	}
-	if w := r.do(http.MethodGet, "/nodes/vps-1/compose", cookie, nil); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "only spokes") {
+	if w := r.do(http.MethodGet, "/nodes/vps-1/compose", cookie, nil); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "a server in host mode") {
 		t.Fatalf("a server's compose file = %d\n%s", w.Code, w.Body)
 	}
 	if w := r.do(http.MethodGet, "/nodes/nas/compose?data=/srv/x%0Aprivileged:%20true", cookie, nil); w.Code != http.StatusBadRequest ||
@@ -417,6 +417,87 @@ func TestSpokeComposeDownload(t *testing.T) {
 	}
 	if w := r.do(http.MethodGet, "/nodes/nas/compose", "", nil); w.Code == http.StatusOK {
 		t.Fatal("the compose file downloaded without a session")
+	}
+}
+
+// A container-mode node from the add form (amendment A37): its page names
+// the mode and the subnet, offers the compose file per runtime and leaves
+// out what container mode cannot do (an exit); a host-mode node's edit
+// form puts its containers on the mesh and takes them off.
+func TestContainerModePages(t *testing.T) {
+	r := newRig(t)
+	r.seedServers()
+	cookie, csrf := r.signIn()
+	form := url.Values{"name": {"box"}, "role": {"spoke"}, "mode": {"container"}, "csrf": {csrf}}
+	if w := r.do(http.MethodPost, "/nodes", cookie, form); w.Code != http.StatusOK {
+		t.Fatalf("add a container-mode spoke = %d\n%s", w.Code, w.Body)
+	}
+	body := r.do(http.MethodGet, "/nodes/box", cookie, nil).Body.String()
+	for _, want := range []string{"container: only its containers are on the mesh", testfix.ContainerSubnet, `name="runtime"`,
+		`<option value="swarm">`, `action="/nodes/box/compose"`, `name="names" value="off"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the container-mode page lacks %q", want)
+		}
+	}
+	if strings.Contains(body, `name="exit"`) || strings.Contains(body, `name="containers"`) {
+		t.Errorf("the container-mode page offers an exit or a containers switch:\n%s", body)
+	}
+	w := r.do(http.MethodGet, "/nodes/box/compose?runtime=podman&backend=auto&data=", cookie, nil)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "podman network create --internal --disable-dns") ||
+		!strings.Contains(w.Body.String(), "/run/podman/podman.sock:/var/run/docker.sock:ro") {
+		t.Fatalf("podman download = %d\n%s", w.Code, w.Body)
+	}
+	if w := r.do(http.MethodGet, "/nodes/box/compose?names=off", cookie, nil); w.Code != http.StatusOK ||
+		strings.Contains(w.Body.String(), ".sock") || !strings.Contains(w.Body.String(), "--runtime-socket") {
+		t.Fatalf("a download without names = %d\n%s", w.Code, w.Body)
+	}
+	if w := r.do(http.MethodGet, "/nodes/box/compose?runtime=lxc", cookie, nil); w.Code != http.StatusBadRequest {
+		t.Fatalf("an unknown runtime = %d", w.Code)
+	}
+	// The DNS page lists what box's runtime reported (amendment A38): how a
+	// published name resolves, and why one is not.
+	if body := r.do(http.MethodGet, "/dns", cookie, nil).Body.String(); !strings.Contains(body, "No container has reported a name yet") {
+		t.Fatalf("the DNS page without names:\n%s", body)
+	}
+	if err := r.st.Tx(context.Background(), func(tx *store.Tx) error {
+		box, err := tx.NodeByName("box")
+		if err != nil {
+			return err
+		}
+		_, err = tx.SetContainerNames(box.ID, []store.ContainerName{{Name: "web", IP: "10.77.128.129", Kind: proto.NameService},
+			{Name: "vps-1", IP: "10.77.128.129", Kind: proto.NameAlias}})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	body = r.do(http.MethodGet, "/dns", cookie, nil).Body.String()
+	for _, want := range []string{"<code>web.mesh</code>, <code>web.box.mesh</code>", "not published: node vps-1 has this name"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the DNS page lacks %q:\n%s", want, body)
+		}
+	}
+
+	form = url.Values{"name": {"pc"}, "role": {"spoke"}, "containers": {"on"}, "csrf": {csrf}}
+	if w := r.do(http.MethodPost, "/nodes", cookie, form); w.Code != http.StatusOK {
+		t.Fatalf("add a host-mode spoke with containers = %d\n%s", w.Code, w.Body)
+	}
+	if body := r.do(http.MethodGet, "/nodes/pc", cookie, nil).Body.String(); !strings.Contains(body, "10.77.129.0/24") ||
+		!strings.Contains(body, `name="containers" checked`) {
+		t.Fatalf("the host-mode page must show its containers:\n%s", body)
+	}
+	// A host-mode node with containers shows its mesh network's commands.
+	if body := r.do(http.MethodGet, "/nodes/pc", cookie, nil).Body.String(); !strings.Contains(body, "Containers on the mesh") ||
+		!strings.Contains(body, "mode=unmanaged") || !strings.Contains(body, "inhibit_ipv4=true") || !strings.Contains(body, "dns: [10.77.129.1]") ||
+		!strings.Contains(body, "A Swarm service") || !strings.Contains(body, "dns: [10.77.0.1, 10.77.0.2]") {
+		t.Fatalf("the host-mode page must show its network's commands:\n%s", body)
+	}
+	edit := url.Values{"mtu": {"1420"}, "keepalive": {"25"}, "csrf": {csrf}} // containers unticked
+	if w := r.do(http.MethodPost, "/nodes/pc", cookie, edit); w.Code != http.StatusOK || strings.Contains(w.Body.String(), "10.77.129.0/24") {
+		t.Fatalf("untick containers = %d\n%s", w.Code, w.Body)
+	}
+	form = url.Values{"name": {"ph"}, "role": {"phone"}, "mode": {"container"}, "csrf": {csrf}}
+	if w := r.do(http.MethodPost, "/nodes", cookie, form); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "no agent") {
+		t.Fatalf("a container-mode phone = %d\n%s", w.Code, w.Body)
 	}
 }
 
@@ -433,7 +514,7 @@ func TestDNSAndFirewallPages(t *testing.T) {
 		return r.do(http.MethodPost, path, cookie, form)
 	}
 	body := r.do(http.MethodGet, "/dns", cookie, nil).Body.String()
-	for _, want := range []string{"<td>vps-1.mesh</td><td>10.77.0.1</td>", "automatic", "1.1.1.1, 9.9.9.9", "Containers on a host"} {
+	for _, want := range []string{"<td>vps-1.mesh</td><td>10.77.0.1</td>", "automatic", "1.1.1.1, 9.9.9.9", "any other container uses its own resolver"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("the DNS page lacks %q:\n%s", want, body)
 		}
@@ -647,6 +728,8 @@ func TestSettings(t *testing.T) {
 		"cidr too large":    form("mesh_cidr", "10.0.0.0/8"),
 		"no upstream":       form("upstream_dns", " , "),
 		"zone":              form("dns_zone", "office.local"),
+		"extra domain":      form("dns_extra_domains", "lan, 10.in-addr.arpa"),
+		"server's domain":   form("dns_extra_domains", "example.com"),
 	} {
 		if w := r.do(http.MethodPost, "/settings", cookie, f); w.Code != http.StatusBadRequest {
 			t.Errorf("%s = %d\n%s", name, w.Code, w.Body)
@@ -678,6 +761,29 @@ func TestSettings(t *testing.T) {
 	}
 	if body := r.do(http.MethodGet, "/dns", cookie, nil).Body.String(); !strings.Contains(body, "vps-1.home.arpa") {
 		t.Fatalf("the DNS page after the zone change:\n%s", body)
+	}
+	// Extra domains (amendment A39): saved sorted, shown on both pages; one
+	// around the zone is the plan's to refuse; an empty field clears them,
+	// and a form without the field keeps them.
+	if w := r.do(http.MethodPost, "/settings", cookie, form("dns_extra_domains", "home.arpa.lab, Example.Lan")); w.Code != http.StatusOK ||
+		!strings.Contains(w.Body.String(), `value="example.lan, home.arpa.lab"`) {
+		t.Fatalf("extra domains = %d\n%s", w.Code, w.Body)
+	}
+	if body := r.do(http.MethodGet, "/dns", cookie, nil).Body.String(); !strings.Contains(body, "<code>example.lan</code>, <code>home.arpa.lab</code>") {
+		t.Fatalf("the DNS page lacks the extra domains:\n%s", body)
+	}
+	if w := r.do(http.MethodPost, "/settings", cookie, form("dns_extra_domains", "arpa.home")); w.Code != http.StatusOK {
+		t.Fatalf("another set of domains = %d\n%s", w.Code, w.Body)
+	}
+	if w := r.do(http.MethodPost, "/settings", cookie, form("dns_zone", "home.arpa", "dns_extra_domains", "lab.home.arpa")); w.Code != http.StatusConflict {
+		t.Fatalf("a domain inside the zone = %d\n%s", w.Code, w.Body)
+	}
+	if w := r.do(http.MethodPost, "/settings", cookie, form()); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `value="arpa.home"`) {
+		t.Fatalf("a form without the field = %d\n%s", w.Code, w.Body)
+	}
+	if w := r.do(http.MethodPost, "/settings", cookie, form("dns_extra_domains", "")); w.Code != http.StatusOK ||
+		!strings.Contains(w.Body.String(), `name="dns_extra_domains" value=""`) {
+		t.Fatalf("clearing them = %d\n%s", w.Code, w.Body)
 	}
 }
 

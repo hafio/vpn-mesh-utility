@@ -29,6 +29,9 @@ type MeshView struct {
 	Version    int64      `json:"version"`
 	ServerTime int64      `json:"server_time"`
 	Nodes      []MeshNode `json:"nodes"`
+	// Names are the containers' published names (amendment A38), sorted
+	// by name, node and address.
+	Names []MeshName `json:"names,omitempty"`
 }
 
 // MeshNode is one node of the mesh view.
@@ -94,5 +97,6 @@ func (v *MeshView) Validate() error {
 			errs = append(errs, errors.New(field+": times and versions must not be negative"))
 		}
 	}
+	errs = append(errs, validateMeshNames(v.Names)...)
 	return errors.Join(errs...)
 }

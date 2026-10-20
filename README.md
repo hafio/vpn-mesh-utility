@@ -19,8 +19,16 @@ DNS records and firewall rules in the web UI, the agent's drift check, and phone
 for the WireGuard app as a QR code (mesh only or via an exit), each node's cached view of the
 mesh and `meshctl logs`, and each node's local UI (`meshctl ui`). Windows (M5) is written: the
 agent installs as a Windows service with its local API on a named pipe, runs WireGuard on the
-bundled wintun driver, and has split DNS (NRPT) and exit mode; the live test on a real laptop
-and the v1.0.0 release are next.
+bundled wintun driver, and has split DNS (NRPT) and exit mode. Container mode (M6, in progress)
+puts only a host's containers on the mesh: each node gets a container /24, the agent runs from a
+compose file for Docker, Podman or Swarm as its containers' gateway (`meshctl node add --mode
+container`, `meshctl node compose`), and a host-mode node can put its containers on the mesh too
+(`--containers`, `meshctl node network`). Every node resolves those containers by their compose
+service, container name, aliases or hostname (`web.mesh` round robin across nodes, `web.nas.mesh`
+one node's), which the agent reads from the runtime's socket (`node compose --no-names` leaves it
+out), and extra DNS domains of your own (Settings) resolve the containers' `hostname.domainname`
+across the mesh. When a hub goes down, the server moves the pairs it relays to another hub and
+back once it returns (relay failover); the live tests and the v1.0.0 release are next.
 
 ## Quick start
 

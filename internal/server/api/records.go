@@ -32,8 +32,12 @@ type DNSView struct {
 	// Records are one per node, then the custom ones, each by name.
 	Records  []DNSEntry `json:"records"`
 	Upstream []string   `json:"upstream"`
+	// Domains are the extra domains (amendment A39).
+	Domains []string `json:"domains"`
 	// Nodes are the names a custom record may follow.
 	Nodes []string `json:"nodes"`
+	// Names are the containers' reported names (amendment A38).
+	Names []NameEntry `json:"names"`
 }
 
 // DNSEntry is one name of the zone.
@@ -97,13 +101,14 @@ const maxNote = 120
 
 // DNS returns the mesh zone.
 func (s *Nodes) DNS(ctx context.Context) (DNSView, error) {
-	v := DNSView{Records: []DNSEntry{}, Upstream: []string{}, Nodes: []string{}}
+	v := DNSView{Records: []DNSEntry{}, Upstream: []string{}, Domains: []string{}, Nodes: []string{}}
 	err := s.db.Tx(ctx, func(tx *store.Tx) error {
 		in, nodes, err := LoadInput(tx)
 		if err != nil {
 			return err
 		}
 		v.Zone = in.ZoneName()
+		v.Domains = append(v.Domains, in.Domains...)
 		live := func(n store.Node) bool { return n.Enrolled && !n.Disabled && n.WGPubKey != "" }
 		byID := map[int64]store.Node{}
 		for _, n := range nodes {
@@ -129,7 +134,9 @@ func (s *Nodes) DNS(ctx context.Context) (DNSView, error) {
 		for _, u := range in.Upstream {
 			v.Upstream = append(v.Upstream, u.String())
 		}
-		return nil
+		names, err := LoadNames(tx, s.serverURL)
+		v.Names = names.Entries
+		return err
 	})
 	return v, err
 }

@@ -6,12 +6,13 @@ import (
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
 )
 
-// Hub fans config events out to the agents' SSE streams. Each node has at
-// most one stream: a new subscription ends the previous one, so an agent
-// that reconnected through a proxy which kept the old connection open does
-// not leak streams. Events are latest-wins: a stream that has not consumed
-// its pending event gets the newer one instead, because only the newest
-// version matters to the agent.
+// Hub fans config events, and nudges that the mesh view changed, out to the
+// agents' SSE streams. Each node has at most one stream: a new subscription
+// ends the previous one, so an agent that reconnected through a proxy which
+// kept the old connection open does not leak streams. Events are
+// latest-wins: a stream that has not consumed its pending event gets the
+// newer one instead, because only the newest version matters to the agent;
+// pending nudges collapse into one.
 type Hub struct {
 	mu     sync.Mutex
 	subs   map[int64]*subscription
@@ -20,6 +21,7 @@ type Hub struct {
 
 type subscription struct {
 	events chan proto.ConfigEvent
+	mesh   chan struct{}
 	done   chan struct{}
 	once   sync.Once
 }
@@ -30,10 +32,11 @@ func (s *subscription) end() { s.once.Do(func() { close(s.done) }) }
 func NewHub() *Hub { return &Hub{subs: map[int64]*subscription{}} }
 
 // Subscribe registers node's stream, ending any previous one. events delivers
-// config events; done closes when the stream must end (replaced, kicked or
-// shutdown). cancel unregisters and must always be called.
-func (h *Hub) Subscribe(node int64) (events <-chan proto.ConfigEvent, done <-chan struct{}, cancel func()) {
-	s := &subscription{events: make(chan proto.ConfigEvent, 1), done: make(chan struct{})}
+// config events, mesh a nudge when the mesh view changed; done closes when
+// the stream must end (replaced, kicked or shutdown). cancel unregisters and
+// must always be called.
+func (h *Hub) Subscribe(node int64) (events <-chan proto.ConfigEvent, mesh, done <-chan struct{}, cancel func()) {
+	s := &subscription{events: make(chan proto.ConfigEvent, 1), mesh: make(chan struct{}, 1), done: make(chan struct{})}
 	h.mu.Lock()
 	if h.closed {
 		s.end()
@@ -44,7 +47,7 @@ func (h *Hub) Subscribe(node int64) (events <-chan proto.ConfigEvent, done <-cha
 		h.subs[node] = s
 	}
 	h.mu.Unlock()
-	return s.events, s.done, func() {
+	return s.events, s.mesh, s.done, func() {
 		h.mu.Lock()
 		if h.subs[node] == s {
 			delete(h.subs, node)
@@ -70,6 +73,18 @@ func (h *Hub) Notify(events map[int64]proto.ConfigEvent) {
 		default:
 		}
 		s.events <- ev
+	}
+}
+
+// NotifyMesh nudges every stream: the mesh view changed (amendment A38).
+func (h *Hub) NotifyMesh() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, s := range h.subs {
+		select {
+		case s.mesh <- struct{}{}:
+		default: // a nudge is already pending
+		}
 	}
 }
 

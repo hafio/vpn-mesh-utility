@@ -2,6 +2,7 @@ package planner
 
 import (
 	"fmt"
+	"net/netip"
 	"sort"
 	"strings"
 
@@ -90,7 +91,21 @@ func Check(in Input) []Problem {
 		if n.CanExit && n.Role != proto.RoleServer {
 			errf(n.Name, "only servers can be an exit")
 		}
+		switch n.Mode {
+		case "", proto.ModeHost, proto.ModeContainer:
+		default:
+			errf(n.Name, "unknown mode %q (want host or container)", n.Mode)
+		}
+		switch {
+		case n.Role == proto.RolePhone && (n.inContainer() || n.Containers.IsValid()):
+			errf(n.Name, "a phone has no agent, so it has no container network")
+		case n.inContainer() && !n.Containers.IsValid():
+			errf(n.Name, "is in container mode but has no container subnet")
+		case n.inContainer() && n.CanExit:
+			errf(n.Name, "a container-mode server cannot be an exit: its host is not on the mesh; revoke can-exit, or run it in host mode")
+		}
 	}
+	checkContainers(in, errf)
 
 	isServer := func(id int64) bool {
 		s, ok := byID[id]
@@ -104,6 +119,9 @@ func Check(in Input) []Problem {
 		what := fmt.Sprintf("firewall rule %s/%d from %s", r.Proto, r.Port, r.Source)
 		if r.Node != 0 && !isServer(r.Node) {
 			errf("", "%s is for node id %d, which is not a server; only servers have a firewall meshctl manages", what, r.Node)
+		}
+		if t, ok := byID[r.Node]; ok && t.inContainer() {
+			errf("", "%s is for %q, a container-mode server: its host is not on the mesh, and its containers are reached directly", what, t.Name)
 		}
 		if r.Proto != "tcp" && r.Proto != "udp" {
 			errf("", "%s: protocol must be tcp or udp", what)
@@ -131,6 +149,8 @@ func Check(in Input) []Problem {
 				errf(n.Name, "servers do not use an exit")
 			case n.Role == proto.RolePhone:
 				errf(n.Name, "phones choose their exit with the via-exit QR profile, not an exit setting")
+			case n.inContainer():
+				errf(n.Name, "a container-mode node cannot use an exit: only its containers are on the mesh; clear the exit")
 			case !ok || exit.Role != proto.RoleServer:
 				errf(n.Name, "exit (node id %d) is not a server", n.ExitVia)
 			case !exit.CanExit:
@@ -147,6 +167,9 @@ func Check(in Input) []Problem {
 			if !n.Endpoint.IsValid() {
 				warnf(n.Name, "has no public endpoint, so no other node peers with it yet; set it with `meshctl node set %s --endpoint IP:PORT`", n.Name)
 			}
+			if n.Down {
+				warnf(n.Name, "is down (no heartbeat and no handshake): the pairs it relays go through other hubs until it is back")
+			}
 		default:
 			hub, ok := p.hub(n)
 			switch {
@@ -160,11 +183,14 @@ func Check(in Input) []Problem {
 	return out
 }
 
-// checkDNS checks the zone, the custom records and the upstream
-// resolvers. Node names are records already, so a custom record may not
-// take one; record names are given without the zone.
+// checkDNS checks the zone, the extra domains, the custom records and the
+// upstream resolvers. Node names are records already, so a custom record
+// may not take one; record names are given without the zone.
 func checkDNS(in Input, nodeNames map[string]bool, byID map[int64]Node, errf func(node, format string, args ...any)) {
 	zone := in.ZoneName()
+	if _, err := validate.Domains("extra DNS domains", zone, in.Domains); err != nil {
+		errf("", "%v", err)
+	}
 	if _, err := validate.Zone("dns zone", zone); err != nil {
 		errf("", "%v", err)
 	}
@@ -203,6 +229,40 @@ func checkDNS(in Input, nodeNames map[string]bool, byID map[int64]Node, errf fun
 			errf("", "upstream DNS %s is not an IPv4 address", u)
 		case in.MeshCIDR.IsValid() && in.MeshCIDR.Contains(u):
 			errf("", "upstream DNS %s is inside the mesh %s; a mesh resolver forwarding to another would loop", u, in.MeshCIDR)
+		}
+	}
+}
+
+// checkContainers checks the container subnets: each an IPv4 /24 of the
+// mesh, no two the same, none holding a node's mesh IP (amendment A37).
+func checkContainers(in Input, errf func(node, format string, args ...any)) {
+	nodes := sortedByID(in.Nodes)
+	owner := map[netip.Prefix]string{}
+	var subnets []netip.Prefix
+	for _, n := range nodes {
+		k := n.Containers
+		if !k.IsValid() {
+			continue
+		}
+		switch {
+		case !k.Addr().Is4() || k.Bits() != 24 || k.Masked() != k:
+			errf(n.Name, "container subnet %s must be an IPv4 /24", k)
+			continue
+		case in.MeshCIDR.IsValid() && (in.MeshCIDR.Bits() > 24 || !in.MeshCIDR.Contains(k.Addr())):
+			errf(n.Name, "container subnet %s is outside the mesh %s", k, in.MeshCIDR)
+		}
+		if other, dup := owner[k]; dup {
+			errf(n.Name, "container subnet %s is also %q's", k, other)
+			continue
+		}
+		owner[k] = n.Name
+		subnets = append(subnets, k)
+	}
+	for _, n := range nodes {
+		for _, k := range subnets {
+			if n.MeshIP.IsValid() && k.Contains(n.MeshIP) {
+				errf(n.Name, "mesh IP %s is inside %q's container subnet %s", n.MeshIP, owner[k], k)
+			}
 		}
 	}
 }

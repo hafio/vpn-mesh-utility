@@ -85,12 +85,48 @@ func TestNodeLifecycle(t *testing.T) {
 		strings.Contains(cf.YAML, "/dev/") {
 		t.Fatalf("compose --json: %d\n%s", code, out)
 	}
-	if code, _, errOut = runArgs("node", "compose", "vps-1", "--data", data); code != exitFailure || !strings.Contains(errOut, "only spokes") {
+	if code, _, errOut = runArgs("node", "compose", "vps-1", "--data", data); code != exitFailure || !strings.Contains(errOut, "a server in host mode") {
 		t.Fatalf("compose for a server: %d %s", code, errOut)
 	}
 	if code, _, errOut = runArgs("node", "compose", "laptop", "--host-dir", "/srv/$HOME", "--data", data); code != exitFailure ||
 		!strings.Contains(errOut, "absolute path") {
 		t.Fatalf("compose with a hostile directory: %d %s", code, errOut)
+	}
+	// Container mode (amendment A37).
+	code, out, _ = runArgs("node", "add", "box", "--role", "spoke", "--mode", "container", "--data", data)
+	if code != exitOK || !strings.Contains(out, "its containers: 10.77.128.0/24") || !strings.Contains(out, "meshctl node compose box") {
+		t.Fatalf("add --mode container: %d\n%s", code, out)
+	}
+	if code, out, _ = runArgs("node", "compose", "box", "--runtime", "swarm", "--data", data); code != exitOK || !strings.Contains(out, "--scope swarm") ||
+		!strings.Contains(out, "/var/run/docker.sock:/var/run/docker.sock:ro") {
+		t.Fatalf("compose --runtime swarm: %d\n%s", code, out)
+	}
+	if code, out, _ = runArgs("node", "compose", "box", "--no-names", "--data", data); code != exitOK || strings.Contains(out, ".sock") ||
+		!strings.Contains(out, "--runtime-socket") {
+		t.Fatalf("compose --no-names: %d\n%s", code, out)
+	}
+	if code, out, _ = runArgs("node", "show", "box", "--data", data); code != exitOK || !strings.Contains(out, "container: only its containers") ||
+		!strings.Contains(out, "10.77.128.0/24") {
+		t.Fatalf("show a container-mode node: %d\n%s", code, out)
+	}
+	if code, out, _ = runArgs("node", "set", "laptop", "--containers", "--data", data, "--json"); code != exitOK || !strings.Contains(out, `"container_subnet": "10.77.129.0/24"`) {
+		t.Fatalf("set --containers: %d\n%s", code, out)
+	}
+	if code, out, _ = runArgs("node", "network", "laptop", "--runtime", "podman", "--data", data); code != exitOK ||
+		!strings.Contains(out, "mode=unmanaged") || !strings.Contains(out, "then attach a service") {
+		t.Fatalf("node network: %d\n%s", code, out)
+	}
+	if code, out, _ = runArgs("node", "network", "box", "--data", data, "--json"); code != exitOK || !strings.Contains(out, `"mode": "container"`) {
+		t.Fatalf("node network --json: %d\n%s", code, out)
+	}
+	if code, _, errOut = runArgs("node", "network", "vps-1", "--data", data); code != exitFailure || !strings.Contains(errOut, "no container network") {
+		t.Fatalf("node network without containers: %d %s", code, errOut)
+	}
+	if code, _, errOut = runArgs("node", "set", "box", "--containers=false", "--data", data); code != exitFailure || !strings.Contains(errOut, "always on the mesh") {
+		t.Fatalf("set --containers=false in container mode: %d %s", code, errOut)
+	}
+	if code, _, errOut = runArgs("node", "add", "odd", "--role", "spoke", "--mode", "bridge", "--data", data); code != exitFailure || !strings.Contains(errOut, "mode") {
+		t.Fatalf("add --mode bridge: %d %s", code, errOut)
 	}
 	if code, out, _ = runArgs("node", "set", "laptop", "--mtu", "1380", "--hub", "vps-1", "--data", data); code != exitOK || !strings.Contains(out, "updated laptop") {
 		t.Fatalf("set: %d\n%s", code, out)
@@ -213,6 +249,12 @@ func TestServerFlagErrors(t *testing.T) {
 	}
 	if code, _, errOut := runArgs("server", "--data", data, "--url", "https://mesh.example.com", "--log-level", "loud"); code != exitUsage {
 		t.Fatalf("bad log level: %d %s", code, errOut)
+	}
+	for _, bad := range []string{"500ms", "2h", "-1m", "soon"} {
+		if code, _, errOut := runArgs("server", "--data", data, "--url", "https://mesh.example.com", "--hub-down-after", bad); code != exitUsage ||
+			!strings.Contains(errOut, "hub-down-after") {
+			t.Errorf("--hub-down-after %s: %d %s", bad, code, errOut)
+		}
 	}
 }
 

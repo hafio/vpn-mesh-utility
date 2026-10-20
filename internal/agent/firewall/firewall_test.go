@@ -46,7 +46,8 @@ var queries = []string{"--state", "--version", "--get-zones", "--list-interfaces
 func (f *fakeRunner) mutations() [][]string {
 	var out [][]string
 	for _, c := range f.calls {
-		q := strings.HasPrefix(c[len(c)-1], "--info-policy=") || strings.HasPrefix(c[len(c)-1], "--query-")
+		q := strings.HasPrefix(c[len(c)-1], "--info-policy=") || strings.HasPrefix(c[len(c)-1], "--query-") ||
+			strings.HasPrefix(c[len(c)-1], "--get-zone-of-interface=")
 		for _, s := range queries {
 			q = q || c[len(c)-1] == s
 		}
@@ -218,6 +219,51 @@ func TestHostileRulesNeverReachFirewallCmd(t *testing.T) {
 				t.Fatalf("firewall-cmd ran %d times: %q", len(r.calls), r.calls)
 			}
 		})
+	}
+}
+
+// A host-mode server's containers' bridge (amendment A37) goes into the
+// mesh zone when no zone holds it -- a podman bridge the agent made -- and
+// is left where Docker (its docker zone) or an operator put it.
+func TestContainersBridgeZone(t *testing.T) {
+	ctx := context.Background()
+	query := "firewall-cmd --get-zone-of-interface=" + proto.ContainerBridge
+	add := []string{program, "--zone=" + proto.ZoneMesh, "--add-interface=" + proto.ContainerBridge}
+	addPermanent := []string{program, "--permanent", "--zone=" + proto.ZoneMesh, "--add-interface=" + proto.ContainerBridge}
+	fw := testfix.ServerConfig().Firewall
+	fw.Bridge, fw.Relay = proto.ContainerBridge, true
+
+	r := freshHost()
+	r.answers[query] = "no zone\n"
+	r.errs = map[string]error{query: errors.New("exit status 2")}
+	if _, err := newFirewall(t, r).Apply(ctx, fw); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(r.calls, func(c []string) bool { return slices.Equal(c, add) }) ||
+		!slices.ContainsFunc(r.calls, func(c []string) bool { return slices.Equal(c, addPermanent) }) {
+		t.Fatalf("an unzoned bridge was not put in the mesh zone: %q", r.calls)
+	}
+
+	r = freshHost()
+	r.answers[query] = "docker\n"
+	if _, err := newFirewall(t, r).Apply(ctx, fw); err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(r.calls, func(c []string) bool { return slices.Contains(c, "--add-interface="+proto.ContainerBridge) }) {
+		t.Fatalf("a bridge in docker's zone was moved: %q", r.calls)
+	}
+
+	r = freshHost()
+	r.errs = map[string]error{query: errors.New("exit status 2"), strings.Join(add, " "): errors.New("INVALID_INTERFACE")}
+	if _, err := newFirewall(t, r).Apply(ctx, fw); err == nil || !strings.Contains(err.Error(), "put the containers' bridge meshctl0 in zone mesh") {
+		t.Fatalf("a failed binding = %v", err)
+	}
+
+	r = freshHost()
+	bad := *fw
+	bad.Bridge = "docker0 --reload"
+	if _, err := newFirewall(t, r).Apply(ctx, &bad); err == nil || len(r.calls) != 0 {
+		t.Fatalf("a hostile bridge = %v, %q", err, r.calls)
 	}
 }
 

@@ -1,0 +1,164 @@
+//go:build e2e && linux
+
+package e2e
+
+import (
+	"encoding/json"
+	"net"
+	"net/http"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+// port plugs namespace space into the bridge br of namespace brNS with the
+// interface ifname holding addr, as a runtime attaches a container.
+func (l *lab) port(brNS, br, space, ifname, addr string) {
+	l.t.Helper()
+	peer := "p-" + space + ifname
+	l.sh("ip", "-n", ns(space), "link", "add", ifname, "type", "veth", "peer", "name", peer, "netns", ns(brNS))
+	l.sh("ip", "-n", ns(brNS), "link", "set", peer, "master", br, "up")
+	l.sh("ip", "-n", ns(space), "addr", "add", addr, "dev", ifname)
+	l.sh("ip", "-n", ns(space), "link", "set", ifname, "up")
+	l.sh("ip", "-n", ns(space), "link", "set", "lo", "up")
+}
+
+func (l *lab) has(space string, args ...string) bool {
+	out, err := exec.Command("ip", append([]string{"-n", ns(space)}, args...)...).CombinedOutput()
+	return err == nil && len(out) > 0
+}
+
+func (l *lab) out(space string, args ...string) string {
+	out, _ := exec.Command("ip", append([]string{"-n", ns(space)}, args...)...).CombinedOutput()
+	return string(out)
+}
+
+// fakeRuntime serves a Docker-compatible API on a unix socket with one
+// container, web, on the mesh network at ip (amendment A38), and returns the
+// socket's path. Its event stream stays open and silent.
+func (l *lab) fakeRuntime(ip string) string {
+	l.t.Helper()
+	const id = "5eb5eb5eb5eb0000000000000000000000000000000000000000000000000000"
+	path := filepath.Join(l.dir, "runtime.sock")
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		l.t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /containers/json", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode([]map[string]string{{"Id": id}})
+	})
+	mux.HandleFunc("GET /containers/"+id+"/json", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"Id": id, "Name": "/shop-web-1",
+			"Config":          map[string]any{"Hostname": id[:12], "Labels": map[string]string{"com.docker.compose.service": "web"}},
+			"NetworkSettings": map[string]any{"Networks": map[string]any{"meshctl-mesh": map[string]any{"IPAddress": ip}}}})
+	})
+	mux.HandleFunc("GET /events", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	})
+	srv := &http.Server{Handler: mux}
+	go func() { _ = srv.Serve(ln) }()
+	l.t.Cleanup(func() { _ = srv.Close() })
+	return path
+}
+
+// TestContainerNetworks is amendment A37 in the lab. box is in container
+// mode: its agent runs in namespace h (the agent's container), whose eth1
+// is a port of the runtime's bridge dk0 in namespace i (the host, which
+// holds .1), with an attached container in j. pc is in host mode with its
+// containers on the mesh: its agent owns the bridge meshctl0 in k, where
+// the container in l is attached. A LAN host in m routes to pc's
+// containers through k, which the guard must refuse. box's runtime calls
+// its container web, which every node resolves (amendment A38).
+func TestContainerNetworks(t *testing.T) {
+	l := newLab(t)
+	l.startServer()
+	l.startMesh()
+	box := host{"h", "box", "192.0.2.7", "10.77.2.1"}
+	pc := host{"k", "pc", "192.0.2.8", "10.77.2.2"}
+	l.addHost(box)
+	l.addHost(pc)
+
+	l.sh("ip", "netns", "add", ns("i"))
+	l.sh("ip", "-n", ns("i"), "link", "add", "dk0", "type", "bridge")
+	l.sh("ip", "-n", ns("i"), "addr", "add", "10.77.128.1/16", "dev", "dk0")
+	l.sh("ip", "-n", ns("i"), "link", "set", "dk0", "up")
+	l.port("i", "dk0", "h", "eth1", "10.77.128.128/16") // the runtime's dynamic address
+	l.sh("ip", "netns", "add", ns("j"))
+	l.port("i", "dk0", "j", "eth0", "10.77.128.130/16")
+	// What the compose file's sysctls do in the agent's namespace.
+	l.sh("ip", "netns", "exec", ns("h"), "sysctl", "-qw", "net.ipv4.ip_forward=1", "net.ipv4.conf.all.proxy_arp=1")
+
+	l.runtimes["h"] = l.fakeRuntime("10.77.128.130")
+	l.enroll(box, "--role", "spoke", "--mode", "container", "--hub", "vps-1")
+	l.enroll(pc, "--role", "spoke", "--containers", "--hub", "vps-2")
+
+	// Container mode: the gateway claims .2 and installs its rules.
+	eventually(t, 60*time.Second, "box's gateway to claim 10.77.128.2 and its rules", func() bool {
+		return strings.Contains(l.out("h", "-4", "addr", "show", "dev", "eth1"), "10.77.128.2/16") &&
+			strings.Contains(l.out("h", "rule", "show"), "1006:")
+	})
+	eventually(t, 60*time.Second, "box's container to reach vps-1 through the gateway", func() bool { return l.ping("j", "10.77.0.1") })
+	// A container's first packet to a new mesh address waits for the
+	// gateway's proxy ARP, which the kernel delays by up to proxy_delay
+	// (0.8 s): longer than one ping's wait, so these retry.
+	eventually(t, 10*time.Second, "vps-2 to reach box's container", func() bool { return l.ping("b", "10.77.128.130") })
+	if ip, _, err := l.resolve("j", "10.77.128.2", "vps-1.mesh."); err != nil || ip != "10.77.0.1" {
+		t.Errorf("box's container resolves vps-1.mesh through the gateway = %q, %v", ip, err)
+	}
+	if l.ping("i", "10.77.0.1") {
+		t.Error("box's host reaches the mesh through the gateway")
+	}
+	if l.ping("a", "10.77.128.1") {
+		t.Error("the mesh reaches box's host through the gateway")
+	}
+
+	// Container names: box reports web, the server publishes it, every
+	// resolver answers it -- bare and with the node.
+	for _, c := range []struct{ from, at, name string }{
+		{"b", "10.77.0.2", "web.mesh."}, {"b", "10.77.0.2", "web.box.mesh."}, {"j", "10.77.128.2", "web.mesh."},
+	} {
+		eventually(t, 30*time.Second, c.name+" from "+c.from, func() bool {
+			ip, _, err := l.resolve(c.from, c.at, c.name)
+			return err == nil && ip == "10.77.128.130"
+		})
+	}
+
+	// Host mode: the agent makes meshctl0 with .1; the container attaches.
+	eventually(t, 60*time.Second, "pc's agent to make meshctl0 with 10.77.129.1", func() bool {
+		return strings.Contains(l.out("k", "-4", "addr", "show", "dev", "meshctl0"), "10.77.129.1/16")
+	})
+	l.sh("ip", "netns", "add", ns("l"))
+	l.port("k", "meshctl0", "l", "eth0", "10.77.129.130/16")
+	eventually(t, 30*time.Second, "vps-1 to reach pc's container", func() bool { return l.ping("a", "10.77.129.130") })
+	eventually(t, 10*time.Second, "box's container to reach pc's (relayed by vps-1)", func() bool { return l.ping("j", "10.77.129.130") })
+	if !l.ping("k", "10.77.129.130") {
+		t.Error("pc's host cannot reach its own container")
+	}
+
+	// The guard: a LAN host that routes the subnet to pc gets nowhere.
+	l.sh("ip", "netns", "add", ns("m"))
+	l.sh("ip", "-n", ns("m"), "link", "add", "eth0", "type", "veth", "peer", "name", "p-mlan", "netns", ns("k"))
+	l.sh("ip", "-n", ns("k"), "addr", "add", "10.197.0.1/30", "dev", "p-mlan")
+	l.sh("ip", "-n", ns("k"), "link", "set", "p-mlan", "up")
+	l.sh("ip", "-n", ns("m"), "addr", "add", "10.197.0.2/30", "dev", "eth0")
+	l.sh("ip", "-n", ns("m"), "link", "set", "eth0", "up")
+	l.sh("ip", "-n", ns("m"), "route", "add", "10.77.0.0/16", "via", "10.197.0.1")
+	l.sh("ip", "-n", ns("l"), "route", "add", "10.197.0.0/30", "via", "10.77.129.1")
+	if l.ping("m", "10.77.129.130") {
+		t.Error("a LAN host reaches pc's container: the guard did not hold")
+	}
+
+	// Containers off: the agent takes its rules away.
+	if out, err := l.meshctl("", nil, "node", "set", "pc", "--containers=false", "--data", l.data("server")); err != nil {
+		t.Fatalf("node set pc --containers=false: %v\n%s", err, out)
+	}
+	eventually(t, 60*time.Second, "pc's guard to go", func() bool { return !strings.Contains(l.out("k", "rule", "show"), "5203:") })
+	if !l.has("k", "link", "show", "meshctl0") {
+		t.Error("the bridge went with the guard; a runtime may still use it")
+	}
+}

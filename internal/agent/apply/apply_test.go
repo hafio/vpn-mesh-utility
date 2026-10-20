@@ -215,6 +215,48 @@ func TestFirewallFailureOnlyDegrades(t *testing.T) {
 // Exit on installs the policy rules; switching exits only moves 0.0.0.0/0
 // between peers, leaving the rules (and every connection) alone; exit off
 // removes them. 0.0.0.0/0 never reaches the main table.
+// The container network (amendment A37) is step 9: before DNS, which then
+// answers the containers on their gateway too; a failure only degrades,
+// and an agent without a container host says so.
+func TestContainersStep(t *testing.T) {
+	cfg := testfix.ContainerSpokeConfig()
+	cfg.DNS = meshDNS()
+	r := newRig(t)
+	n := agentfake.NewNet()
+	n.Attach("eth1", netip.MustParsePrefix("10.77.128.128/16"))
+	r.e = apply.New(apply.Deps{Host: r.h, Routes: r.r, Exit: r.p, Sysctl: r.s, DNS: r.dns, Containers: n, Iface: "wg0", Key: r.key})
+	res, err := r.e.Apply(context.Background(), cfg)
+	if err != nil || len(res.Degraded) != 0 || !n.HasBlackhole() {
+		t.Fatalf("Apply = %+v, %v; calls %v", res, err, n.Calls)
+	}
+	if w, _ := r.dns.Last(); w.Also != netip.MustParseAddr(cfg.Containers.Gateway) {
+		t.Fatalf("the resolver must also answer on the gateway: %+v", w)
+	}
+	if res, err = r.e.Apply(context.Background(), cfg); err != nil || res.Changes != 0 {
+		t.Fatalf("second Apply = %+v, %v", res, err)
+	}
+
+	// Off the mesh network: degraded, and DNS answers on the mesh IP only.
+	off := agentfake.NewNet()
+	r.e = apply.New(apply.Deps{Host: r.h, Routes: r.r, Exit: r.p, Sysctl: r.s, DNS: r.dns, Containers: off, Iface: "wg0", Key: r.key})
+	res, err = r.e.Apply(context.Background(), cfg)
+	if err != nil || !slices.Equal(res.Degraded, []string{apply.StepContainers}) || !strings.Contains(strings.Join(res.Errors, " "), "meshctl-mesh") {
+		t.Fatalf("off the mesh network = %+v, %v", res, err)
+	}
+	if w, _ := r.dns.Last(); w.Also.IsValid() {
+		t.Fatalf("the gateway is not up, yet DNS was asked to answer on it: %+v", w)
+	}
+
+	// No container host at all.
+	r.e = apply.New(apply.Deps{Host: r.h, Routes: r.r, Exit: r.p, Sysctl: r.s, DNS: r.dns, Iface: "wg0", Key: r.key})
+	if res, err = r.e.Apply(context.Background(), cfg); err != nil || !slices.Equal(res.Degraded, []string{apply.StepContainers}) {
+		t.Fatalf("without a container host = %+v, %v", res, err)
+	}
+	if !slices.Contains(proto.DegradableSteps, apply.StepContainers) {
+		t.Fatal("the server would refuse a status report naming the containers step")
+	}
+}
+
 func TestExitModeOnSwitchOff(t *testing.T) {
 	r := newRig(t)
 	allowed := func(peer string) []netip.Prefix {

@@ -41,6 +41,10 @@ func node(f testfix.Node) Node {
 //	          9100/tcp from the mesh on every server and 5432/tcp from the nas
 //	          on vps-1
 //	degraded  full with the laptop disabled and vps-3 missing its endpoint
+//	containers full with the containers of the nas and vps-2 on the mesh
+//	          (host mode, 10.77.128.0/24, 10.77.131.0/24), vps-3 and the
+//	          laptop in container mode (10.77.129.0/24, 10.77.130.0/24; the
+//	          laptop without its exit)
 func topology(name string) Input {
 	in := Input{MeshCIDR: netip.MustParsePrefix(testfix.MeshCIDR),
 		Upstream: []netip.Addr{netip.MustParseAddr("1.1.1.1"), netip.MustParseAddr("9.9.9.9")}}
@@ -63,9 +67,15 @@ func topology(name string) Input {
 	nas.PrimaryHub = vps1.ID
 	laptop.PrimaryHub, laptop.ExitVia = vps2.ID, vps2.ID
 	phone.PrimaryHub = vps1.ID
-	if name == "degraded" {
+	switch name {
+	case "degraded":
 		laptop.Disabled = true
 		vps3.Endpoint = netip.AddrPort{}
+	case "containers":
+		nas.Containers = netip.MustParsePrefix(testfix.ContainerSubnet)
+		vps2.Containers = netip.MustParsePrefix("10.77.131.0/24")
+		vps3.Mode, vps3.Containers = proto.ModeContainer, netip.MustParsePrefix("10.77.129.0/24")
+		laptop.Mode, laptop.Containers, laptop.ExitVia = proto.ModeContainer, netip.MustParsePrefix("10.77.130.0/24"), 0
 	}
 	in.Nodes = []Node{vps1, vps2, vps3, nas, laptop, phone}
 	return in
@@ -151,7 +161,7 @@ func TestComputeIsDeterministic(t *testing.T) {
 // Every config the planner emits must pass the agent's own validation: no
 // prefix on two peers, sane values, exit pointing at a peer with 0.0.0.0/0.
 func TestComputedConfigsPassAgentValidation(t *testing.T) {
-	for _, name := range []string{"servers", "full", "degraded"} {
+	for _, name := range []string{"servers", "full", "degraded", "containers"} {
 		for id, c := range mustCompute(t, topology(name)) {
 			if err := c.Validate(); err != nil {
 				t.Errorf("%s: node %d: %v", name, id, err)
@@ -231,7 +241,7 @@ func deliver(cfgs map[string]proto.NodeConfig, ips map[string]netip.Addr, from, 
 // planned nodes, packets get through in both directions -- direct for
 // anything involving a server, through one relay for two non-servers.
 func TestEveryPairCanTalk(t *testing.T) {
-	for _, name := range []string{"full", "degraded"} {
+	for _, name := range []string{"full", "degraded", "containers"} {
 		t.Run(name, func(t *testing.T) {
 			in := topology(name)
 			out := mustCompute(t, in)
@@ -253,6 +263,255 @@ func TestEveryPairCanTalk(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A Swarm service resolves through the servers in peer lists, by id; a
+// server without an endpoint is in none.
+func TestServerIPs(t *testing.T) {
+	if got := ServerIPs(topology("full")); !slices.Equal(got, []string{testfix.VPS1.MeshIP, testfix.VPS2.MeshIP, testfix.VPS3.MeshIP}) {
+		t.Errorf("full = %v", got)
+	}
+	if got := ServerIPs(topology("degraded")); !slices.Equal(got, []string{testfix.VPS1.MeshIP, testfix.VPS2.MeshIP}) {
+		t.Errorf("degraded (vps-3 without an endpoint) = %v", got)
+	}
+	if got := ServerIPs(Input{MeshCIDR: netip.MustParsePrefix(testfix.MeshCIDR)}); got != nil {
+		t.Errorf("no servers = %v", got)
+	}
+}
+
+// withDown marks the server id down (amendment A40).
+func withDown(in Input, id int64) Input {
+	in.Nodes = append([]Node(nil), in.Nodes...)
+	for i := range in.Nodes {
+		if in.Nodes[i].ID == id {
+			in.Nodes[i].Down = true
+		}
+	}
+	return in
+}
+
+// Relay failover (amendment A40): with any one server down, every pair
+// still gets through, no pair of spokes relays through the down server, and
+// the choice is the same from both ends. A phone's pairs keep the phone's
+// hub: its profile names that one.
+func TestRelayFailover(t *testing.T) {
+	for _, name := range []string{"full", "containers"} {
+		for _, down := range []testfix.Node{testfix.VPS1, testfix.VPS2, testfix.VPS3} {
+			t.Run(name+"/"+down.Name, func(t *testing.T) {
+				in := withDown(topology(name), down.ID)
+				out := mustCompute(t, in)
+				cfgs := map[string]proto.NodeConfig{}
+				ips := map[string]netip.Addr{}
+				for _, n := range in.Nodes {
+					cfgs[n.Name], ips[n.Name] = out[n.ID], n.MeshIP
+				}
+				for a := range cfgs {
+					for b := range cfgs {
+						ra, rb := cfgs[a].Node.Role, cfgs[b].Node.Role
+						if a == b || (ra == proto.RolePhone && rb == proto.RolePhone) {
+							continue
+						}
+						if why := deliver(cfgs, ips, a, b); why != "" {
+							t.Errorf("%s -> %s: %s", a, b, why)
+						}
+						if hop := lookup(cfgs[a], ips[b]); ra == proto.RoleSpoke && rb == proto.RoleSpoke && hop == down.Name {
+							t.Errorf("%s -> %s relays through the down %s", a, b, down.Name)
+						}
+					}
+				}
+				p := newPlan(in)
+				for _, x := range p.others {
+					for _, y := range p.others {
+						rx, _ := p.relay(x, y)
+						ry, _ := p.relay(y, x)
+						if rx != ry {
+							t.Errorf("relay(%s, %s) = %d but relay(%s, %s) = %d", x.Name, y.Name, rx, y.Name, x.Name, ry)
+						}
+					}
+				}
+			})
+		}
+	}
+	// Without a phone on it, a down hub relays nothing, so it stops
+	// forwarding; the warning names it; when every server is down nothing
+	// moves.
+	in := topology("full")
+	in.Nodes = in.Nodes[:5]
+	if !mustCompute(t, in)[testfix.VPS1.ID].Firewall.Relay {
+		t.Fatal("vps-1 relays nas <-> laptop while it is up")
+	}
+	in = withDown(in, testfix.VPS1.ID)
+	out, problems, err := Compute(in)
+	if err != nil || out[testfix.VPS1.ID].Firewall.Relay || !out[testfix.VPS2.ID].Firewall.Relay {
+		t.Fatalf("vps-1 down: relay vps-1 %v, vps-2 %v (%v)", out[testfix.VPS1.ID].Firewall.Relay, out[testfix.VPS2.ID].Firewall.Relay, err)
+	}
+	if !hasProblem(problems, "vps-1", "is down", true) {
+		t.Errorf("no warning for the down hub: %v", problems)
+	}
+	all := withDown(withDown(withDown(topology("full"), testfix.VPS1.ID), testfix.VPS2.ID), testfix.VPS3.ID)
+	p := newPlan(all)
+	if r, ok := p.relay(p.byID[testfix.NAS.ID], p.byID[testfix.Laptop.ID]); !ok || r != testfix.VPS1.ID {
+		t.Errorf("every server down: relay = %d, %v; want the usual vps-1", r, ok)
+	}
+	// The default hub comes before the lowest-id server once both ends'
+	// hubs are down.
+	two := withDown(withDown(topology("full"), testfix.VPS1.ID), testfix.VPS2.ID)
+	two.DefaultHub = testfix.VPS3.ID
+	p = newPlan(two)
+	if r, _ := p.relay(p.byID[testfix.NAS.ID], p.byID[testfix.Laptop.ID]); r != testfix.VPS3.ID {
+		t.Errorf("both hubs down: relay = %d, want the default hub vps-3", r)
+	}
+}
+
+// deliverAddr is deliver with addresses of the nodes' own choosing: a
+// container's address behind a node is routed wherever the node is.
+func deliverAddr(cfgs map[string]proto.NodeConfig, from string, src netip.Addr, to string, dst netip.Addr) string {
+	hop := lookup(cfgs[from], dst)
+	switch {
+	case hop == "":
+		return from + " has no route to " + dst.String()
+	case hop == to:
+		if back := lookup(cfgs[to], src); back != from {
+			return to + " drops a direct packet from " + src.String() + " (source maps to peer " + back + ")"
+		}
+		return ""
+	}
+	if back := lookup(cfgs[hop], src); back != from {
+		return "relay " + hop + " drops the packet from " + src.String()
+	}
+	if next := lookup(cfgs[hop], dst); next != to {
+		return "relay " + hop + " cannot forward to " + dst.String()
+	}
+	if back := lookup(cfgs[to], src); back != hop {
+		return to + " drops the packet from " + src.String() + " relayed via " + hop + " (source maps to peer " + back + ")"
+	}
+	return ""
+}
+
+// A container behind any node reaches every other node, and is reached
+// from it, in both directions -- the property amendment A37 adds to A3.
+func TestContainersTalkToEveryNode(t *testing.T) {
+	in := topology("containers")
+	out := mustCompute(t, in)
+	cfgs := map[string]proto.NodeConfig{}
+	ips := map[string]netip.Addr{}
+	behind := map[string]netip.Addr{} // one container address per node with containers
+	for _, n := range in.Nodes {
+		cfgs[n.Name], ips[n.Name] = out[n.ID], n.MeshIP
+		if n.Containers.IsValid() {
+			a := n.Containers.Addr().As4()
+			a[3] = 130
+			behind[n.Name] = netip.AddrFrom4(a)
+		}
+	}
+	for host, c := range behind {
+		for other := range cfgs {
+			if other == host {
+				continue
+			}
+			if why := deliverAddr(cfgs, other, ips[other], host, c); why != "" {
+				t.Errorf("%s -> container %s behind %s: %s", other, c, host, why)
+			}
+			if why := deliverAddr(cfgs, host, c, other, ips[other]); why != "" {
+				t.Errorf("container %s behind %s -> %s: %s", c, host, other, why)
+			}
+		}
+	}
+}
+
+// What a container network adds to each config (amendment A37): every peer
+// routes the subnet with the node's /32 and nothing more, the node's
+// resolver forwards for it, and the container network itself; a
+// container-mode node has no firewall section, no exit and no custom rules,
+// a host-mode server's firewall forwards to its bridge.
+func TestContainerNetworks(t *testing.T) {
+	in := topology("containers")
+	out := mustCompute(t, in)
+	nasNet, vps3Net := testfix.ContainerSubnet, "10.77.129.0/24"
+	peer := func(c proto.NodeConfig, name string) proto.Peer {
+		for _, p := range c.Peers {
+			if p.Name == name {
+				return p
+			}
+		}
+		t.Fatalf("%s has no peer %s", c.Node.Name, name)
+		return proto.Peer{}
+	}
+	vps1, vps2, vps3 := out[testfix.VPS1.ID], out[testfix.VPS2.ID], out[testfix.VPS3.ID]
+	nas, laptop, phone := out[testfix.NAS.ID], out[testfix.Laptop.ID], out[testfix.Phone.ID]
+	for _, c := range []struct {
+		where string
+		got   []string
+		want  []string
+	}{
+		{"vps-1's peer nas", peer(vps1, "nas").AllowedIPs, []string{testfix.NAS.MeshIP + "/32", nasNet}},
+		{"vps-1's peer vps-3", peer(vps1, "vps-3").AllowedIPs, []string{testfix.VPS3.MeshIP + "/32", vps3Net}},
+		{"nas's peer vps-3", peer(nas, "vps-3").AllowedIPs, []string{testfix.VPS3.MeshIP + "/32", vps3Net}},
+		{"nas's peer vps-1 (relays the laptop and the phone)", peer(nas, "vps-1").AllowedIPs,
+			[]string{testfix.VPS1.MeshIP + "/32", testfix.Laptop.MeshIP + "/32", testfix.Phone.MeshIP + "/32", "10.77.130.0/24"}},
+		{"the phone's peer vps-3", peer(phone, "vps-3").AllowedIPs, []string{testfix.VPS3.MeshIP + "/32", vps3Net}},
+		{"nas's peer vps-2", peer(nas, "vps-2").AllowedIPs, []string{testfix.VPS2.MeshIP + "/32", "10.77.131.0/24"}},
+		{"the phone's hub vps-1", peer(phone, "vps-1").AllowedIPs, []string{testfix.MeshCIDR}},
+		// Every resolver forwards for every container network: a Swarm
+		// service's tasks share one resolver list.
+		{"nas's forward_for", nas.DNS.ForwardFor, []string{nasNet, vps3Net, "10.77.130.0/24", "10.77.131.0/24"}},
+		{"vps-3's forward_for", vps3.DNS.ForwardFor, []string{nasNet, vps3Net, "10.77.130.0/24", "10.77.131.0/24"}},
+		{"vps-1's forward_for", vps1.DNS.ForwardFor, []string{testfix.Phone.MeshIP + "/32", nasNet, vps3Net, "10.77.130.0/24", "10.77.131.0/24"}},
+	} {
+		if !slices.Equal(c.got, c.want) {
+			t.Errorf("%s = %v, want %v", c.where, c.got, c.want)
+		}
+	}
+	if k := nas.Containers; k == nil || *k != *testfix.Containers(proto.ModeHost) {
+		t.Errorf("nas's container network = %+v, want %+v", k, testfix.Containers(proto.ModeHost))
+	}
+	if k := vps3.Containers; k == nil || k.Mode != proto.ModeContainer || k.Gateway != "10.77.129.2" || k.Bridge != "10.77.129.1" ||
+		k.Range != "10.77.129.128/25" || k.Network != testfix.MeshCIDR {
+		t.Errorf("vps-3's container network = %+v", k)
+	}
+	if vps1.Containers != nil {
+		t.Errorf("vps-1 has no containers on the mesh, got %+v", vps1.Containers)
+	}
+	sysctls := func(c proto.NodeConfig) []string {
+		var out []string
+		for _, s := range c.Sysctl {
+			out = append(out, s.Key+"="+s.Value)
+		}
+		return out
+	}
+	// The bridge's own sysctls are the agent's, once the bridge exists.
+	if got, want := sysctls(nas), []string{proto.SysctlIPForward + "=1"}; !slices.Equal(got, want) {
+		t.Errorf("nas's sysctls = %v, want %v", got, want)
+	}
+	if fw := vps2.Firewall; fw == nil || fw.Bridge != proto.ContainerBridge || !fw.Relay {
+		t.Errorf("vps-2's firewall = %+v, want the bridge forwarded to", fw)
+	}
+	if fw := vps1.Firewall; fw == nil || fw.Bridge != "" {
+		t.Errorf("vps-1 has no containers on the mesh, so no bridge: %+v", fw)
+	}
+	for _, c := range []proto.NodeConfig{vps3, laptop} {
+		if got, want := sysctls(c), []string{proto.SysctlProxyARP + "=1", proto.SysctlIPForward + "=1"}; !slices.Equal(got, want) {
+			t.Errorf("%s's sysctls = %v, want %v", c.Node.Name, got, want)
+		}
+		if c.Firewall != nil {
+			t.Errorf("%s is in container mode, whose isolation is the agent's routing, but has a firewall: %+v", c.Node.Name, c.Firewall)
+		}
+		if c.Exit != nil {
+			t.Errorf("%s is in container mode but has an exit section: %+v", c.Node.Name, c.Exit)
+		}
+	}
+	if nas.Firewall != nil {
+		t.Errorf("a host-mode spoke has no firewall meshctl manages, got %+v", nas.Firewall)
+	}
+	// A container-mode hub that relays forwards between its peers.
+	if k := vps3.Containers; k == nil || k.Relay {
+		t.Errorf("vps-3 relays for no one, yet its container network says %+v", k)
+	}
+	in.Nodes = slices.Clone(in.Nodes)
+	in.Nodes[3].PrimaryHub = testfix.VPS3.ID
+	if k := mustCompute(t, in)[testfix.VPS3.ID].Containers; k == nil || !k.Relay {
+		t.Errorf("vps-3 relays for the nas, yet its container network says %+v", k)
 	}
 }
 
@@ -360,6 +619,8 @@ func TestCheckRejects(t *testing.T) {
 		{"spoke can exit", func(in *Input) { in.Nodes[3].CanExit = true }, "nas", "only servers"},
 		{"mtu", func(in *Input) { in.Nodes[3].MTU = 9000 }, "nas", "MTU"},
 		{"keepalive", func(in *Input) { in.Nodes[3].Keepalive = -1 }, "nas", "keepalive"},
+		{"extra domain in the zone", func(in *Input) { in.Domains = []string{"lab.mesh"} }, "", "the mesh's zone"},
+		{"extra domains overlap", func(in *Input) { in.Domains = []string{"lan", "x.lan"} }, "", "inside lan"},
 		{"listen port", func(in *Input) { in.Nodes[0].ListenPort = 0 }, "vps-1", "listen port"},
 		{"bad name", func(in *Input) { in.Nodes[3].Name = "NAS box" }, "NAS box", "name"},
 		{"unknown role", func(in *Input) { in.Nodes[3].Role = "router" }, "nas", "unknown role"},
@@ -380,6 +641,25 @@ func TestCheckRejects(t *testing.T) {
 		{"upstream not ipv4", func(in *Input) { in.Upstream = []netip.Addr{netip.MustParseAddr("2001:db8::1")} }, "", "not an IPv4"},
 		{"zone", func(in *Input) { in.Zone = "office.local" }, "", "dns zone"},
 		{"record with the zone", func(in *Input) { in.Records[0].Name = "files.mesh" }, "", "ends with the zone"},
+		{"unknown mode", func(in *Input) { in.Nodes[3].Mode = "bridge" }, "nas", "unknown mode"},
+		{"container mode without a subnet", func(in *Input) { in.Nodes[3].Mode = proto.ModeContainer }, "nas", "no container subnet"},
+		{"phone with containers", func(in *Input) { in.Nodes[5].Containers = netip.MustParsePrefix("10.77.131.0/24") }, "phone", "no agent"},
+		{"container-mode exit server", func(in *Input) {
+			in.Nodes[1].Mode, in.Nodes[1].Containers = proto.ModeContainer, netip.MustParsePrefix("10.77.131.0/24")
+		}, "vps-2", "cannot be an exit"},
+		{"container-mode spoke with an exit", func(in *Input) {
+			in.Nodes[4].Mode, in.Nodes[4].Containers = proto.ModeContainer, netip.MustParsePrefix("10.77.131.0/24")
+		}, "laptop", "cannot use an exit"},
+		{"rule on a container-mode server", func(in *Input) {
+			in.Nodes[0].Mode, in.Nodes[0].Containers = proto.ModeContainer, netip.MustParsePrefix("10.77.131.0/24")
+		}, "", "a container-mode server"},
+		{"container subnet not a /24", func(in *Input) { in.Nodes[3].Containers = netip.MustParsePrefix("10.77.128.0/23") }, "nas", "IPv4 /24"},
+		{"container subnet outside the mesh", func(in *Input) { in.Nodes[3].Containers = netip.MustParsePrefix("10.88.0.0/24") }, "nas", "outside the mesh"},
+		{"container subnet twice", func(in *Input) {
+			in.Nodes[3].Containers = netip.MustParsePrefix(testfix.ContainerSubnet)
+			in.Nodes[4].Containers = netip.MustParsePrefix(testfix.ContainerSubnet)
+		}, "laptop", "is also \"nas\"'s"},
+		{"node inside a container subnet", func(in *Input) { in.Nodes[3].Containers = netip.MustParsePrefix("10.77.2.0/24") }, "laptop", "inside \"nas\"'s container subnet"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -436,6 +716,20 @@ func TestDNS(t *testing.T) {
 	for _, c := range mustCompute(t, in) {
 		if c.DNS != nil && c.DNS.Zone != "home.arpa" {
 			t.Errorf("zone %q with the mesh set to home.arpa", c.DNS.Zone)
+		}
+	}
+	// The extra domains (amendment A39) reach every resolver, sorted; with
+	// none the section has none, so it hashes as before.
+	for _, c := range full {
+		if c.DNS != nil && c.DNS.Domains != nil {
+			t.Errorf("domains %v without any set", c.DNS.Domains)
+		}
+	}
+	in = topology("full")
+	in.Domains = []string{"home.arpa", "example.lan"}
+	for _, c := range mustCompute(t, in) {
+		if c.DNS != nil && strings.Join(c.DNS.Domains, ",") != "example.lan,home.arpa" {
+			t.Errorf("%s: domains %v", c.Node.Name, c.DNS.Domains)
 		}
 	}
 	// A disabled node's name, and an alias of it, resolve no more.

@@ -61,7 +61,7 @@ func (p netlinkPolicy) Rules() ([]Rule, error) {
 			return nil, fmt.Errorf("list %s policy rules: %w", f, err)
 		}
 		for _, r := range rs {
-			if r.Protocol != routes.Protocol {
+			if !owned(r) {
 				continue
 			}
 			x := Rule{Family: f, Priority: r.Priority, Table: r.Table, SuppressPrefixlen: r.SuppressPrefixlen}
@@ -72,6 +72,13 @@ func (p netlinkPolicy) Rules() ([]Rule, error) {
 		}
 	}
 	return out, nil
+}
+
+// owned reports whether r is exit mode's: protocol 201 at one of its two
+// priorities. The container network's rules carry protocol 201 too
+// (internal/agent/containers), at priorities of their own.
+func owned(r netlink.Rule) bool {
+	return r.Protocol == routes.Protocol && (r.Priority == PrioritySuppress || r.Priority == PriorityTunnel)
 }
 
 func toRule(r Rule) *netlink.Rule {

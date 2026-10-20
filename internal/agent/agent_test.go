@@ -27,6 +27,7 @@ import (
 	"github.com/hafio/vpn-mesh-utility/internal/agent/agentfake"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/localapi"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/logbuf"
+	"github.com/hafio/vpn-mesh-utility/internal/agent/names"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/state"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/wg"
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
@@ -54,16 +55,22 @@ type fakeServer struct {
 	// mesh answers GET mesh, nil 503; meshAsked counts the calls.
 	mesh      *proto.MeshView
 	meshAsked int
+	// nudge sends a mesh event; names records every PUT names, and
+	// namesRefuse answers the next one with an error.
+	nudge       chan struct{}
+	names       []proto.NamesRequest
+	namesRefuse *proto.ErrorBody
 }
 
 func newFakeServer(t *testing.T, pub ed25519.PublicKey, cfg proto.NodeConfig, refuse *proto.ErrorBody) (*fakeServer, *httptest.Server) {
-	f := &fakeServer{t: t, pub: pub, cfg: cfg, refuse: refuse, push: make(chan proto.ConfigEvent, 4)}
+	f := &fakeServer{t: t, pub: pub, cfg: cfg, refuse: refuse, push: make(chan proto.ConfigEvent, 4), nudge: make(chan struct{}, 1)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+proto.PathConfig, f.config)
 	mux.HandleFunc("GET "+proto.PathEvents, f.events)
 	mux.HandleFunc("POST "+proto.PathStatus, f.status)
 	mux.HandleFunc("POST "+proto.PathPrefs, f.prefsHandler)
 	mux.HandleFunc("GET "+proto.PathMesh, f.meshHandler)
+	mux.HandleFunc("PUT "+proto.PathNames, f.namesHandler)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return f, srv
@@ -134,8 +141,45 @@ func (f *fakeServer) events(w http.ResponseWriter, r *http.Request) {
 			if proto.WriteEvent(w, proto.Event{Name: proto.EventConfig, Data: b}) != nil || rc.Flush() != nil {
 				return
 			}
+		case <-f.nudge:
+			if proto.WriteEvent(w, proto.Event{Name: proto.EventMesh, Data: []byte("{}")}) != nil || rc.Flush() != nil {
+				return
+			}
 		}
 	}
+}
+
+func (f *fakeServer) namesHandler(w http.ResponseWriter, r *http.Request) {
+	body, ok := f.verify(w, r)
+	if !ok {
+		return
+	}
+	var req proto.NamesRequest
+	if err := json.Unmarshal(body, &req); err != nil || req.Validate() != nil {
+		f.t.Errorf("names %s: %v", body, err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if eb := f.namesRefuse; eb != nil {
+		f.namesRefuse = nil
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(eb)
+		return
+	}
+	f.names = append(f.names, req)
+	resp := proto.NamesResponse{Stored: len(req.Names)}
+	for _, n := range req.Names {
+		if n.Name == "vps-1" {
+			resp.Dropped = append(resp.Dropped, proto.DroppedName{Name: n.Name, IP: n.IP, Reason: "node vps-1 has this name"})
+		}
+	}
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func (f *fakeServer) namesPut() []proto.NamesRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.names)
 }
 
 func (f *fakeServer) status(w http.ResponseWriter, r *http.Request) {
@@ -320,8 +364,9 @@ func startWith(t *testing.T, dir *state.Dir, socket string, edit func(*Deps)) *r
 	t.Helper()
 	r := &rig{host: agentfake.NewHost(), policy: &agentfake.Policy{}, dns: &agentfake.DNS{}, fw: &agentfake.Firewall{}, done: make(chan error, 1)}
 	r.deps = Deps{DataDir: dir.Path, Socket: socket, Version: "v1.0.0", Host: r.host, Routes: agentfake.NewRoutes(),
-		Exit: r.policy, Sysctl: &agentfake.Sysctl{}, Firewall: r.fw, DNS: r.dns,
-		PollEvery: 50 * time.Millisecond, StatusEvery: 50 * time.Millisecond, BackoffMin: 10 * time.Millisecond, BackoffMax: 50 * time.Millisecond}
+		Exit: r.policy, Sysctl: &agentfake.Sysctl{}, Firewall: r.fw, DNS: r.dns, Containers: agentfake.NewNet(),
+		PollEvery: 50 * time.Millisecond, StatusEvery: 50 * time.Millisecond, BackoffMin: 10 * time.Millisecond, BackoffMax: 50 * time.Millisecond,
+		RuntimeSocket: RuntimeOff} // never the host's container runtime
 	if edit != nil {
 		edit(&r.deps)
 	}
@@ -908,6 +953,7 @@ func TestMeshViewIsCached(t *testing.T) {
 		m, merr := dir.Mesh()
 		return err == nil && st.AppliedVersion == 3 && merr == nil && len(m.View.Nodes) == len(view.Nodes)
 	})
+	eventually(t, "the view fetched at start and after the first config", func() bool { return f.meshCalls() >= 2 })
 	m, err := localapi.NewClient(sock).Mesh(context.Background())
 	if err != nil || m.Error != "" || m.FetchedAt == 0 || len(m.View.Nodes) != len(view.Nodes) || m.View.Nodes[4] != view.Nodes[4] {
 		t.Fatalf("mesh = %+v, %v", m, err)
@@ -916,7 +962,8 @@ func TestMeshViewIsCached(t *testing.T) {
 	if _, err := localapi.NewClient(sock).Mesh(context.Background()); err != nil || f.meshCalls() != asked {
 		t.Fatalf("a view under %s old: the server was asked again (%d -> %d, %v)", meshFresh, asked, f.meshCalls(), err)
 	}
-	// A new config means the mesh changed: the next look asks again. (The
+	// A new config means the mesh changed: the view is fetched again at
+	// once, and a look right after is answered from that fetch. (The
 	// version alone is not part of the hash, so a peer goes.)
 	next := testfix.ServerConfig()
 	next.Version = 4
@@ -926,6 +973,7 @@ func TestMeshViewIsCached(t *testing.T) {
 		st, err := localapi.NewClient(sock).Status(context.Background())
 		return err == nil && st.AppliedVersion == 4
 	})
+	eventually(t, "the view fetched after the new config", func() bool { return f.meshCalls() == asked+1 })
 	if _, err := localapi.NewClient(sock).Mesh(context.Background()); err != nil || f.meshCalls() != asked+1 {
 		t.Fatalf("after a new config the server was asked %d times in all, want %d (%v)", f.meshCalls(), asked+1, err)
 	}
@@ -1091,5 +1139,175 @@ func TestRestartNeedsAConfig(t *testing.T) {
 	if err := (&runner{}).restart(context.Background()); !errors.As(err, &rf) || rf.Status != http.StatusConflict ||
 		!strings.Contains(rf.Message, "no config is applied yet") {
 		t.Fatalf("restart before any config = %v", err)
+	}
+}
+
+// fakeRuntime is a container runtime (names.Source): List answers the
+// containers, Watch passes on every change sent to it.
+type fakeRuntime struct {
+	mu       sync.Mutex
+	cs       []names.Container
+	err      error
+	watchErr error
+	lists    int
+	changes  chan struct{}
+}
+
+func newFakeRuntime(cs ...names.Container) *fakeRuntime {
+	return &fakeRuntime{cs: cs, changes: make(chan struct{}, 4)}
+}
+
+func (f *fakeRuntime) List(context.Context) ([]names.Container, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lists++
+	return slices.Clone(f.cs), f.err
+}
+
+func (f *fakeRuntime) Watch(ctx context.Context, changed func()) error {
+	f.mu.Lock()
+	err := f.watchErr
+	f.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-f.changes:
+			changed()
+		}
+	}
+}
+
+func (f *fakeRuntime) set(cs []names.Container, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cs, f.err = cs, err
+}
+
+func (f *fakeRuntime) listed() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lists
+}
+
+func webContainer(ip, service string) names.Container {
+	return names.Container{ID: strings.Repeat("a", 64), Name: "/shop-" + service, IP: netip.MustParseAddr(ip),
+		Labels: map[string]string{names.LabelComposeService: service}}
+}
+
+// Container names (amendment A38): the agent reports what the runtime
+// calls the containers on its network once the config gives it one, again
+// when they change and not when they do not, sends a refused report again,
+// and logs what the server does not publish.
+func TestContainerNamesAreReported(t *testing.T) {
+	dir, pub := newDir(t)
+	cfg := testfix.ContainerSpokeConfig()
+	f, srv := newFakeServer(t, pub, cfg, nil)
+	enrollAs(t, dir, srv.URL, testfix.Laptop)
+	rt := newFakeRuntime(webContainer("10.77.128.129", "web"))
+	logs := &syncBuffer{}
+	startWith(t, dir, "", func(d *Deps) {
+		d.Runtime, d.NamesSettle, d.Log = rt, 10*time.Millisecond, slog.New(slog.NewTextHandler(logs, nil))
+	})
+	web := proto.ContainerName{Name: "web", Kind: proto.NameService, IP: "10.77.128.129"}
+	eventually(t, "the first report", func() bool {
+		put := f.namesPut()
+		return len(put) == 1 && len(put[0].Names) == 2 && slices.Contains(put[0].Names, web)
+	})
+
+	// The same containers again: listed, not sent.
+	before := rt.listed()
+	rt.changes <- struct{}{}
+	eventually(t, "a listing after the change", func() bool { return rt.listed() > before })
+	if put := f.namesPut(); len(put) != 1 {
+		t.Fatalf("an unchanged listing was sent: %v", put)
+	}
+
+	// A refused report is sent again with the next change.
+	f.mu.Lock()
+	f.namesRefuse = &proto.ErrorBody{Code: proto.CodeConflict, Message: "no container network"}
+	f.mu.Unlock()
+	rt.set([]names.Container{webContainer("10.77.128.129", "web"), webContainer("10.77.128.130", "vps-1")}, nil)
+	rt.changes <- struct{}{}
+	eventually(t, "the refusal logged", func() bool { return strings.Contains(logs.String(), "report the containers' names failed") })
+	rt.changes <- struct{}{}
+	eventually(t, "the report sent again", func() bool { return len(f.namesPut()) == 2 })
+	if put := f.namesPut(); len(put[1].Names) != 4 {
+		t.Fatalf("second report %v", put[1])
+	}
+	eventually(t, "the dropped name logged", func() bool {
+		return strings.Contains(logs.String(), "container name not published") && strings.Contains(logs.String(), "node vps-1 has this name")
+	})
+
+	// A runtime that fails is logged once, however often it fails.
+	rt.set(nil, errors.New("permission denied"))
+	rt.changes <- struct{}{}
+	eventually(t, "the failure logged", func() bool { return strings.Contains(logs.String(), "permission denied") })
+	n := rt.listed()
+	rt.changes <- struct{}{}
+	eventually(t, "a second failed listing", func() bool { return rt.listed() > n })
+	if c := strings.Count(logs.String(), "containers' names not read"); c != 1 {
+		t.Fatalf("the same failure was logged %d times", c)
+	}
+}
+
+// Without a container network nothing is listed or sent; a runtime whose
+// events fail is logged.
+func TestContainerNamesNeedAContainerNetwork(t *testing.T) {
+	dir, f := joinedTo(t, testfix.ServerConfig())
+	rt := newFakeRuntime(webContainer("10.77.128.129", "web"))
+	rt.watchErr = errors.New("connection refused")
+	logs := &syncBuffer{}
+	sock := filepath.Join(dir.Path, "agent.sock")
+	startWith(t, dir, sock, func(d *Deps) {
+		d.Runtime, d.NamesSettle, d.Log = rt, 10*time.Millisecond, slog.New(slog.NewTextHandler(logs, nil))
+	})
+	eventually(t, "the config applied, and the events failure logged", func() bool {
+		st, err := localapi.NewClient(sock).Status(context.Background())
+		return err == nil && st.AppliedVersion == 3 && strings.Contains(logs.String(), "container runtime events stopped")
+	})
+	time.Sleep(50 * time.Millisecond)
+	if rt.listed() != 0 || len(f.namesPut()) != 0 {
+		t.Fatalf("a node without a container network listed %d times and sent %v", rt.listed(), f.namesPut())
+	}
+}
+
+// The mesh view's names reach the resolver: from mesh.json at start, from
+// the server, and again as soon as the server says they changed.
+func TestMeshNamesReachTheResolver(t *testing.T) {
+	dir, f := joinedTo(t, testfix.ServerConfig())
+	cached := testfix.MeshView()
+	cached.Names = testfix.MeshNames()[:1]
+	if err := dir.SaveMesh(proto.LocalMesh{View: cached, FetchedAt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	r := startWith(t, dir, "", func(d *Deps) { d.MeshEvery = time.Hour })
+	eventually(t, "the cached names, or the server's", func() bool { return len(r.dns.Names()) > 0 })
+	view := testfix.MeshView()
+	view.Names = testfix.MeshNames()
+	f.setMesh(&view)
+	f.nudge <- struct{}{}
+	eventually(t, "the server's names after the nudge", func() bool { return slices.Equal(r.dns.Names(), view.Names) })
+}
+
+// The runtime socket: off reads none, a path is used as given, and auto
+// takes one of the usual places or none.
+func TestOpenRuntime(t *testing.T) {
+	quiet := slog.New(slog.DiscardHandler)
+	off := &runner{d: Deps{RuntimeSocket: RuntimeOff}, log: quiet}
+	if off.openRuntime(); off.d.Runtime != nil {
+		t.Fatal("off opened a runtime")
+	}
+	given := &runner{d: Deps{RuntimeSocket: "/run/user/1000/podman/podman.sock"}, log: quiet}
+	if given.openRuntime(); given.d.Runtime == nil || given.d.Runtime.(*names.Runtime).Socket() != "/run/user/1000/podman/podman.sock" {
+		t.Fatalf("a given socket = %v", given.d.Runtime)
+	}
+	auto := &runner{d: Deps{RuntimeSocket: RuntimeAuto}, log: quiet}
+	auto.openRuntime()
+	if auto.d.Runtime != nil && !slices.Contains(names.Sockets(), auto.d.Runtime.(*names.Runtime).Socket()) {
+		t.Fatalf("auto picked %v", auto.d.Runtime)
 	}
 }

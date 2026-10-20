@@ -1,15 +1,17 @@
 package dns
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"net/netip"
 	"slices"
 	"strings"
 )
 
 // The Windows registration is the Name Resolution Policy Table (NRPT): one
-// rule per namespace, naming the servers that answer it. The agent owns
-// two, each under a fixed key: the mesh zone (".mesh" by default), and in
-// exit mode "." (every name).
+// rule per namespace, naming the servers that answer it. The agent owns one
+// for the mesh zone (".mesh" by default), one for each extra domain
+// (amendment A39) and in exit mode one for "." (every name).
 // The mapping lives here, apart from the registry, so every platform's
 // tests pin it.
 
@@ -21,14 +23,27 @@ type nrptRule struct {
 	Servers []netip.Addr
 }
 
-// The agent's rule keys under DnsPolicyConfig.
+// The agent's rule keys under DnsPolicyConfig all start with nrptKeyPrefix
+// ("meshctl" and a zero in hex), so it finds, and removes, its own rules
+// and no other: "." under a fixed key, a domain under one its name gives,
+// so a renamed zone or a dropped domain leaves no rule behind.
 const (
-	nrptMeshKey = "{6d657368-6374-6c00-8a2f-417e0c5b0001}"
-	nrptRootKey = "{6d657368-6374-6c00-8a2f-417e0c5b0002}"
+	nrptKeyPrefix = "{6d657368-6374-6c0"
+	nrptRootKey   = "{6d657368-6374-6c00-8a2f-417e0c5b0002}"
 )
 
-// rulesFor is the NRPT form of r: a rule for "." and one for the zone, the
-// routing domains the agent sets. Search domains have no NRPT form; the
+// nrptKey is the rule key of a domain.
+func nrptKey(name string) string {
+	h := sha256.Sum256([]byte(name))
+	return fmt.Sprintf("{6d657368-6374-6c01-%x-%x}", h[:2], h[2:8])
+}
+
+// ownedKey reports whether a key under DnsPolicyConfig is one of the
+// agent's (the registry's key names ignore case).
+func ownedKey(key string) bool { return strings.HasPrefix(strings.ToLower(key), nrptKeyPrefix) }
+
+// rulesFor is the NRPT form of r: a rule for "." and one for each domain,
+// the routing domains the agent sets. Search domains have no NRPT form; the
 // agent never sets one.
 func rulesFor(r Registration) []nrptRule {
 	var out []nrptRule
@@ -38,7 +53,7 @@ func rulesFor(r Registration) []nrptRule {
 		case name == ".":
 			out = append(out, nrptRule{Key: nrptRootKey, Name: ".", Servers: r.DNS})
 		default:
-			out = append(out, nrptRule{Key: nrptMeshKey, Name: "." + name, Servers: r.DNS})
+			out = append(out, nrptRule{Key: nrptKey(name), Name: "." + name, Servers: r.DNS})
 		}
 	}
 	return out

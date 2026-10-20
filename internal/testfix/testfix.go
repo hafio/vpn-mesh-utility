@@ -165,6 +165,32 @@ func SpokeConfig(exit string) proto.NodeConfig {
 	return c
 }
 
+// ContainerSubnet is the first container /24 of the default mesh.
+const ContainerSubnet = "10.77.128.0/24"
+
+// Containers is a node's container network at ContainerSubnet (amendment
+// A37) in mode, proto.ModeHost or proto.ModeContainer.
+func Containers(mode string) *proto.Containers {
+	gateway := "10.77.128.1"
+	if mode == proto.ModeContainer {
+		gateway = "10.77.128.2"
+	}
+	return &proto.Containers{Mode: mode, Subnet: ContainerSubnet, Network: MeshCIDR, Range: "10.77.128.128/25",
+		Bridge: "10.77.128.1", Gateway: gateway}
+}
+
+// ContainerSpokeConfig is the laptop's config in container mode: no exit,
+// no firewall section (the gateway isolates by policy routing), and the
+// container network's forwarding and proxy ARP.
+func ContainerSpokeConfig() proto.NodeConfig {
+	c := SpokeConfig("")
+	c.Exit = nil
+	c.Containers = Containers(proto.ModeContainer)
+	c.Sysctl = []proto.Sysctl{{Key: proto.SysctlProxyARP, Value: "1"}, {Key: proto.SysctlIPForward, Value: "1"}}
+	c.DNS = &proto.DNS{Zone: proto.DefaultZone, Split: true, ForwardFor: []string{ContainerSubnet}}
+	return c
+}
+
 // MeshView is the server's mesh view of the reference topology at Epoch:
 // the servers in sync, the NAS applying v7, the laptop (exit vps-2) silent
 // and the phone idle. Callers may mutate the returned value freely.
@@ -189,4 +215,16 @@ func MeshView() proto.MeshView {
 	}
 	v.Nodes[4].Exit = VPS2.Name
 	return v
+}
+
+// MeshNames are container names as the server publishes them (amendment
+// A38), sorted by name, node and address: the NAS's db, and a web service
+// with two containers on the NAS and one on the laptop.
+func MeshNames() []proto.MeshName {
+	return []proto.MeshName{
+		{Name: "db", Node: NAS.Name, IP: "10.77.128.131"},
+		{Name: "web", Node: Laptop.Name, IP: "10.77.129.130"},
+		{Name: "web", Node: NAS.Name, IP: "10.77.128.129"},
+		{Name: "web", Node: NAS.Name, IP: "10.77.128.130"},
+	}
 }

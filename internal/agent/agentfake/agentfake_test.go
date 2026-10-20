@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hafio/vpn-mesh-utility/internal/agent/containers"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/dns"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/exitmode"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/wg"
@@ -218,6 +219,12 @@ func TestDNS(t *testing.T) {
 	if d.Close(ctx, "wg0"); !d.IsClosed() {
 		t.Error("Close was not recorded")
 	}
+	names := []proto.MeshName{{Name: "web", Node: "nas", IP: "10.77.128.129"}}
+	d.SetNames(names)
+	names[0].Name = "changed"
+	if got := d.Names(); len(got) != 1 || got[0].Name != "web" {
+		t.Errorf("Names = %v, want a copy of what was set", got)
+	}
 }
 
 // Policy answers like the kernel: an add of what is there is EEXIST, a
@@ -272,5 +279,106 @@ func TestPolicyHasKernelSemantics(t *testing.T) {
 	}
 	if err := p.DelRule(rule); err != nil {
 		t.Fatalf("FailOn Routes failed DelRule: %v", err)
+	}
+}
+
+// The container network's fake host answers as the kernel would: an add of
+// what is there and a removal of what is not fail, an interface must exist
+// to hold an address, LinkHolding skips the named interface, EnsureBridge
+// creates once, and Fail/FailOn pick what fails.
+func TestNetHasKernelSemantics(t *testing.T) {
+	n := NewNet()
+	r := containers.Rule{Priority: 1000, Iif: "lo", Table: containers.MainTable}
+	if err := n.AddRule(r); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.AddRule(r); err == nil || !strings.Contains(err.Error(), "file exists") {
+		t.Fatalf("adding a rule twice = %v", err)
+	}
+	if err := n.DelRule(r); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.DelRule(r); err == nil || !strings.Contains(err.Error(), "no such rule") {
+		t.Fatalf("removing a missing rule = %v", err)
+	}
+	n.Install(r)
+	if rules, err := n.Rules(); err != nil || !slices.Equal(rules, []containers.Rule{r}) {
+		t.Fatalf("Rules = %v, %v", rules, err)
+	}
+	if err := n.SetBlackhole(true); err != nil || !n.HasBlackhole() {
+		t.Fatalf("SetBlackhole = %v", err)
+	}
+	if on, err := n.Blackhole(); err != nil || !on {
+		t.Fatalf("Blackhole = %v, %v", on, err)
+	}
+
+	if err := n.AddAddr("eth1", netip.MustParsePrefix("10.77.128.2/16")); err == nil {
+		t.Fatal("an address went to a missing interface")
+	}
+	if _, err := n.Addrs("eth1"); err == nil {
+		t.Fatal("Addrs of a missing interface succeeded")
+	}
+	n.Attach("wg0", netip.MustParsePrefix("10.77.128.9/32"))
+	n.Attach("eth1", netip.MustParsePrefix("10.77.128.128/16"))
+	sub := netip.MustParsePrefix("10.77.128.0/24")
+	if link, err := n.LinkHolding(sub, "wg0"); err != nil || link != "eth1" {
+		t.Fatalf("LinkHolding skipping wg0 = %q, %v", link, err)
+	}
+	if link, err := n.LinkHolding(netip.MustParsePrefix("10.88.0.0/24"), ""); err != nil || link != "" {
+		t.Fatalf("LinkHolding of a subnet nobody holds = %q, %v", link, err)
+	}
+	if err := n.AddAddr("eth1", netip.MustParsePrefix("10.77.128.2/16")); err != nil ||
+		!slices.Equal(n.AddrsOf("eth1"), pfx("10.77.128.128/16", "10.77.128.2/16")) {
+		t.Fatalf("AddAddr = %v; eth1 %v", err, n.AddrsOf("eth1"))
+	}
+	if created, err := n.EnsureBridge("meshctl0"); err != nil || !created {
+		t.Fatalf("EnsureBridge = %v, %v", created, err)
+	}
+	if created, err := n.EnsureBridge("meshctl0"); err != nil || created {
+		t.Fatalf("EnsureBridge again = %v, %v", created, err)
+	}
+	if want := []string{"add rule 1000: iif lo lookup 254", "remove rule 1000: iif lo lookup 254", "blackhole true",
+		"addr eth1 10.77.128.2/16", "bridge meshctl0"}; !slices.Equal(n.Calls, want) {
+		t.Fatalf("Calls = %q", n.Calls)
+	}
+
+	boom := errors.New("operation not permitted")
+	n.Fail = boom
+	for name, err := range map[string]error{
+		"AddRule":      n.AddRule(r),
+		"DelRule":      n.DelRule(r),
+		"SetBlackhole": n.SetBlackhole(false),
+		"AddAddr":      n.AddAddr("eth1", netip.MustParsePrefix("10.77.128.3/16")),
+	} {
+		if !errors.Is(err, boom) {
+			t.Errorf("%s with Fail = %v", name, err)
+		}
+	}
+	if _, err := n.EnsureBridge("br1"); !errors.Is(err, boom) {
+		t.Errorf("EnsureBridge with Fail = %v", err)
+	}
+	if _, err := n.Rules(); err != nil {
+		t.Errorf("Fail alone must leave the queries alone: %v", err)
+	}
+	for _, method := range []string{"Rules", "Blackhole", "LinkHolding", "Addrs"} {
+		n.FailOn = method
+		var err error
+		switch method {
+		case "Rules":
+			_, err = n.Rules()
+		case "Blackhole":
+			_, err = n.Blackhole()
+		case "LinkHolding":
+			_, err = n.LinkHolding(sub, "")
+		case "Addrs":
+			_, err = n.Addrs("eth1")
+		}
+		if !errors.Is(err, boom) {
+			t.Errorf("%s with FailOn = %v", method, err)
+		}
+	}
+	s := &Sysctl{Err: boom}
+	if _, err := s.Apply([]proto.Sysctl{{Key: proto.SysctlIPForward, Value: "1"}}); !errors.Is(err, boom) {
+		t.Errorf("Sysctl with Err = %v", err)
 	}
 }

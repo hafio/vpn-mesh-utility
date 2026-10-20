@@ -51,7 +51,9 @@ meshctl agent run [flags]
 | `--data` | `/var/lib/meshctl` | agent data directory |
 | `--log-level` | `info` | debug, info, warn or error |
 | `--no-firewall` | `false` | leave the host firewall alone (you open udp/51820 and the Swarm ports yourself) |
+| `--runtime-socket` | `auto` | the container runtime's API socket the containers' names are read from (GET only): auto (Docker's, then Podman's), off, or a path |
 | `--socket` |  | local API socket (default: /run/meshctl/agent.sock for the standard data dir, else &lt;data&gt;/agent.sock; \\.\pipe\meshctl-agent on Windows) |
+| `--status-every` | `30s` | how often the agent reports to the server; the server's --hub-down-after must be longer on a server |
 | `--ui-listen` | `127.0.0.1:7443` | the local UI's loopback address, or off; meshctl ui prints a sign-in link |
 | `--wg-backend` | `auto` | WireGuard backend: auto (kernel when the module is there), kernel or userspace (wireguard-go on /dev/net/tun) |
 
@@ -171,6 +173,7 @@ meshctl node add <name> [flags]
 | --- | --- | --- |
 | `--always-on` | `false` | spokes: allocate from the always-on block (NAS) |
 | `--can-exit` | `false` | servers: may be chosen as an internet exit |
+| `--containers` | `false` | host mode: put the node's containers on the mesh too (container mode always does) |
 | `--data` | `/data` | the server's data directory (holds admin.sock) |
 | `--endpoint` |  | servers: public IPv4:port (default: what the agent detects at join) |
 | `--hub` |  | spokes and phones: the server that relays for it (default: the default hub) |
@@ -178,12 +181,13 @@ meshctl node add <name> [flags]
 | `--json` | `false` | print the server's answer as JSON |
 | `--keepalive` | `0` | spokes and phones: PersistentKeepalive seconds (default 25) |
 | `--listen-port` | `0` | servers: WireGuard UDP port (default 51820) |
+| `--mode` | `host` | host (WireGuard on the host) or container (in the agent's container: only its containers are on the mesh) |
 | `--mtu` | `0` | interface MTU (default: the mesh default, 1420) |
 | `--role` |  | server, spoke or phone (required) |
 
 ## meshctl node compose
 
-Print the compose file that runs a spoke's agent in a container (a NAS).
+Print the compose file that runs a node's agent in a container (container mode, or a NAS).
 
 ```
 meshctl node compose <name> [flags]
@@ -192,9 +196,11 @@ meshctl node compose <name> [flags]
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--data` | `/data` | the server's data directory (holds admin.sock) |
-| `--host-dir` | `/volume1/docker/meshctl` | host directory for the agent's keys and cached config, mounted at /data |
+| `--host-dir` |  | host directory for the agent's keys and cached config, mounted at /data (default: /volume1/docker/meshctl for a NAS, a named volume in container mode) |
 | `--json` | `false` | print the server's answer as JSON |
-| `--wg-backend` | `userspace` | WireGuard in the container: userspace (needs /dev/net/tun) or kernel (the host has the wireguard module) |
+| `--no-names` | `false` | container mode: leave out the runtime's socket, so the node's containers get no names on the mesh |
+| `--runtime` |  | container mode: docker (default), podman or swarm (Swarm services attach) |
+| `--wg-backend` |  | WireGuard in the container: auto (container mode's default: the host's module, else /dev/net/tun), userspace (the NAS default; needs /dev/net/tun) or kernel (the host has the wireguard module) |
 
 ## meshctl node disable
 
@@ -235,6 +241,20 @@ meshctl node list [flags]
 | `--data` | `/data` | the server's data directory (holds admin.sock) |
 | `--json` | `false` | print the server's answer as JSON |
 
+## meshctl node network
+
+Print the commands that put a node's containers on the mesh (its mesh network, then a service).
+
+```
+meshctl node network <name> [flags]
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--data` | `/data` | the server's data directory (holds admin.sock) |
+| `--json` | `false` | print the server's answer as JSON |
+| `--runtime` |  | docker (default), podman or swarm (Swarm services attach) |
+
 ## meshctl node phone
 
 Print a new WireGuard profile for a phone (a new key: its previous profile stops working).
@@ -264,7 +284,7 @@ meshctl node rm <name> [flags]
 
 ## meshctl node set
 
-Change a node's endpoint, hub, exit, keepalive or MTU.
+Change a node's endpoint, hub, exit, keepalive, MTU or container network.
 
 ```
 meshctl node set <name> [flags]
@@ -273,6 +293,7 @@ meshctl node set <name> [flags]
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--can-exit` | `false` | servers: may be chosen as an internet exit (--can-exit=false to revoke) |
+| `--containers` | `false` | host mode: put the node's containers on the mesh (--containers=false takes them off) |
 | `--data` | `/data` | the server's data directory (holds admin.sock) |
 | `--endpoint` |  | servers: public IPv4:port, or none to clear it |
 | `--exit` |  | spokes: exit server, or off |
@@ -320,6 +341,7 @@ meshctl server [flags]
 | --- | --- | --- |
 | `--data` | `/data` | data directory: the database and the admin socket |
 | `--dist` |  | directory with the binaries and SHA256SUMS served at /dl/ (default $MESHCTL_DIST_DIR) |
+| `--hub-down-after` | `2m0s` | relay failover: a hub silent this long, with no handshake for half as long again, has its pairs relayed by another hub; 0 turns it off |
 | `--listen` | `:8080` | address for the agent API, health check and downloads |
 | `--log-level` | `info` | debug, info, warn or error |
 | `--trusted-proxies` |  | comma-separated CIDRs of reverse proxies whose X-Forwarded-For is believed (default $MESHCTL_TRUSTED_PROXIES) |

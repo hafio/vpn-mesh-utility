@@ -207,8 +207,9 @@ func (a *api) config(w http.ResponseWriter, r *http.Request) {
 
 // events is the node's SSE stream (spec S6.3). It opens with a retry hint and
 // the node's current version, so a reconnecting agent catches up without
-// polling, then sends one `config` event per change and a comment every
-// KeepAlive so proxies keep the connection open.
+// polling, then sends one `config` event per change, a `mesh` event when the
+// mesh view changed (amendment A38) and a comment every KeepAlive so
+// proxies keep the connection open.
 func (a *api) events(w http.ResponseWriter, r *http.Request) {
 	node, _, err := a.authenticate(w, r)
 	if err != nil {
@@ -217,7 +218,7 @@ func (a *api) events(w http.ResponseWriter, r *http.Request) {
 	}
 	// Subscribe before reading the current state: a change committed in
 	// between is then queued rather than lost.
-	events, done, cancel := a.Hub.Subscribe(node.ID)
+	events, mesh, done, cancel := a.Hub.Subscribe(node.ID)
 	defer cancel()
 	if err := a.DB.Tx(r.Context(), func(tx *store.Tx) error {
 		var err error
@@ -262,6 +263,10 @@ func (a *api) events(w http.ResponseWriter, r *http.Request) {
 			return
 		case ev := <-events:
 			if !sendConfig(ev) {
+				return
+			}
+		case <-mesh:
+			if !send(func() error { return proto.WriteEvent(w, proto.Event{Name: proto.EventMesh, Data: []byte("{}")}) }) {
 				return
 			}
 		case <-ka.C:
@@ -397,7 +402,8 @@ func (a *api) prefs(w http.ResponseWriter, r *http.Request) {
 }
 
 // mesh is the mesh view for the node's local UI (spec S7.6): every node as
-// the dashboard shows it, without keys, endpoints, hostnames or errors.
+// the dashboard shows it, without keys, endpoints, hostnames or errors, and
+// the containers' published names, which every node's resolver answers.
 func (a *api) mesh(w http.ResponseWriter, r *http.Request) {
 	if _, _, err := a.authenticate(w, r); err != nil {
 		a.fail(w, r, err)
@@ -424,7 +430,9 @@ func (a *api) mesh(w http.ResponseWriter, r *http.Request) {
 				Hub: info.Hub, Exit: info.Exit, CanExit: info.CanExit, Health: health, State: state, LastSeen: info.Seen(),
 				ConfigVersion: info.ConfigVersion, AppliedVersion: info.AppliedVersion})
 		}
-		return nil
+		names, err := a.publishedNames(tx)
+		view.Names = names.Published
+		return err
 	})
 	if err != nil {
 		a.fail(w, r, err)

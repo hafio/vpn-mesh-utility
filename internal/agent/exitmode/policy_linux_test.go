@@ -8,6 +8,8 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/vishvananda/netlink"
+
 	"github.com/hafio/vpn-mesh-utility/internal/agent/routes"
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
 )
@@ -33,6 +35,27 @@ func TestKernelShapes(t *testing.T) {
 	}
 	if _, err := toRoute(Route{Family: IPv4, Link: "mce-none0"}); err == nil || !strings.Contains(err.Error(), "mce-none0") {
 		t.Fatalf("a route on a missing interface = %v", err)
+	}
+}
+
+// Exit mode lists only its own rules: the container network's carry
+// protocol 201 too, at other priorities, and must survive exit off.
+func TestOwnsOnlyItsPriorities(t *testing.T) {
+	for _, c := range []struct {
+		priority, protocol int
+		want               bool
+	}{
+		{PrioritySuppress, routes.Protocol, true},
+		{PriorityTunnel, routes.Protocol, true},
+		{1006, routes.Protocol, false},
+		{5203, routes.Protocol, false},
+		{PriorityTunnel, 4, false},
+	} {
+		r := netlink.NewRule()
+		r.Priority, r.Protocol = c.priority, uint8(c.protocol)
+		if got := owned(*r); got != c.want {
+			t.Errorf("priority %d protocol %d: owned = %v, want %v", c.priority, c.protocol, got, c.want)
+		}
 	}
 }
 

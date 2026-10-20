@@ -60,6 +60,10 @@ type Node struct {
 	Hostname          string `yaml:"hostname,omitempty"`
 	WGBackend         string `yaml:"wg_backend,omitempty"`
 	CreatedAt         int64  `yaml:"created_at"`
+	// Mode is empty for host mode; ContainerSubnet is the node's /24 for
+	// containers (amendment A37).
+	Mode            string `yaml:"mode,omitempty"`
+	ContainerSubnet string `yaml:"container_subnet,omitempty"`
 }
 
 // DNSRecord is a custom record pointing at a node (by name) or a fixed IP.
@@ -91,6 +95,7 @@ func FromSnapshot(s store.Snapshot) Document {
 			Hub: names[n.PrimaryHubID], CanExit: n.CanExit, Exit: names[n.ExitVia], Keepalive: n.Keepalive, MTU: n.MTU,
 			Enrolled: n.Enrolled, Disabled: n.Disabled, WGPublicKey: n.WGPubKey, IdentityPublicKey: n.IdentityPubKey,
 			OS: n.OS, Arch: n.Arch, Hostname: n.Hostname, WGBackend: n.WGBackend, CreatedAt: n.CreatedAt,
+			Mode: n.Mode, ContainerSubnet: n.ContainerSubnet,
 		})
 	}
 	sort.Slice(d.Nodes, func(i, j int) bool { return d.Nodes[i].ID < d.Nodes[j].ID })
@@ -195,6 +200,14 @@ func ToSnapshot(d Document) (store.Snapshot, error) {
 			_, err = validate.Hostname(f+".hostname", n.Hostname)
 			bad(err)
 		}
+		if n.Mode != "" {
+			_, err = validate.Enum(f+".mode", n.Mode, proto.ModeHost, proto.ModeContainer)
+			bad(err)
+		}
+		if n.ContainerSubnet != "" {
+			_, err = validate.Prefix4(f+".container_subnet", n.ContainerSubnet)
+			bad(err)
+		}
 		if n.CreatedAt < 0 {
 			bad(fmt.Errorf("%s.created_at: must not be negative", f))
 		}
@@ -216,6 +229,7 @@ func ToSnapshot(d Document) (store.Snapshot, error) {
 			PrimaryHubID: ref(f+".hub", n.Hub), CanExit: n.CanExit, ExitVia: ref(f+".exit", n.Exit), Keepalive: n.Keepalive,
 			MTU: n.MTU, Enrolled: n.Enrolled, Disabled: n.Disabled, WGPubKey: n.WGPublicKey, IdentityPubKey: n.IdentityPublicKey,
 			OS: n.OS, Arch: n.Arch, Hostname: n.Hostname, WGBackend: n.WGBackend, CreatedAt: n.CreatedAt,
+			Mode: n.Mode, ContainerSubnet: n.ContainerSubnet,
 		})
 	}
 
@@ -238,6 +252,10 @@ func ToSnapshot(d Document) (store.Snapshot, error) {
 			}
 		case store.SettingDNSZone:
 			_, err := validate.Zone(f, v)
+			bad(err)
+		case store.SettingDNSExtraDomains:
+			// How they sit with the zone, the plan checks once restored.
+			_, err := validate.Domains(f, "", store.SplitDomains(v))
 			bad(err)
 		case store.SettingDefaultMTU:
 			mtu, err := strconv.Atoi(v)

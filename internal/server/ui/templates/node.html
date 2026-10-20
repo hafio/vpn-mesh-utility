@@ -4,6 +4,12 @@
 <table class="facts">
 <tr><th>Role</th><td>{{.Node.Role}}</td></tr>
 <tr><th>Mesh IP</th><td>{{.Node.MeshIP}}</td></tr>
+{{- if .InContainer}}
+<tr><th>Mode</th><td>container: only its containers are on the mesh</td></tr>
+{{- end}}
+{{- if .Node.ContainerSubnet}}
+<tr><th>Containers</th><td>{{.Node.ContainerSubnet}}</td></tr>
+{{- end}}
 {{- if .IsServer}}
 <tr><th>Endpoint</th><td>{{if .Node.Endpoint}}{{.Node.Endpoint}}{{else}}not known yet{{end}}</td></tr>
 {{- end}}
@@ -48,7 +54,9 @@
 {{- if .IsServer}}
 <label>Endpoint <input name="endpoint" value="{{.Node.Endpoint}}" placeholder="IPv4:port"></label>
 <label>Listen port <input name="listen_port" value="{{.Node.ListenPort}}"></label>
+{{- if not .InContainer}}
 <label><input type="checkbox" name="can_exit"{{if .Node.CanExit}} checked{{end}}> Can be an internet exit</label>
+{{- end}}
 {{- else}}
 <label>Hub <select name="hub">
 <option value="">default</option>
@@ -56,7 +64,7 @@
 <option value="{{.}}"{{if eq . $.Data.Node.Hub}} selected{{end}}>{{.}}</option>
 {{- end}}
 </select></label>
-{{- if not .IsPhone}}
+{{- if not (or .IsPhone .InContainer)}}
 <label>Exit <select name="exit">
 <option value="">off</option>
 {{- range .Exits}}
@@ -67,6 +75,9 @@
 <label>Keepalive <input name="keepalive" value="{{.Node.Keepalive}}"></label>
 {{- end}}
 <label>MTU <input name="mtu" value="{{.Node.MTU}}"></label>
+{{- if not (or .IsPhone .InContainer)}}
+<label><input type="checkbox" name="containers"{{if .Node.ContainerSubnet}} checked{{end}}> Its containers on the mesh too</label>
+{{- end}}
 <button type="submit">Save</button>
 </form>
 {{- if .IsPhone}}
@@ -84,7 +95,41 @@
 <button type="submit">Make a profile</button>
 </form>
 {{- end}}
-{{- if .IsSpoke}}
+{{- with .Networks}}
+
+<h2>Containers on the mesh</h2>
+<p>This node's containers get addresses from {{$.Data.Node.ContainerSubnet}}. On its host, create the mesh network once for its runtime (the agent owns the bridge meshctl0), then attach a service to it.</p>
+{{- range .}}
+<h3>{{.Runtime}}</h3>
+<pre>{{.Text}}</pre>
+{{- end}}
+<h3>A service</h3>
+<pre>{{$.Data.Service}}</pre>
+{{- if $.Data.SwarmService}}
+<h3>A Swarm service (its tasks run on several nodes)</h3>
+<pre>{{$.Data.SwarmService}}</pre>
+{{- end}}
+{{- end}}
+{{- if .InContainer}}
+
+<h2>Run in a container</h2>
+<p>This node is in container mode: its agent runs in its own network namespace, and only the containers on the meshctl-mesh network are on the mesh. The compose file's header has the commands that create that network, the one-time join, and how a service attaches.</p>
+<form method="get" action="/nodes/{{.Node.Name}}/compose" class="grid">
+<label>Runtime <select name="runtime">
+<option value="docker" selected>Docker</option>
+<option value="podman">Podman</option>
+<option value="swarm">Docker Swarm services</option>
+</select></label>
+<label>WireGuard <select name="backend">
+<option value="auto" selected>auto (the host's module, else /dev/net/tun)</option>
+<option value="kernel">kernel (the host has the wireguard module)</option>
+<option value="userspace">userspace (needs /dev/net/tun)</option>
+</select></label>
+<label>Data directory on the host <input name="data" value="" placeholder="a named volume"></label>
+<label><input type="checkbox" name="names" value="off"> No container names (leave out the runtime's socket)</label>
+<button type="submit">Download compose.yml</button>
+</form>
+{{- else if .IsSpoke}}
 
 <h2>Run in a container</h2>
 <p>For a NAS or another Docker host: a compose file for this node's agent. Its header has the one-time join command; then <code>docker compose up -d</code>.</p>

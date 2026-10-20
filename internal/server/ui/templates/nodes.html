@@ -27,6 +27,11 @@
 <label>MTU <input name="mtu" value="{{.MTU}}" placeholder="mesh default"></label>
 <label><input type="checkbox" name="can_exit"{{if .CanExit}} checked{{end}}> Can be an internet exit (servers)</label>
 <label><input type="checkbox" name="always_on"{{if .AlwaysOn}} checked{{end}}> Always-on spoke (NAS)</label>
+<label>Mode (servers, spokes) <select name="mode">
+<option value="host"{{if ne .Mode "container"}} selected{{end}}>host: the whole machine is on the mesh</option>
+<option value="container"{{if eq .Mode "container"}} selected{{end}}>container: only its containers are on the mesh</option>
+</select></label>
+<label><input type="checkbox" name="containers"{{if .Containers}} checked{{end}}> Its containers on the mesh too (host mode)</label>
 {{- end}}
 <label>Hub (spokes, phones) <select name="hub">
 <option value="">default</option>

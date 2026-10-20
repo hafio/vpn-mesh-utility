@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
+	"github.com/hafio/vpn-mesh-utility/internal/proto"
 )
 
 // Node is one row of the nodes table. Optional references and keys use their
@@ -32,6 +34,11 @@ type Node struct {
 	MTU            int
 	Enrolled       bool
 	Disabled       bool
+	// Mode is proto.ModeHost or proto.ModeContainer; ContainerSubnet is the
+	// node's /24 for containers, empty while they are not on the mesh
+	// (amendment A37).
+	Mode            string
+	ContainerSubnet string
 
 	// Written by the reconciler.
 	ConfigHash    string
@@ -44,6 +51,11 @@ type Node struct {
 	ObservedIP     string
 	StatusJSON     string
 
+	// From the relay failover monitor (amendment A40): when it judged this
+	// server down (0: up), and since when it has looked healthy again.
+	DownSince    int64
+	HealthySince int64
+
 	CreatedAt int64
 }
 
@@ -51,7 +63,7 @@ const nodeCols = `id, name, role, os, arch, hostname, wg_backend, agent_version,
 	mesh_ip, wg_pubkey, identity_pubkey, endpoint, listen_port, primary_hub_id,
 	can_exit, exit_via, keepalive, mtu, enrolled, disabled, config_hash,
 	config_version, applied_version, applied_hash, last_seen, observed_ip,
-	status_json, created_at`
+	status_json, created_at, mode, container_subnet, down_since, healthy_since`
 
 type scanner interface {
 	Scan(dest ...any) error
@@ -68,7 +80,7 @@ func scanNode(r scanner) (Node, error) {
 		&n.MeshIP, &wgKey, &idKey, &n.Endpoint, &n.ListenPort, &hub,
 		&canExit, &exitVia, &n.Keepalive, &n.MTU, &enrolled, &disb, &n.ConfigHash,
 		&n.ConfigVersion, &n.AppliedVersion, &n.AppliedHash, &lastSeen, &n.ObservedIP,
-		&n.StatusJSON, &n.CreatedAt)
+		&n.StatusJSON, &n.CreatedAt, &n.Mode, &n.ContainerSubnet, &n.DownSince, &n.HealthySince)
 	if err != nil {
 		return Node{}, err
 	}
@@ -127,14 +139,17 @@ func (t *Tx) NodeByName(name string) (Node, error) {
 // n.CreatedAt. Operational fields start at their defaults.
 func (t *Tx) InsertNode(n *Node) error {
 	n.CreatedAt = t.now.Unix()
+	if n.Mode == "" {
+		n.Mode = proto.ModeHost
+	}
 	res, err := t.exec(`INSERT INTO nodes (name, role, mesh_ip, wg_pubkey, identity_pubkey, endpoint,
 			listen_port, primary_hub_id, can_exit, exit_via, keepalive, mtu, enrolled, disabled,
-			os, arch, hostname, wg_backend, agent_version, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			os, arch, hostname, wg_backend, agent_version, created_at, mode, container_subnet)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		n.Name, n.Role, n.MeshIP, nullStr(n.WGPubKey), nullStr(n.IdentityPubKey), n.Endpoint,
 		n.ListenPort, nullInt(n.PrimaryHubID), boolInt(n.CanExit), nullInt(n.ExitVia), n.Keepalive, n.MTU,
 		boolInt(n.Enrolled), boolInt(n.Disabled),
-		n.OS, n.Arch, n.Hostname, n.WGBackend, n.AgentVersion, n.CreatedAt)
+		n.OS, n.Arch, n.Hostname, n.WGBackend, n.AgentVersion, n.CreatedAt, n.Mode, n.ContainerSubnet)
 	if err != nil {
 		return fmt.Errorf("insert node %q: %w", n.Name, err)
 	}
@@ -152,12 +167,12 @@ func (t *Tx) UpdateNode(n Node) error {
 	res, err := t.exec(`UPDATE nodes SET name = ?, mesh_ip = ?, wg_pubkey = ?, identity_pubkey = ?,
 			endpoint = ?, listen_port = ?, primary_hub_id = ?, can_exit = ?, exit_via = ?,
 			keepalive = ?, mtu = ?, enrolled = ?, disabled = ?, os = ?, arch = ?, hostname = ?,
-			wg_backend = ?, agent_version = ?
+			wg_backend = ?, agent_version = ?, container_subnet = ?
 		WHERE id = ?`,
 		n.Name, n.MeshIP, nullStr(n.WGPubKey), nullStr(n.IdentityPubKey),
 		n.Endpoint, n.ListenPort, nullInt(n.PrimaryHubID), boolInt(n.CanExit), nullInt(n.ExitVia),
 		n.Keepalive, n.MTU, boolInt(n.Enrolled), boolInt(n.Disabled), n.OS, n.Arch, n.Hostname,
-		n.WGBackend, n.AgentVersion, n.ID)
+		n.WGBackend, n.AgentVersion, n.ContainerSubnet, n.ID)
 	if err != nil {
 		return fmt.Errorf("update node %q: %w", n.Name, err)
 	}
@@ -169,6 +184,17 @@ func (t *Tx) SetConfigState(id int64, hash string, version int64) error {
 	res, err := t.exec(`UPDATE nodes SET config_hash = ?, config_version = ? WHERE id = ?`, hash, version, id)
 	if err != nil {
 		return fmt.Errorf("set config state of node %d: %w", id, err)
+	}
+	return mustAffect(res, fmt.Sprintf("node %d", id))
+}
+
+// SetHubState records the relay failover monitor's view of a server
+// (amendment A40): down since (0: up) and healthy again since (0: not).
+// It is operational state, never a config version by itself.
+func (t *Tx) SetHubState(id, downSince, healthySince int64) error {
+	res, err := t.exec(`UPDATE nodes SET down_since = ?, healthy_since = ? WHERE id = ?`, downSince, healthySince, id)
+	if err != nil {
+		return fmt.Errorf("record the failover state of node %d: %w", id, err)
 	}
 	return mustAffect(res, fmt.Sprintf("node %d", id))
 }

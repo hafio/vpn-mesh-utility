@@ -111,7 +111,7 @@ func TestAdminSetDisableEnableRemove(t *testing.T) {
 		t.Fatalf("bad mtu: %d", code)
 	}
 
-	_, done, cancel := h.hub.Subscribe(testfix.VPS3.ID)
+	_, _, done, cancel := h.hub.Subscribe(testfix.VPS3.ID)
 	defer cancel()
 	if code, _ := adminCall(t, h, http.MethodPost, AdminNodes+"/vps-3/disable", nil, &ch); code != 200 || !ch.Node.Disabled {
 		t.Fatalf("disable: %d %+v", code, ch.Node)
@@ -204,10 +204,168 @@ func TestAdminCompose(t *testing.T) {
 		}
 	}
 	dev := NewNodes(Deps{DB: h.db, ServerURL: testURL, Version: "dev"})
-	if _, err := dev.Compose(context.Background(), "nas", "", ""); err == nil {
+	if _, err := dev.Compose(context.Background(), "nas", ComposeOptions{}); err == nil {
 		t.Fatal("a development build rendered a compose file")
 	} else if status, msg := ErrorMessage(err); status != 400 || !strings.Contains(msg, "development build") {
 		t.Fatalf("a development build: %d %s", status, msg)
+	}
+}
+
+// Container networks over the admin API (amendment A37): a container-mode
+// node always gets the lowest free container /24, a host-mode one on
+// request; the refusals name what to do; the compose file follows the
+// node's mode and the runtime.
+func TestAdminContainerMode(t *testing.T) {
+	h := newHarness(t)
+	h.seedServers(t)
+	add := func(req NodeAddRequest) (NodeChange, int, proto.ErrorBody) {
+		var ch NodeChange
+		code, eb := adminCall(t, h, http.MethodPost, AdminNodes, req, &ch)
+		return ch, code, eb
+	}
+	ch, code, eb := add(NodeAddRequest{Name: "box", Role: "spoke", Mode: proto.ModeContainer})
+	if code != 200 || ch.Node.Mode != proto.ModeContainer || ch.Node.ContainerSubnet != testfix.ContainerSubnet {
+		t.Fatalf("container-mode spoke: %d %+v %+v", code, ch.Node, eb)
+	}
+	ch, code, _ = add(NodeAddRequest{Name: "hub4", Role: "server", Mode: proto.ModeContainer, Endpoint: "198.51.100.7:51999"})
+	if code != 200 || ch.Node.ContainerSubnet != "10.77.129.0/24" {
+		t.Fatalf("container-mode server: %d %+v", code, ch.Node)
+	}
+	ch, code, _ = add(NodeAddRequest{Name: "pc", Role: "spoke", Containers: true})
+	if code != 200 || ch.Node.Mode != proto.ModeHost || ch.Node.ContainerSubnet != "10.77.130.0/24" {
+		t.Fatalf("host-mode spoke with containers: %d %+v", code, ch.Node)
+	}
+	for _, c := range []struct {
+		req  NodeAddRequest
+		want string
+	}{
+		{NodeAddRequest{Name: "hub5", Role: "server", Mode: proto.ModeContainer}, "needs an endpoint"},
+		{NodeAddRequest{Name: "hub5", Role: "server", Mode: proto.ModeContainer, Endpoint: "198.51.100.8:51820", CanExit: true}, "cannot be an exit"},
+		{NodeAddRequest{Name: "ph", Role: "phone", Mode: proto.ModeContainer}, "no agent"},
+		{NodeAddRequest{Name: "ph", Role: "phone", Containers: true}, "no agent"},
+		{NodeAddRequest{Name: "odd", Role: "spoke", Mode: "bridge"}, "mode"},
+	} {
+		if _, code, eb := add(c.req); code != 400 || !strings.Contains(eb.Message, c.want) {
+			t.Errorf("%+v = %d %q, want 400 mentioning %q", c.req, code, eb.Message, c.want)
+		}
+	}
+	var d NodeDetail
+	if code, _ := adminCall(t, h, http.MethodGet, AdminNodes+"/box", nil, &d); code != 200 || d.Node.ContainerSubnet != testfix.ContainerSubnet {
+		t.Fatalf("show box: %d %+v", code, d.Node)
+	}
+
+	set := func(name string, req NodeSetRequest) (NodeChange, int, proto.ErrorBody) {
+		var ch NodeChange
+		code, eb := adminCall(t, h, http.MethodPatch, AdminNodes+"/"+name, req, &ch)
+		return ch, code, eb
+	}
+	if _, code, eb := set("box", NodeSetRequest{Containers: ptr(false)}); code != 400 || !strings.Contains(eb.Message, "always on the mesh") {
+		t.Errorf("container mode off: %d %+v", code, eb)
+	}
+	if ch, code, _ := set("pc", NodeSetRequest{Containers: ptr(false)}); code != 200 || ch.Node.ContainerSubnet != "" {
+		t.Errorf("containers off: %d %+v", code, ch.Node)
+	}
+	if ch, code, _ := set("pc", NodeSetRequest{Containers: ptr(true)}); code != 200 || ch.Node.ContainerSubnet != "10.77.130.0/24" {
+		t.Errorf("containers on again: %d %+v", code, ch.Node)
+	}
+	if ch, code, _ := set("pc", NodeSetRequest{Containers: ptr(true)}); code != 200 || ch.Node.ContainerSubnet != "10.77.130.0/24" {
+		t.Errorf("containers on twice keeps the subnet: %d %+v", code, ch.Node)
+	}
+
+	var f ComposeFile
+	if code, eb := adminCall(t, h, http.MethodGet, AdminNodes+"/box/compose", nil, &f); code != 200 || f.Runtime != deploy.RuntimeDocker ||
+		f.Backend != deploy.ContainerAuto || !strings.Contains(f.YAML, "docker network create --internal") ||
+		!strings.Contains(f.YAML, "dns: [10.77.128.2]") || strings.Contains(f.YAML, "ports:") || strings.Contains(f.YAML, "network_mode") ||
+		!strings.Contains(f.YAML, "docker.sock") {
+		t.Fatalf("box compose: %d %+v\n%s", code, eb, f.YAML)
+	}
+	if code, _ := adminCall(t, h, http.MethodGet, AdminNodes+"/box/compose?names=off", nil, &f); code != 200 || strings.Contains(f.YAML, ".sock") {
+		t.Errorf("compose without names: %d\n%s", code, f.YAML)
+	}
+	for runtime, want := range map[string]string{"podman": "podman network create --internal --disable-dns", "swarm": "--scope swarm"} {
+		if code, _ := adminCall(t, h, http.MethodGet, AdminNodes+"/box/compose?runtime="+runtime, nil, &f); code != 200 || !strings.Contains(f.YAML, want) {
+			t.Errorf("%s compose: %d\n%s", runtime, code, f.YAML)
+		}
+	}
+	// A Swarm service resolves through the servers in peer lists (hub4 has
+	// not joined).
+	if code, _ := adminCall(t, h, http.MethodGet, AdminNodes+"/box/compose?runtime=swarm", nil, &f); code != 200 ||
+		!strings.Contains(f.YAML, "dns: [10.77.0.1, 10.77.0.2, 10.77.0.3]") {
+		t.Errorf("the swarm service's resolvers: %d\n%s", code, f.YAML)
+	}
+	if code, _ := adminCall(t, h, http.MethodGet, AdminNodes+"/hub4/compose", nil, &f); code != 200 || !strings.Contains(f.YAML, "51999:51820/udp") {
+		t.Errorf("hub compose publishes the endpoint's port: %d\n%s", code, f.YAML)
+	}
+	// A host-mode spoke (pc) gets the NAS file, which runs with any runtime.
+	for path, want := range map[string]int{
+		"/box/compose?runtime=lxc":    400,
+		"/box/compose?backend=wg":     400,
+		"/pc/compose?runtime=podman":  400,
+		"/box/compose?data=/srv/$x":   400,
+		"/box/compose?data=relative":  400,
+		"/hub4/compose?runtime=swarm": 200,
+	} {
+		if code, eb := adminCall(t, h, http.MethodGet, AdminNodes+path, nil, nil); code != want {
+			t.Errorf("%s = %d %+v, want %d", path, code, eb, want)
+		}
+	}
+	if _, code, _ := set("hub4", NodeSetRequest{Endpoint: ptr("")}); code != 200 {
+		t.Fatalf("clear hub4's endpoint: %d", code)
+	}
+	if code, eb := adminCall(t, h, http.MethodGet, AdminNodes+"/hub4/compose", nil, nil); code != 409 || !strings.Contains(eb.Message, "no endpoint") {
+		t.Errorf("a hub without an endpoint: %d %+v", code, eb)
+	}
+	// The mesh network's commands for its host: container mode as in the
+	// compose header, host mode on the agent's own bridge.
+	var ni NetworkInfo
+	if code, eb := adminCall(t, h, http.MethodGet, AdminNodes+"/pc/network?runtime=podman", nil, &ni); code != 200 || ni.Mode != proto.ModeHost ||
+		ni.Subnet != "10.77.130.0/24" || !strings.Contains(strings.Join(ni.Commands, " "), "-o mode=unmanaged") ||
+		!strings.Contains(strings.Join(ni.Service, " "), "dns: [10.77.130.1]") {
+		t.Fatalf("pc network: %d %+v %+v", code, eb, ni)
+	}
+	if code, _ := adminCall(t, h, http.MethodGet, AdminNodes+"/box/network", nil, &ni); code != 200 || ni.Runtime != deploy.RuntimeDocker ||
+		!strings.Contains(strings.Join(ni.Commands, " "), "docker network create --internal") {
+		t.Fatalf("box network: %d %+v", code, ni)
+	}
+	for path, want := range map[string]int{"/vps-1/network": 409, "/pc/network?runtime=lxc": 400, "/none/network": 404} {
+		if code, eb := adminCall(t, h, http.MethodGet, AdminNodes+path, nil, nil); code != want || eb.Message == "" {
+			t.Errorf("%s = %d %+v, want %d", path, code, eb, want)
+		}
+	}
+	if code, _ := adminCall(t, h, http.MethodGet, AdminNodes+"/Bad_Name/network", nil, nil); code != 400 {
+		t.Errorf("a bad name's network = %d", code)
+	}
+	if _, code, eb := add(NodeAddRequest{Name: "ph2", Role: "phone"}); code != 200 {
+		t.Fatalf("add a phone: %d %+v", code, eb)
+	}
+	if _, code, eb := set("ph2", NodeSetRequest{Containers: ptr(true)}); code != 400 || !strings.Contains(eb.Message, "phone") {
+		t.Errorf("containers on a phone = %d %+v", code, eb)
+	}
+	// deploy repeats these names rather than import proto.
+	if deploy.MeshNetwork != proto.MeshNetwork || deploy.MeshBridge != proto.ContainerBridge {
+		t.Errorf("deploy names %s/%s, proto %s/%s", deploy.MeshNetwork, deploy.MeshBridge, proto.MeshNetwork, proto.ContainerBridge)
+	}
+}
+
+// A mesh too small for container networks refuses them where they are
+// asked for, with what to do.
+func TestContainerNetworksNeedRoom(t *testing.T) {
+	h := newHarness(t)
+	h.seedServers(t)
+	if err := h.st.Tx(context.Background(), func(tx *store.Tx) error { return tx.SetSetting(store.SettingMeshCIDR, "10.77.0.0/22") }); err != nil {
+		t.Fatal(err)
+	}
+	for _, req := range []NodeAddRequest{{Name: "box", Role: "spoke", Mode: proto.ModeContainer}, {Name: "pc", Role: "spoke", Containers: true}} {
+		if code, eb := adminCall(t, h, http.MethodPost, AdminNodes, req, nil); code != 409 || !strings.Contains(eb.Message, "/21 or larger") {
+			t.Errorf("%+v = %d %+v", req, code, eb)
+		}
+	}
+	if code, eb := adminCall(t, h, http.MethodPost, AdminNodes, NodeAddRequest{Name: "pc", Role: "spoke"}, nil); code != 200 {
+		t.Fatalf("add pc: %d %+v", code, eb)
+	}
+	if code, eb := adminCall(t, h, http.MethodPatch, AdminNodes+"/pc", NodeSetRequest{Containers: ptr(true)}, nil); code != 409 ||
+		!strings.Contains(eb.Message, "/21 or larger") {
+		t.Errorf("set --containers in a /22 = %d %+v", code, eb)
 	}
 }
 
@@ -243,10 +401,11 @@ func TestAdminClientOverTheSocket(t *testing.T) {
 	} else if ae, ok := err.(*AdminError); !ok || ae.Code != proto.CodeConflict {
 		t.Fatalf("duplicate Add = %#v", err)
 	}
-	if f, err := c.Compose(ctx, "laptop", "", ""); err != nil || f.Backend != "userspace" {
+	if f, err := c.Compose(ctx, "laptop", ComposeOptions{}); err != nil || f.Backend != "userspace" {
 		t.Fatalf("Compose = %+v, %v", f, err)
 	}
-	if f, err := c.Compose(ctx, "laptop", "kernel", "/srv/meshctl"); err != nil || f.Backend != "kernel" || f.DataDir != "/srv/meshctl" {
+	if f, err := c.Compose(ctx, "laptop", ComposeOptions{Backend: "kernel", DataDir: "/srv/meshctl"}); err != nil ||
+		f.Backend != "kernel" || f.DataDir != "/srv/meshctl" {
 		t.Fatalf("Compose(kernel) = %+v, %v", f, err)
 	}
 	if _, err := c.Add(ctx, NodeAddRequest{Name: "phone", Role: "phone"}); err != nil {

@@ -1,7 +1,10 @@
 {{define "content"}}
 {{- with .Data.View}}
 <p>Every node answers the <code>{{.Zone}}</code> zone on its mesh IP: one name per node, plus the custom records. It forwards other names to {{range $i, $u := .Upstream}}{{if $i}}, {{end}}{{$u}}{{end}} only in exit mode, and on a server for the phones whose hub it is (<a href="/settings">upstream resolvers</a>).</p>
-<p class="hint">Containers on a host do not see split DNS: they use their own resolver, so <code>.{{.Zone}}</code> names do not resolve inside them.</p>
+<p class="hint">A container on a node's mesh network uses that node's agent as its resolver and resolves these names and the containers' (below); any other container uses its own resolver, so <code>.{{.Zone}}</code> names do not resolve inside it.</p>
+{{- if .Domains}}
+<p>Extra domains (<a href="/settings">Settings</a>): {{range $i, $d := .Domains}}{{if $i}}, {{end}}<code>{{$d}}</code>{{end}}. Every node answers the containers' names in them and forwards every other name in them to the upstream resolvers.</p>
+{{- end}}
 <table>
 <thead><tr><th>Name</th><th>Address</th><th>Follows</th><th></th></tr></thead>
 <tbody>
@@ -10,6 +13,21 @@
 {{- end}}
 </tbody>
 </table>
+
+<h2>Container names</h2>
+{{- if .Names}}
+<p>What each node's container runtime calls its containers on the mesh network: compose services, Swarm services, container names, aliases and hostnames. A node's name, a record's and the server's address keep theirs.</p>
+<table>
+<thead><tr><th>Name</th><th>Address</th><th>Node</th><th>From</th><th>Resolves as</th></tr></thead>
+<tbody>
+{{- range .Names}}
+<tr><td>{{.Name}}</td><td>{{.IP}}</td><td>{{.Node}}</td><td>{{.Kind}}</td><td>{{if .Dropped}}not published: {{.Dropped}}{{else}}{{range $i, $n := .Resolves}}{{if $i}}, {{end}}<code>{{$n}}</code>{{end}}{{end}}</td></tr>
+{{- end}}
+</tbody>
+</table>
+{{- else}}
+<p>No container has reported a name yet. A node's containers on its mesh network get their runtime's names (<code>meshctl node compose</code>; not with <code>--no-names</code>).</p>
+{{- end}}
 {{- end}}
 
 <h2>Add a record</h2>

@@ -26,6 +26,13 @@
 //     exit mode or, on a server, for the phones that use it as their
 //     resolver (amendment A12). Servers open 53 to the mesh and the custom
 //     firewall rules in their mesh zone.
+//   - A node whose containers are on the mesh has a /24 of it; every peer
+//     routes that subnet wherever it routes the node's /32, and the node's
+//     resolver forwards for it. In container mode the node's WireGuard is
+//     in the agent container, which is its containers' gateway (policy
+//     routing in its own namespace, no firewall section, never an exit); in
+//     host mode the host routes the subnet on its bridge, which a server's
+//     firewall forwards to (amendment A37).
 package planner
 
 import (
@@ -52,6 +59,9 @@ type Input struct {
 	// Zone is the DNS zone every node serves; empty means
 	// proto.DefaultZone (amendment A36).
 	Zone string
+	// Domains are the extra DNS domains every node resolves (amendment
+	// A39).
+	Domains []string
 	// Records are the custom DNS records, Rules the custom firewall
 	// openings.
 	Records []Record
@@ -94,6 +104,15 @@ type Node struct {
 	MTU        int
 	Enrolled   bool
 	Disabled   bool
+	// Mode is proto.ModeHost (or empty) or proto.ModeContainer; Containers
+	// is the node's /24 for containers, invalid while they are not on the
+	// mesh (amendment A37).
+	Mode       string
+	Containers netip.Prefix
+	// Down marks a server the relay failover monitor judged down
+	// (amendment A40): the pairs it relays go through another hub. It stays
+	// a peer of everyone, so direct traffic resumes when it is back.
+	Down bool
 }
 
 // active nodes are enrolled, enabled and have a key: the only ones that get
@@ -101,6 +120,25 @@ type Node struct {
 func (n Node) active() bool { return n.Enrolled && !n.Disabled && n.WGPubKey != "" }
 
 func (n Node) prefix() string { return netip.PrefixFrom(n.MeshIP, 32).String() }
+
+// allowed is what a peer routes to n: its mesh IP, and its containers'
+// subnet when they are on the mesh.
+func (n Node) allowed() []string {
+	out := []string{n.prefix()}
+	if n.Containers.IsValid() {
+		out = append(out, n.Containers.String())
+	}
+	return out
+}
+
+func (n Node) mode() string {
+	if n.Mode == "" {
+		return proto.ModeHost
+	}
+	return n.Mode
+}
+
+func (n Node) inContainer() bool { return n.Mode == proto.ModeContainer }
 
 // Compute returns the config of every active node, keyed by node id, plus the
 // warnings Check found. It fails (and returns no configs) when Check finds an
@@ -219,18 +257,38 @@ func (p *plan) hub(n Node) (int64, bool) {
 }
 
 // relay is the server that carries traffic between two non-server nodes. It
-// is symmetric: relay(a, b) == relay(b, a).
+// is symmetric: relay(a, b) == relay(b, a). A pair with a phone relays
+// through the phone's hub, which its profile names. Any other pair relays
+// through the lower-id node's hub; when the failover monitor judged that
+// one down (amendment A40), through the other node's hub, else the default
+// hub, else the lowest-id server that is up -- each chosen from the pair
+// and the mesh alone, so both ends agree.
 func (p *plan) relay(a, b Node) (int64, bool) {
 	switch {
 	case a.Role == proto.RolePhone:
 		return p.hub(a)
 	case b.Role == proto.RolePhone:
 		return p.hub(b)
-	case a.ID < b.ID:
-		return p.hub(a)
-	default:
-		return p.hub(b)
 	}
+	if b.ID < a.ID {
+		a, b = b, a
+	}
+	first, ok := p.hub(a)
+	if !ok || !p.byID[first].Down {
+		return first, ok
+	}
+	if other, _ := p.hub(b); !p.byID[other].Down {
+		return other, true
+	}
+	if d := p.in.DefaultHub; d != 0 && p.planned(d) && !p.byID[d].Down {
+		return d, true
+	}
+	for _, s := range p.servers {
+		if !s.Down {
+			return s.ID, true
+		}
+	}
+	return first, true // every server is down: none is better
 }
 
 // relays reports whether server id carries traffic for any pair.
@@ -258,24 +316,35 @@ func (p *plan) server(n Node) proto.NodeConfig {
 		}
 		c.Peers = append(c.Peers, proto.Peer{
 			Name: s.Name, PublicKey: s.WGPubKey, Endpoint: s.Endpoint.String(),
-			AllowedIPs: []string{s.prefix()},
+			AllowedIPs: sortPrefixes(s.allowed()),
 		})
 	}
 	// Spokes and phones are planned only into servers others can reach: an
 	// endpointless server has no spokes pointing at it, so it lists none.
 	if p.planned(n.ID) {
 		for _, o := range p.others {
-			c.Peers = append(c.Peers, proto.Peer{Name: o.Name, PublicKey: o.WGPubKey, AllowedIPs: []string{o.prefix()}})
+			c.Peers = append(c.Peers, proto.Peer{Name: o.Name, PublicKey: o.WGPubKey, AllowedIPs: sortPrefixes(o.allowed())})
 		}
 	}
 	sortPeers(c.Peers)
 
 	relay := p.relays(n.ID)
+	c.Sysctl = p.sysctl(n, relay || n.CanExit, false)
+	c.DNS = p.dns(n, false)
+	c.Containers = p.containers(n)
+	if n.inContainer() {
+		c.Containers.Relay = relay
+		return c
+	}
 	fw := &proto.Firewall{
-		Backend:     "firewalld",
+		Backend:     proto.FirewallFirewalld,
 		Rules:       []proto.FWRule{{Zone: proto.ZonePublic, Proto: "udp", Port: n.ListenPort, Note: "wireguard"}},
 		Relay:       relay,
 		ExitGateway: n.CanExit,
+	}
+	// The containers' bridge forwards to and from wg0 like a relay.
+	if n.Containers.IsValid() {
+		fw.Bridge, fw.Relay = proto.ContainerBridge, true
 	}
 	// Swarm ports only from the other servers (spec S7.5): a compromised spoke
 	// reaches the mesh but never the Swarm control or data plane.
@@ -306,11 +375,68 @@ func (p *plan) server(n Node) proto.NodeConfig {
 	}
 	sortRules(fw.Rules)
 	c.Firewall = fw
-	if relay || n.CanExit {
-		c.Sysctl = []proto.Sysctl{{Key: proto.SysctlIPForward, Value: "1"}}
-	}
-	c.DNS = p.dns(n, false)
 	return c
+}
+
+func (p *plan) containers(n Node) *proto.Containers { return ContainerNetwork(p.in.MeshCIDR, n) }
+
+// ServerIPs are the mesh IPs of the servers in peer lists, by id: the
+// resolvers a Swarm service on the mesh uses, whose tasks run on several
+// nodes.
+func ServerIPs(in Input) []string {
+	var out []string
+	for _, s := range newPlan(in).servers {
+		out = append(out, s.MeshIP.String())
+	}
+	return out
+}
+
+// ContainerNetwork is n's container network in mesh (amendment A37), nil
+// when its containers are not on the mesh: .1 of its subnet is the
+// runtime's bridge, .2 the agent in container mode, the upper half the
+// runtime's range, and the network on the link the whole mesh.
+func ContainerNetwork(mesh netip.Prefix, n Node) *proto.Containers {
+	if !n.Containers.IsValid() {
+		return nil
+	}
+	a := n.Containers.Addr().As4()
+	at := func(host byte) netip.Addr {
+		a[3] = host
+		return netip.AddrFrom4(a)
+	}
+	k := &proto.Containers{Mode: n.mode(), Subnet: n.Containers.String(), Network: mesh.String(),
+		Range: netip.PrefixFrom(at(128), 25).String(), Bridge: at(1).String()}
+	k.Gateway = k.Bridge
+	if n.inContainer() {
+		k.Gateway = at(2).String()
+	}
+	return k
+}
+
+// sysctl is the kernel settings n needs, by key: forwarding when it relays,
+// is an exit or routes containers; proxy ARP for a container-mode gateway
+// (the compose file sets both there, so the agent only checks them);
+// src_valid_mark in exit mode. A host-mode bridge's own settings are the
+// agent's containers step, which runs once the bridge exists.
+func (p *plan) sysctl(n Node, forward, exitMode bool) []proto.Sysctl {
+	on := map[string]bool{}
+	if forward || n.Containers.IsValid() {
+		on[proto.SysctlIPForward] = true
+	}
+	if n.Containers.IsValid() && n.inContainer() {
+		on[proto.SysctlProxyARP] = true
+	}
+	if exitMode {
+		on[proto.SysctlSrcValidMark] = true
+	}
+	var out []proto.Sysctl
+	for _, k := range proto.SysctlKeys() {
+		if on[k] {
+			out = append(out, proto.Sysctl{Key: k, Value: "1"})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	return out
 }
 
 // ruleNote says where a custom rule comes from, for the firewall page.
@@ -331,24 +457,36 @@ func (in Input) ZoneName() string {
 
 // dns is the resolver config of a server or spoke: the whole zone, and
 // forwarding of other names in exit mode (all of the node's lookups go
-// through the tunnel) or, on a server, for the phones whose hub it is (their
-// profile names it as their resolver).
+// through the tunnel), for the containers of every container network (a
+// Swarm service's tasks on several nodes share one resolver list, so any
+// node's resolver serves them), and, on a server, for the phones whose hub
+// it is (their profile names it as their resolver).
 func (p *plan) dns(n Node, exitOn bool) *proto.DNS {
 	d := &proto.DNS{Zone: p.in.ZoneName(), Records: slices.Clone(p.records), Split: !exitOn}
+	if len(p.in.Domains) > 0 {
+		d.Domains = slices.Sorted(slices.Values(p.in.Domains))
+	}
 	for _, u := range p.in.Upstream {
 		d.Upstream = append(d.Upstream, u.String())
 	}
+	var forward []string
+	for _, o := range p.nodes {
+		if o.active() && o.Containers.IsValid() {
+			forward = append(forward, o.Containers.String())
+		}
+	}
 	if n.Role == proto.RoleServer {
-		var phones []string
 		for _, o := range p.others {
 			if o.Role != proto.RolePhone {
 				continue
 			}
 			if hub, ok := p.hub(o); ok && hub == n.ID {
-				phones = append(phones, o.prefix())
+				forward = append(forward, o.prefix())
 			}
 		}
-		d.ForwardFor = sortPrefixes(phones)
+	}
+	if len(forward) > 0 {
+		d.ForwardFor = sortPrefixes(forward)
 	}
 	return d
 }
@@ -361,16 +499,18 @@ func (p *plan) spoke(n Node) proto.NodeConfig {
 	}
 	exitOn := false
 	for _, s := range p.servers {
-		allowed := []string{s.prefix()}
+		allowed := s.allowed()
 		for _, o := range p.others {
 			if o.ID == n.ID {
 				continue
 			}
 			if r, ok := p.relay(n, o); ok && r == s.ID {
-				allowed = append(allowed, o.prefix())
+				allowed = append(allowed, o.allowed()...)
 			}
 		}
-		if n.ExitVia == s.ID && s.CanExit {
+		// Only containers are on the mesh in container mode: the host's own
+		// traffic has no tunnel to take, so there is no exit (Check).
+		if n.ExitVia == s.ID && s.CanExit && !n.inContainer() {
 			allowed = append(allowed, "0.0.0.0/0")
 			exitOn = true
 		}
@@ -380,17 +520,17 @@ func (p *plan) spoke(n Node) proto.NodeConfig {
 		})
 	}
 	sortPeers(c.Peers)
-	if len(p.exits) > 0 || exitOn {
+	if (len(p.exits) > 0 || exitOn) && !n.inContainer() {
 		c.Exit = &proto.Exit{Choices: append([]string(nil), p.exits...)}
 		if exitOn {
 			c.Exit.Via = p.byID[n.ExitVia].Name
 		}
 	}
-	if exitOn {
-		// wg-quick's companion setting for fwmark policy routing.
-		c.Sysctl = []proto.Sysctl{{Key: proto.SysctlSrcValidMark, Value: "1"}}
-	}
+	// src_valid_mark is wg-quick's companion setting for fwmark policy
+	// routing in exit mode.
+	c.Sysctl = p.sysctl(n, false, exitOn)
 	c.DNS = p.dns(n, exitOn)
+	c.Containers = p.containers(n)
 	return c
 }
 
@@ -407,7 +547,7 @@ func (p *plan) phone(n Node) proto.NodeConfig {
 	}
 	hub, _ := p.hub(n)
 	for _, s := range p.servers {
-		allowed := []string{s.prefix()}
+		allowed := sortPrefixes(s.allowed())
 		if s.ID == hub {
 			allowed = []string{p.in.MeshCIDR.String()}
 		}

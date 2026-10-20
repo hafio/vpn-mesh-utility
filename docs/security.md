@@ -132,6 +132,75 @@ so compose never interpolates it, and the header comment cannot be broken
 (`TestNASRendererHoldsItsStructure`). The file carries no secret: the join token is typed into
 the one-time join command.
 
+## Container-mode agent
+
+A container-mode node (amendment A37) runs the agent from a compose file the server renders
+(`deploy/container.go`) from a typed value, like the NAS's. The agent lives in its own network
+namespace: its capabilities act there only, and the host, its addresses and its LAN are not on
+the mesh. `TestContainerComposePosture` pins every key and value and forbids every other
+widening token, including the host network:
+
+| Setting | Value | Why |
+| --- | --- | --- |
+| user | `0:0` | as the NAS: capabilities do not survive `no-new-privileges` for another user |
+| privileged | `false` | |
+| capabilities | `cap_drop: [ALL]`, `cap_add: [NET_ADMIN, NET_BIND_SERVICE]` | wg0, its routes and the gateway's policy rules, in the agent's namespace; the resolver on :53 |
+| privilege escalation | `no-new-privileges=true` | |
+| network | its own namespace on two networks: an egress network and the external `meshctl-mesh` | the runtime NATs its WireGuard UDP; containers attach to the mesh network |
+| sysctls | `net.ipv4.ip_forward=1`, `net.ipv4.conf.all.proxy_arp=1` | the gateway forwards and answers ARP for mesh addresses; both are per-namespace |
+| devices | `/dev/net/tun` unless the kernel backend | wireguard-go when the host has no module |
+| ports | one UDP port, on a hub only | the node's endpoint; nothing else is published |
+| root file system | read-only; `/tmp` is a 16 MiB tmpfs | |
+| storage | a named volume, or the chosen host directory, at `/data` | keys and the cached config |
+| runtime socket | the host's Docker (or rootful Podman) API socket at `/var/run/docker.sock`, `:ro`; absent with `--no-names` | the containers' names (amendment A38, below) |
+| limits | 256 MiB memory, 256 pids | |
+
+The mesh network is internal (Podman: without its DNS), with the whole mesh on the link and the
+node's upper /25 handed out; the bridge address .1 is the host's. What may cross the gateway is
+its policy routing, in its own namespace (`internal/agent/containers`): forwarded traffic from
+wg0 reaches only the node's subnet and never the bridge address, from the mesh side only the
+subnet reaches the mesh, and everything else forwarded is blackholed -- so the host reaches no
+mesh address (the gateway does not even answer its ARP), no mesh peer reaches the host or the
+gateway's egress network, and a peer that routes a foreign address to the gateway gets nowhere
+(the M6 trial's R0-R7, and `TestContainerNetworks` in e2e).
+
+**Host mode with containers.** The host is on the mesh and routes the subnet on the bridge
+`meshctl0` the agent owns. A runtime that lets anyone who routes to the host reach its containers
+(Docker's `nat-unprotected`, which the mesh needs so its peers reach unpublished ports) must not
+open them to the host's LAN: four policy rules let only wg0, the bridge and the host itself reach
+the subnet, and blackhole it from every other interface (the trial's G1-G5; e2e's LAN host). One
+consequence: a port published on the host for a container on the mesh network is not reachable
+through that network from outside; publish it on the container's other network. Every value written into the file passes
+`internal/validate` (`TestContainerComposeRefusesHostileValues`), and below the validators the
+renderer holds its structure (`TestContainerRendererHoldsItsStructure`).
+
+**The runtime socket** (amendment A38) is the widest token in the file: whoever can talk to it
+controls the runtime, and so the host -- `:ro` on the mount does not limit the API, it only says
+what the agent does with it. The agent sends GET requests only (`internal/agent/names`): the
+containers on `meshctl-mesh`, each one's details, the event stream. Every answer is size-capped
+(8 MiB for the list, 1 MiB per container, 64 KiB per event), a container ID must be 64 hex
+characters before it becomes part of a path, and every name passes `validate.Hostname` or is left
+out. A compromised agent container could use the socket: `meshctl node compose --no-names`
+leaves it out, and a socket proxy that allows only GET on `/containers` and `/events` is a
+drop-in where that matters.
+A host-mode agent already runs as root on the host and opens the socket it finds
+(`--runtime-socket off` stops it).
+
+What a node reports is checked by the server before anyone resolves it: a name whose address is
+not one of the reporting node's containers' (inside its /24, not .0, .1, .2 or .255) is not kept,
+so a node cannot point a name at another node, its gateway or the host; a name in the zone must be
+one label (any other name must lie inside an extra domain, below), and a node's name, a custom record's and the host of the server's URL are never given
+to a container, so a container cannot take over `vps-1.<zone>` or the server's address. Names
+are not secrets: the mesh view carries them to every node, as DNS would.
+
+**Extra domains** (amendment A39) are domains the mesh takes over: the hosts send them to the
+mesh resolver, which answers the containers' names in them and forwards every other name in them
+to the mesh's upstream resolvers, whoever asks -- only those domains, so the resolver is still
+not an open forwarder. A container may then claim any name in such a domain, which is why the
+operator chooses them: at most 8, never the zone or around it, no .arpa but home.arpa, and never
+the domain of the server's own address (`CheckServerDomains`), which every agent must resolve
+without the mesh.
+
 ## The host firewall
 
 On servers the agent creates firewalld's `mesh` zone (target DROP) bound to `wg0`, opens the
@@ -153,10 +222,12 @@ built from constants only (`TestForwardingPolicies` pins it).
 
 ## DNS
 
-Each node's resolver (`internal/agent/dns`) listens on its mesh IP only, never on a public or LAN
-address, and answers the mesh zone from the config the server signed off. It is not an open
-resolver: other names are REFUSED, except in exit mode (the node's own lookups, which then go
-through the tunnel) and, on a server, from the /32 of a phone whose hub it is (`forward_for`).
+Each node's resolver (`internal/agent/dns`) listens on its mesh IP (and its containers' gateway)
+only, never on a public or LAN address, and answers the mesh zone from the config the server
+signed off. It is not an open resolver: other names are REFUSED, except in exit mode (the node's
+own lookups, which then go through the tunnel), from the containers of any container network on
+the mesh, and, on a server, from the /32 of a phone whose hub it is (`forward_for`) -- all of
+them mesh members.
 Servers open 53 only in the mesh zone. Forwarding goes to the operator's upstream resolvers,
 validated as IPv4 addresses outside the mesh.
 
@@ -183,7 +254,8 @@ Any joined, enabled node can read the mesh view (`GET /api/v1/agent/mesh`, amend
 node's name, role, mesh IP, hub, exit, dashboard state, last seen and versions -- most of which
 its own config and the DNS zone show already. It carries no key, endpoint, hostname, observed
 address or error text, so a compromised laptop learns from it neither another node's public
-address nor what failed where. The agent validates the view before it caches it in `mesh.json`
+address nor what failed where. It does carry the containers' published names and mesh addresses
+(amendment A38), which every node's resolver answers anyway. The agent validates the view before it caches it in `mesh.json`
 (0600) or serves it on the local socket. `meshctl logs` reads the agent's in-memory log over the
 same socket (root or group `meshctl`); the log never carries a key or a token, so it shows what
 the journal does.
@@ -232,10 +304,12 @@ machine other people log in to, run the agent with `--ui-listen off`.
   `ui` need an elevated prompt. A second agent cannot take the pipe while one listens.
 - **The log file** is capped at 10 MiB plus one older copy and carries what the journal carries
   on Linux: no key, no token.
-- **Split DNS** is two NRPT rules under the agent's own fixed keys in
-  `HKLM\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters\DnsPolicyConfig`: `.mesh`, and
-  in exit mode `.` (every name), both to the mesh IP. The agent writes, reads and removes only
-  those two keys, and takes them back on `meshctl dns off` and when it stops.
+- **Split DNS** is NRPT rules under the agent's own keys in
+  `HKLM\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters\DnsPolicyConfig`: `.mesh`, one per
+  extra domain (amendment A39), and in exit mode `.` (every name), all to the mesh IP. Every key
+  starts with the agent's prefix (`{6d657368-6374-6c0`, "meshctl" in hex), a domain's derived from
+  its name; the agent writes, reads and removes only keys with that prefix, and takes them back on
+  `meshctl dns off` and when it stops.
 - **Exit mode** routes 0.0.0.0/1 and 128.0.0.0/1 into the tunnel, and ::/1 and 8000::/1 too,
   with no IPv6 peer behind them, so IPv6 cannot leak around the exit (amendment A11). The
   tunnel's own packets are bound to the interface of the host's default route, so they never

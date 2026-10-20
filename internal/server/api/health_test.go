@@ -35,6 +35,12 @@ func TestDashboardHealth(t *testing.T) {
 			t.Errorf("Health(%+v) = %s %q, want %s", c.n, got, label, c.want)
 		}
 	}
+	// A hub relay failover judged down (amendment A40) says so, and since
+	// when, even while its heartbeat is back.
+	down := NodeInfo{Role: "server", Enrolled: true, LastSeen: seen(time.Second), InSync: true, DownSince: seen(time.Hour)}
+	if got, label := Health(down, now); got != proto.HealthBad || label != "down since 2026-10-12 07:00 UTC; its pairs relay through other hubs" {
+		t.Errorf("a down hub = %s %q", got, label)
+	}
 	// A phone is heard of through its servers' handshakes, anything else by
 	// its heartbeat.
 	if (NodeInfo{Role: "phone", LastSeen: 1, LastHandshake: 2}).Seen() != 2 || (NodeInfo{Role: "spoke", LastSeen: 1, LastHandshake: 2}).Seen() != 1 {

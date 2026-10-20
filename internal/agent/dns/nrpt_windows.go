@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
@@ -16,9 +17,6 @@ const nrptBase = `SYSTEM\CurrentControlSet\Services\Dnscache\Parameters\DnsPolic
 
 // nrptGenericServers is ConfigOptions' flag for "send to GenericDNSServers".
 const nrptGenericServers = 0x8
-
-// nrptKeys are every key the agent writes.
-var nrptKeys = []string{nrptMeshKey, nrptRootKey}
 
 // nrpt registers the resolver through NRPT rules; the interface name only
 // labels errors, since the rules are the host's, not the adapter's.
@@ -34,9 +32,36 @@ var flushCache = windows.NewLazySystemDLL("dnsapi.dll").NewProc("DnsFlushResolve
 // either way.
 func flush() { _, _, _ = flushCache.Call() }
 
+// ownedKeys lists the agent's rules under nrptBase.
+func ownedKeys() ([]string, error) {
+	base, err := registry.OpenKey(registry.LOCAL_MACHINE, nrptBase, registry.ENUMERATE_SUB_KEYS)
+	if errors.Is(err, registry.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer base.Close() // read-only
+	names, err := base.ReadSubKeyNames(-1)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, n := range names {
+		if ownedKey(n) {
+			out = append(out, n)
+		}
+	}
+	return out, nil
+}
+
 func (nrpt) Get(_ context.Context, iface string) (Registration, error) {
+	keys, err := ownedKeys()
+	if err != nil {
+		return Registration{}, fmt.Errorf("list the NRPT rules for %s: %w", iface, err)
+	}
 	var rules []nrptRule
-	for _, key := range nrptKeys {
+	for _, key := range keys {
 		k, err := registry.OpenKey(registry.LOCAL_MACHINE, nrptBase+`\`+key, registry.QUERY_VALUE)
 		if errors.Is(err, registry.ErrNotExist) {
 			continue
@@ -59,7 +84,7 @@ func (nrpt) Set(_ context.Context, iface string, r Registration) error {
 	want := rulesFor(r)
 	keep := map[string]bool{}
 	for _, rule := range want {
-		keep[rule.Key] = true
+		keep[strings.ToLower(rule.Key)] = true
 		k, _, err := registry.CreateKey(registry.LOCAL_MACHINE, nrptBase+`\`+rule.Key, registry.SET_VALUE)
 		if err != nil {
 			return fmt.Errorf("write NRPT rule %s for %s: %w (run from an elevated prompt or the service)", rule.Name, iface, err)
@@ -76,8 +101,12 @@ func (nrpt) Set(_ context.Context, iface string, r Registration) error {
 			return fmt.Errorf("write NRPT rule %s for %s: %w", rule.Name, iface, err)
 		}
 	}
-	for _, key := range nrptKeys {
-		if !keep[key] {
+	keys, err := ownedKeys()
+	if err != nil {
+		return fmt.Errorf("list the NRPT rules for %s: %w", iface, err)
+	}
+	for _, key := range keys {
+		if !keep[strings.ToLower(key)] {
 			if err := deleteRule(key); err != nil {
 				return fmt.Errorf("remove NRPT rule %s for %s: %w", key, iface, err)
 			}
@@ -88,7 +117,11 @@ func (nrpt) Set(_ context.Context, iface string, r Registration) error {
 }
 
 func (nrpt) Revert(_ context.Context, iface string) error {
-	for _, key := range nrptKeys {
+	keys, err := ownedKeys()
+	if err != nil {
+		return fmt.Errorf("list the NRPT rules for %s: %w", iface, err)
+	}
+	for _, key := range keys {
 		if err := deleteRule(key); err != nil {
 			return fmt.Errorf("remove NRPT rule %s for %s: %w", key, iface, err)
 		}

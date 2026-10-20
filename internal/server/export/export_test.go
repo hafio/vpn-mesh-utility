@@ -12,10 +12,10 @@ import (
 func snapshot() store.Snapshot {
 	return store.Snapshot{
 		Format:   store.SnapshotFormat,
-		Settings: map[string]string{store.SettingMeshCIDR: testfix.MeshCIDR, store.SettingDefaultMTU: "1420"},
+		Settings: map[string]string{store.SettingMeshCIDR: testfix.MeshCIDR, store.SettingDefaultMTU: "1420", store.SettingDNSExtraDomains: "example.lan,home.arpa"},
 		Nodes: []store.SnapNode{
 			{ID: 4, Name: "nas", Role: "spoke", MeshIP: testfix.NAS.MeshIP, ListenPort: 51820, PrimaryHubID: 1, Keepalive: 25, MTU: 1420,
-				Enrolled: true, WGPubKey: testfix.WGKey(4)},
+				Enrolled: true, WGPubKey: testfix.WGKey(4), Mode: "container", ContainerSubnet: testfix.ContainerSubnet},
 			{ID: 1, Name: "vps-1", Role: "server", MeshIP: testfix.VPS1.MeshIP, Endpoint: testfix.VPS1.Endpoint, ListenPort: 51820,
 				CanExit: true, Keepalive: 25, MTU: 1420, Enrolled: true, WGPubKey: testfix.WGKey(1), IdentityPubKey: testfix.IdentityKeyB64(1)},
 		},
@@ -40,7 +40,8 @@ func TestExportIsDeterministicAndByName(t *testing.T) {
 		t.Fatal("two exports of the same state differ")
 	}
 	out := a.String()
-	for _, want := range []string{"format: meshctl-export/1", "hub: vps-1", "can_exit: true", "source_cidr: 10.77.1.0/24"} {
+	for _, want := range []string{"format: meshctl-export/1", "hub: vps-1", "can_exit: true", "source_cidr: 10.77.1.0/24",
+		"mode: container", "container_subnet: " + testfix.ContainerSubnet} {
 		if !strings.Contains(out, want) {
 			t.Errorf("export lacks %q:\n%s", want, out)
 		}
@@ -80,7 +81,9 @@ func TestToSnapshotRoundTrips(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(got.Nodes) != 2 || got.Nodes[1].PrimaryHubID != 1 || got.DNS[0].NodeID != 4 || got.Firewall[0].NodeID != 1 ||
-		got.Settings[store.SettingMeshCIDR] != testfix.MeshCIDR {
+		got.Settings[store.SettingMeshCIDR] != testfix.MeshCIDR || got.Nodes[1].Mode != "container" ||
+		got.Settings[store.SettingDNSExtraDomains] != "example.lan,home.arpa" ||
+		got.Nodes[1].ContainerSubnet != testfix.ContainerSubnet || got.Nodes[0].Mode != "" {
 		t.Fatalf("ToSnapshot = %+v", got)
 	}
 }
@@ -98,11 +101,14 @@ func TestToSnapshotRefusesHostileDocuments(t *testing.T) {
 		"short key":               func(d *Document) { d.Nodes[0].WGPublicKey = "abc" },
 		"unknown os":              func(d *Document) { d.Nodes[0].OS = "plan9" },
 		"bad hostname":            func(d *Document) { d.Nodes[0].Hostname = "a b" },
+		"unknown mode":            func(d *Document) { d.Nodes[1].Mode = "bridge" },
+		"bad container subnet":    func(d *Document) { d.Nodes[1].ContainerSubnet = "10.77.128.0/24\nrole: server" },
 		"hub that does not exist": func(d *Document) { d.Nodes[1].Hub = "ghost" },
 		"unknown setting":         func(d *Document) { d.Settings["server_url"] = "https://evil.example" },
 		"bad mesh cidr":           func(d *Document) { d.Settings[store.SettingMeshCIDR] = "10.77.0.1/16" },
 		"bad upstream":            func(d *Document) { d.Settings[store.SettingUpstreamDNS] = "1.1.1.1,dns.example" },
 		"default hub not a node":  func(d *Document) { d.Settings[store.SettingDefaultHub] = "99" },
+		"bad extra domain":        func(d *Document) { d.Settings[store.SettingDNSExtraDomains] = "lan,10.in-addr.arpa" },
 		"record with both":        func(d *Document) { d.DNS[0].IP = "10.77.0.9" },
 		"record name injection":   func(d *Document) { d.DNS[0].Name = "a;b" },
 		"rule with bad source":    func(d *Document) { d.Firewall[0].Source = `10.0.0.0/8" accept` },

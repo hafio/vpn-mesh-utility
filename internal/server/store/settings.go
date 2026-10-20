@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // Setting keys (spec S8.2).
@@ -15,16 +16,32 @@ const (
 	SettingServerURL   = "server_url"
 	// SettingDNSZone is the zone every node serves (amendment A36).
 	SettingDNSZone = "dns_zone"
+	// SettingDNSExtraDomains are the extra domains every node resolves
+	// (amendment A39), comma separated.
+	SettingDNSExtraDomains = "dns_extra_domains"
 )
 
 // DesiredSettings are the settings that shape computed configs. They are
 // part of every snapshot; deployment settings such as server_url are not, so
 // a rollback never moves the server.
-var DesiredSettings = []string{SettingMeshCIDR, SettingUpstreamDNS, SettingDefaultMTU, SettingDefaultHub, SettingDNSZone}
+var DesiredSettings = []string{SettingMeshCIDR, SettingUpstreamDNS, SettingDefaultMTU, SettingDefaultHub, SettingDNSZone,
+	SettingDNSExtraDomains}
 
 // settingDefaults are what a setting held before it existed: restoring a
 // snapshot taken then puts the default back. "mesh" is proto.DefaultZone.
-var settingDefaults = map[string]string{SettingDNSZone: "mesh"}
+var settingDefaults = map[string]string{SettingDNSZone: "mesh", SettingDNSExtraDomains: ""}
+
+// SplitDomains reads SettingDNSExtraDomains: the comma-separated domains,
+// none when it is empty.
+func SplitDomains(s string) []string {
+	var out []string
+	for _, d := range strings.Split(s, ",") {
+		if d = strings.TrimSpace(d); d != "" {
+			out = append(out, d)
+		}
+	}
+	return out
+}
 
 // Settings returns every setting.
 func (t *Tx) Settings() (map[string]string, error) {

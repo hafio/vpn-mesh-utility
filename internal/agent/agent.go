@@ -10,8 +10,12 @@
 // after the steps that remember the host look again, so a change made
 // underneath the agent (a firewall rule removed, wg0 moved to another zone,
 // a route deleted) is put back. The mesh view for the local UI is fetched
-// at start, every 5 minutes and when asked for, and cached in mesh.json so
-// it stays readable while the server is down.
+// at start, every 5 minutes, when the server says it changed, after every
+// new config and when asked for, and cached in mesh.json so it stays
+// readable while the server is down; the containers' names in it are what
+// the resolver answers (amendment A38). Where the containers are on the
+// mesh, the agent reports what the container runtime calls them
+// (names.go).
 package agent
 
 import (
@@ -33,12 +37,14 @@ import (
 
 	"github.com/hafio/vpn-mesh-utility/internal/agent/apply"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/client"
+	"github.com/hafio/vpn-mesh-utility/internal/agent/containers"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/dns"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/execrun"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/exitmode"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/firewall"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/localapi"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/localui"
+	"github.com/hafio/vpn-mesh-utility/internal/agent/names"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/routes"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/state"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/sysctl"
@@ -64,6 +70,9 @@ const (
 	defaultReassert = 5 * time.Minute
 	// defaultMeshEvery is how often the cached mesh view is refreshed.
 	defaultMeshEvery = 5 * time.Minute
+	// defaultNamesSettle is how long the containers' names wait after a
+	// change, so a stack coming up is one report, not one per container.
+	defaultNamesSettle = time.Second
 	// meshFresh is how long a mesh view is shown before the server is
 	// asked again; meshTimeout bounds asking, so a server that is down
 	// costs the local UI a few seconds, not the client's 30.
@@ -72,7 +81,7 @@ const (
 )
 
 // Deps configure Run. The host seams (Host, Routes, Exit, Sysctl, Firewall,
-// DNS, Transport) default to the real thing; tests replace them.
+// DNS, Containers, Transport) default to the real thing; tests replace them.
 type Deps struct {
 	DataDir string
 	// Socket is the local API socket.
@@ -92,14 +101,21 @@ type Deps struct {
 	// to), served to `meshctl logs`; nil serves none.
 	Logs localapi.Logs
 	Now  func() time.Time
+	// RuntimeSocket is the container runtime's API socket, read for the
+	// containers' names (amendment A38): RuntimeAuto (or empty) looks in
+	// the usual places, RuntimeOff reads none.
+	RuntimeSocket string
 
-	Host      wg.Host
-	Routes    routes.Table
-	Exit      exitmode.Policy
-	Sysctl    apply.Sysctls
-	Firewall  apply.Firewall
-	DNS       apply.DNS
-	Transport http.RoundTripper
+	Host       wg.Host
+	Routes     routes.Table
+	Exit       exitmode.Policy
+	Sysctl     apply.Sysctls
+	Firewall   apply.Firewall
+	DNS        apply.DNS
+	Containers containers.Net
+	Transport  http.RoundTripper
+	// Runtime replaces the container runtime RuntimeSocket names.
+	Runtime names.Source
 
 	PollEvery   time.Duration
 	StatusEvery time.Duration
@@ -114,6 +130,9 @@ type Deps struct {
 	// MeshEvery is how often the mesh view is refreshed; zero means 5
 	// minutes.
 	MeshEvery time.Duration
+	// NamesSettle is how long the names wait for the runtime to settle
+	// after a change; zero means 1 s.
+	NamesSettle time.Duration
 }
 
 func (d *Deps) defaults() {
@@ -150,6 +169,9 @@ func (d *Deps) defaults() {
 	if d.MeshEvery <= 0 {
 		d.MeshEvery = defaultMeshEvery
 	}
+	if d.NamesSettle <= 0 {
+		d.NamesSettle = defaultNamesSettle
+	}
 }
 
 // runner is one running agent.
@@ -165,6 +187,9 @@ type runner struct {
 
 	syncKick   chan struct{}
 	statusKick chan struct{}
+	// meshKick asks for the mesh view, namesKick for the containers' names.
+	meshKick  chan struct{}
+	namesKick chan struct{}
 
 	// cfgMu orders the config transitions -- apply, confirm, rollback -- and
 	// the files that record them.
@@ -189,7 +214,8 @@ type runner struct {
 	rollback *proto.Rollback
 
 	// meshMu guards the mesh view and serialises asking for it;
-	// meshStale is set by a new config, which means the mesh changed.
+	// meshStale is set by a new config, which means the mesh changed, and
+	// cleared by every fetch that starts after it.
 	meshMu    sync.Mutex
 	mesh      proto.LocalMesh
 	meshErr   string
@@ -239,6 +265,9 @@ func Run(ctx context.Context, d Deps) error {
 	if d.DNS == nil {
 		d.DNS = dns.New(dns.NewRegistrar(), d.Log)
 	}
+	if d.Containers == nil {
+		d.Containers = containers.NewNet()
+	}
 	local, err := dir.Local()
 	if err != nil {
 		d.Log.Warn("ignoring the node's own settings; DNS stays on", "err", err)
@@ -251,13 +280,16 @@ func Run(ctx context.Context, d Deps) error {
 		d: d, dir: dir, enr: enr, cl: cl, backend: backend,
 		log:      d.Log.With("node", enr.Name),
 		syncKick: make(chan struct{}, 1), statusKick: make(chan struct{}, 1),
+		meshKick: make(chan struct{}, 1), namesKick: make(chan struct{}, 1),
 		engine: apply.New(apply.Deps{Host: host, Routes: d.Routes, Exit: d.Exit, Sysctl: d.Sysctl, Firewall: d.Firewall,
-			DNS: d.DNS, Iface: Interface, Key: wg.Key(keys.WG), Log: d.Log}),
+			DNS: d.DNS, Containers: d.Containers, Iface: Interface, Key: wg.Key(keys.WG), Log: d.Log}),
 	}
 	r.engine.SetDNSOff(local.DNSOff)
 	if r.mesh, err = dir.Mesh(); err != nil {
 		r.log.Warn("ignoring the cached mesh view", "err", err)
 	}
+	r.setNames(r.mesh.View.Names) // the containers' names resolve with the server down
+	r.openRuntime()
 	// The resolver stops with the agent, after every loop has.
 	defer func() {
 		cctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -311,7 +343,8 @@ func Run(ctx context.Context, d Deps) error {
 	}
 	r.log.Info("meshctl agent running", "server", enr.Server, "node_id", enr.NodeID, "version", d.Version, "wg_backend", backend)
 
-	for _, loop := range []func(context.Context){r.syncLoop, r.eventsLoop, r.pollLoop, r.statusLoop, r.safeLoop, r.reassertLoop, r.meshLoop} {
+	for _, loop := range []func(context.Context){r.syncLoop, r.eventsLoop, r.pollLoop, r.statusLoop, r.safeLoop, r.reassertLoop, r.meshLoop,
+		r.namesLoop} {
 		loops.Add(1)
 		go func() {
 			defer loops.Done()
@@ -444,7 +477,9 @@ func (r *runner) apply(ctx context.Context, cfg proto.NodeConfig, source string)
 	if source == "server" {
 		r.rejectedHash = "" // the server moved on from the rejected config
 		r.meshStale.Store(true)
+		kick(r.meshKick)
 	}
+	kick(r.namesKick) // the container network may have moved
 	pending := false
 	if r.safe != nil && source == "server" {
 		switch {
@@ -683,7 +718,7 @@ func (r *runner) setDNS(ctx context.Context, on bool) (proto.LocalStatus, error)
 func (r *runner) meshView(ctx context.Context) (proto.LocalMesh, error) {
 	r.meshMu.Lock()
 	defer r.meshMu.Unlock()
-	if r.meshStale.Swap(false) || r.d.Now().Sub(r.meshTried) >= meshFresh {
+	if r.meshStale.Load() || r.d.Now().Sub(r.meshTried) >= meshFresh {
 		r.refreshMesh(ctx)
 	}
 	m := r.mesh
@@ -694,6 +729,7 @@ func (r *runner) meshView(ctx context.Context) (proto.LocalMesh, error) {
 // refreshMesh asks the server for the mesh view and caches it. The caller
 // holds meshMu.
 func (r *runner) refreshMesh(ctx context.Context) {
+	r.meshStale.Store(false) // a config after this is asked for again
 	r.meshTried = r.d.Now()
 	fctx, cancel := context.WithTimeout(ctx, meshTimeout)
 	defer cancel()
@@ -705,13 +741,16 @@ func (r *runner) refreshMesh(ctx context.Context) {
 	}
 	r.contact()
 	r.mesh, r.meshErr = proto.LocalMesh{View: v, FetchedAt: r.meshTried.Unix()}, ""
+	r.setNames(v.Names)
 	if err := r.dir.SaveMesh(r.mesh); err != nil {
 		r.log.Warn("mesh view not cached; the local UI cannot show it while the server is down", "err", err)
 	}
 }
 
-// meshLoop fetches the mesh view at start and every MeshEvery, so mesh.json
-// is recent when the server goes down.
+// meshLoop fetches the mesh view at start, every MeshEvery and whenever it
+// is kicked (the server said it changed, or a new config arrived), so
+// mesh.json is recent when the server goes down and the containers' names
+// follow within seconds.
 func (r *runner) meshLoop(ctx context.Context) {
 	t := time.NewTicker(r.d.MeshEvery)
 	defer t.Stop()
@@ -723,6 +762,7 @@ func (r *runner) meshLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+		case <-r.meshKick:
 		}
 	}
 }
@@ -755,6 +795,9 @@ func (r *runner) eventsLoop(ctx context.Context) {
 			if stale {
 				r.trigger()
 			}
+		}, func() {
+			r.contact()
+			kick(r.meshKick)
 		})
 		if ctx.Err() != nil {
 			return

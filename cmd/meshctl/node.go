@@ -25,13 +25,14 @@ import (
 func nodeCommands() []command {
 	return []command{
 		{name: "add", args: "<name>", summary: "add a node and print its one-time join command", setup: setupNodeAdd},
-		{name: "compose", args: "<name>", summary: "print the compose file that runs a spoke's agent in a container (a NAS)", setup: setupNodeCompose},
+		{name: "compose", args: "<name>", summary: "print the compose file that runs a node's agent in a container (container mode, or a NAS)", setup: setupNodeCompose},
 		{name: "disable", args: "<name>", summary: "take a node out of every peer list (its keys stay registered)", setup: nodeAction("disable")},
 		{name: "enable", args: "<name>", summary: "put a disabled node back", setup: nodeAction("enable")},
 		{name: "list", summary: "list the nodes and the mesh plan's warnings", setup: setupNodeList},
+		{name: "network", args: "<name>", summary: "print the commands that put a node's containers on the mesh (its mesh network, then a service)", setup: setupNodeNetwork},
 		{name: "phone", args: "<name>", summary: "print a new WireGuard profile for a phone (a new key: its previous profile stops working)", setup: setupNodePhone},
 		{name: "rm", args: "<name>", summary: "remove a node; every peer drops it on the next apply", setup: nodeAction("rm")},
-		{name: "set", args: "<name>", summary: "change a node's endpoint, hub, exit, keepalive or MTU", setup: setupNodeSet},
+		{name: "set", args: "<name>", summary: "change a node's endpoint, hub, exit, keepalive, MTU or container network", setup: setupNodeSet},
 		{name: "show", args: "<name>", summary: "show a node, its computed config and its peers", setup: setupNodeShow},
 		{name: "token", args: "<name>", summary: "issue a new join token (revokes unused ones; re-keys an enrolled node)", setup: nodeAction("token")},
 	}
@@ -74,6 +75,8 @@ func setupNodeAdd(fs *flag.FlagSet, e *env) action {
 	alwaysOn := fs.Bool("always-on", false, "spokes: allocate from the always-on block (NAS)")
 	keepalive := fs.Int("keepalive", 0, "spokes and phones: PersistentKeepalive seconds (default 25)")
 	mtu := fs.Int("mtu", 0, "interface MTU (default: the mesh default, 1420)")
+	mode := fs.String("mode", "host", "host (WireGuard on the host) or container (in the agent's container: only its containers are on the mesh)")
+	containers := fs.Bool("containers", false, "host mode: put the node's containers on the mesh too (container mode always does)")
 	return func(ctx context.Context, args []string) error {
 		name, err := nodeName(args)
 		if err != nil {
@@ -84,7 +87,7 @@ func setupNodeAdd(fs *flag.FlagSet, e *env) action {
 		}
 		ch, err := client().Add(ctx, api.NodeAddRequest{
 			Name: name, Role: *role, IP: *ip, Endpoint: *endpoint, ListenPort: *listenPort, Hub: *hub,
-			CanExit: *canExit, AlwaysOn: *alwaysOn, Keepalive: *keepalive, MTU: *mtu,
+			CanExit: *canExit, AlwaysOn: *alwaysOn, Keepalive: *keepalive, MTU: *mtu, Mode: *mode, Containers: *containers,
 		})
 		if err != nil {
 			return err
@@ -93,6 +96,12 @@ func setupNodeAdd(fs *flag.FlagSet, e *env) action {
 			return printJSON(e.stdout, ch)
 		}
 		fmt.Fprintf(e.stdout, "added %s (%s, mesh IP %s)\n", ch.Node.Name, ch.Node.Role, ch.Node.MeshIP)
+		if ch.Node.ContainerSubnet != "" {
+			fmt.Fprintf(e.stdout, "its containers: %s\n", ch.Node.ContainerSubnet)
+		}
+		if ch.Node.Mode == "container" {
+			fmt.Fprintf(e.stdout, "\ncontainer mode: run its agent from the compose file\n  meshctl node compose %s [--runtime docker|podman|swarm] > compose.yml\n", ch.Node.Name)
+		}
 		printEnrollment(e.stdout, ch.Enrollment)
 		if ch.Node.Role == "phone" {
 			fmt.Fprintf(e.stdout, "\nmake its profile for the WireGuard app:\n  meshctl node phone %s [--exit <server>]\nor as a QR code on its page in the web UI\n", ch.Node.Name)
@@ -212,18 +221,21 @@ func setupNodePhone(fs *flag.FlagSet, e *env) action {
 	}
 }
 
-// setupNodeCompose prints a spoke's compose file; the server checks both
-// choices and renders it, so the CLI and the web UI give the same file.
+// setupNodeCompose prints the compose file that runs a node's agent in a
+// container; the server checks the choices and renders it, so the CLI and
+// the web UI give the same file.
 func setupNodeCompose(fs *flag.FlagSet, e *env) action {
 	client, asJSON := adminFlags(fs)
-	backend := fs.String("wg-backend", deploy.NASUserspace, "WireGuard in the container: userspace (needs /dev/net/tun) or kernel (the host has the wireguard module)")
-	hostDir := fs.String("host-dir", deploy.DefaultNASData, "host directory for the agent's keys and cached config, mounted at /data")
+	backend := fs.String("wg-backend", "", "WireGuard in the container: auto (container mode's default: the host's module, else /dev/net/tun), userspace (the NAS default; needs /dev/net/tun) or kernel (the host has the wireguard module)")
+	hostDir := fs.String("host-dir", "", "host directory for the agent's keys and cached config, mounted at /data (default: "+deploy.DefaultNASData+" for a NAS, a named volume in container mode)")
+	runtimeName := fs.String("runtime", "", "container mode: docker (default), podman or swarm (Swarm services attach)")
+	noNames := fs.Bool("no-names", false, "container mode: leave out the runtime's socket, so the node's containers get no names on the mesh")
 	return func(ctx context.Context, args []string) error {
 		name, err := nodeName(args)
 		if err != nil {
 			return err
 		}
-		f, err := client().Compose(ctx, name, *backend, *hostDir)
+		f, err := client().Compose(ctx, name, api.ComposeOptions{Backend: *backend, DataDir: *hostDir, Runtime: *runtimeName, NoNames: *noNames})
 		if err != nil {
 			return err
 		}
@@ -232,6 +244,35 @@ func setupNodeCompose(fs *flag.FlagSet, e *env) action {
 		}
 		_, err = io.WriteString(e.stdout, f.YAML)
 		return err
+	}
+}
+
+// setupNodeNetwork prints the commands that create a node's mesh network on
+// its host and the compose lines that attach a service (amendment A37).
+func setupNodeNetwork(fs *flag.FlagSet, e *env) action {
+	client, asJSON := adminFlags(fs)
+	runtimeName := fs.String("runtime", "", "docker (default), podman or swarm (Swarm services attach)")
+	return func(ctx context.Context, args []string) error {
+		name, err := nodeName(args)
+		if err != nil {
+			return err
+		}
+		n, err := client().Network(ctx, name, *runtimeName)
+		if err != nil {
+			return err
+		}
+		if *asJSON {
+			return printJSON(e.stdout, n)
+		}
+		fmt.Fprintf(e.stdout, "the containers of %s (%s, %s mode), with %s -- create the mesh network on its host once:\n", name, n.Subnet, n.Mode, n.Runtime)
+		for _, l := range n.Commands {
+			fmt.Fprintln(e.stdout, l)
+		}
+		fmt.Fprintln(e.stdout, "\nthen attach a service to it:")
+		for _, l := range n.Service {
+			fmt.Fprintln(e.stdout, l)
+		}
+		return nil
 	}
 }
 
@@ -260,6 +301,10 @@ func setupNodeShow(fs *flag.FlagSet, e *env) action {
 		row("role", n.Role)
 		row("state", nodeState(n))
 		row("mesh ip", n.MeshIP)
+		if n.Mode == "container" {
+			row("mode", "container: only its containers are on the mesh")
+		}
+		row("containers", n.ContainerSubnet)
 		row("endpoint", n.Endpoint)
 		if n.Role == "server" {
 			row("listen port", strconv.Itoa(n.ListenPort))
@@ -337,6 +382,7 @@ func setupNodeSet(fs *flag.FlagSet, e *env) action {
 	exit := fs.String("exit", "", "spokes: exit server, or "+clearExit)
 	keepalive := fs.Int("keepalive", 0, "PersistentKeepalive seconds (0 turns it off)")
 	mtu := fs.Int("mtu", 0, "interface MTU")
+	containers := fs.Bool("containers", false, "host mode: put the node's containers on the mesh (--containers=false takes them off)")
 	return func(ctx context.Context, args []string) error {
 		name, err := nodeName(args)
 		if err != nil {
@@ -362,12 +408,14 @@ func setupNodeSet(fs *flag.FlagSet, e *env) action {
 				req.Keepalive = keepalive
 			case "mtu":
 				req.MTU = mtu
+			case "containers":
+				req.Containers = containers
 			default:
 				set-- // --data, --json
 			}
 		})
 		if set == 0 {
-			return usagef("nothing to change; give at least one of --endpoint, --listen-port, --hub, --can-exit, --exit, --keepalive, --mtu")
+			return usagef("nothing to change; give at least one of --endpoint, --listen-port, --hub, --can-exit, --exit, --keepalive, --mtu, --containers")
 		}
 		return printChange(e.stdout, *asJSON, "updated", func() (api.NodeChange, error) { return client().Set(ctx, name, req) })
 	}

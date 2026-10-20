@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"testing/fstest"
 	"time"
 
+	"github.com/hafio/vpn-mesh-utility/internal/proto"
 	"github.com/hafio/vpn-mesh-utility/internal/testfix"
 )
 
@@ -75,8 +77,8 @@ func TestOpenAppliesMigrations(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if v != 2 {
-			t.Errorf("schema version = %d, want 2", v)
+		if v != 5 {
+			t.Errorf("schema version = %d, want 5", v)
 		}
 		cidr, err := t2.Setting(SettingMeshCIDR)
 		if err != nil {
@@ -88,6 +90,58 @@ func TestOpenAppliesMigrations(t *testing.T) {
 		}
 		if cidr != "10.77.0.0/16" || zone != "mesh" {
 			t.Errorf("default mesh_cidr = %q, dns_zone = %q", cidr, zone)
+		}
+		return nil
+	})
+}
+
+// A node's mode and container subnet (amendment A37): host and none by
+// default, kept by insert and update, one node per subnet, and a snapshot
+// that names the mode of a container-mode node only, so a mesh without
+// container networks snapshots as before.
+func TestNodeContainerColumns(t *testing.T) {
+	s, _, _ := openTest(t)
+	insertTopology(t, s)
+	tx(t, s, func(t2 *Tx) error {
+		nas, err := t2.NodeByName("nas")
+		if err != nil {
+			return err
+		}
+		if nas.Mode != proto.ModeHost || nas.ContainerSubnet != "" {
+			t.Errorf("defaults: mode %q, subnet %q", nas.Mode, nas.ContainerSubnet)
+		}
+		nas.ContainerSubnet = testfix.ContainerSubnet
+		if err := t2.UpdateNode(nas); err != nil {
+			return err
+		}
+		box := Node{Name: "box", Role: "spoke", MeshIP: "10.77.2.9", Mode: proto.ModeContainer, ContainerSubnet: "10.77.129.0/24"}
+		if err := t2.InsertNode(&box); err != nil {
+			return err
+		}
+		for name, want := range map[string][2]string{"nas": {proto.ModeHost, testfix.ContainerSubnet}, "box": {proto.ModeContainer, "10.77.129.0/24"}} {
+			got, err := t2.NodeByName(name)
+			if err != nil {
+				return err
+			}
+			if got.Mode != want[0] || got.ContainerSubnet != want[1] {
+				t.Errorf("%s: mode %q, subnet %q, want %v", name, got.Mode, got.ContainerSubnet, want)
+			}
+		}
+		dup := Node{Name: "box2", Role: "spoke", MeshIP: "10.77.2.10", ContainerSubnet: testfix.ContainerSubnet}
+		if err := t2.InsertNode(&dup); !errors.Is(err, ErrConflict) {
+			t.Errorf("a second node with %s: %v, want ErrConflict", testfix.ContainerSubnet, err)
+		}
+		snap, err := t2.Snapshot()
+		if err != nil {
+			return err
+		}
+		b, err := snap.Encode()
+		if err != nil {
+			return err
+		}
+		if n := strings.Count(string(b), `"mode":`); n != 1 || !strings.Contains(string(b), `"mode":"container"`) ||
+			!strings.Contains(string(b), `"container_subnet":"`+testfix.ContainerSubnet+`"`) {
+			t.Errorf("snapshot: %d mode keys, want only box's:\n%s", n, b)
 		}
 		return nil
 	})
@@ -105,8 +159,8 @@ func TestOpenIsIdempotent(t *testing.T) {
 	defer s2.Close()
 	tx(t, s2, func(t2 *Tx) error {
 		v, err := t2.SchemaVersion()
-		if v != 2 {
-			t.Errorf("schema version after reopen = %d, want 2", v)
+		if v != 5 {
+			t.Errorf("schema version after reopen = %d, want 5", v)
 		}
 		return err
 	})
@@ -240,6 +294,9 @@ func TestDeleteNodeCascades(t *testing.T) {
 			nas.ID, vps1.ID, vps1.ID, vps2.ID); err != nil {
 			return err
 		}
+		if _, err := t2.SetContainerNames(vps1.ID, []ContainerName{{Name: "web", IP: "10.77.128.129", Kind: "service"}}); err != nil {
+			return err
+		}
 		return t2.DeleteNode(vps1.ID)
 	})
 	tx(t, s, func(t2 *Tx) error {
@@ -256,6 +313,7 @@ func TestDeleteNodeCascades(t *testing.T) {
 			`SELECT COUNT(*) FROM dns_records`,
 			`SELECT COUNT(*) FROM firewall_rules`,
 			`SELECT COUNT(*) FROM peer_status`,
+			`SELECT COUNT(*) FROM container_names`,
 		} {
 			if err := t2.queryRow(q).Scan(&n); err != nil {
 				return err
@@ -440,6 +498,10 @@ func TestSnapshotRestoreRoundTrip(t *testing.T) {
 		if err := t2.InsertFirewallRule(&FirewallRule{Proto: "tcp", Port: 9100, SourceCIDR: "10.77.0.0/16", Note: "node exporter"}); err != nil {
 			return err
 		}
+		box := Node{Name: "box", Role: "spoke", MeshIP: "10.77.2.9", Mode: proto.ModeContainer, ContainerSubnet: "10.77.129.0/24"}
+		if err := t2.InsertNode(&box); err != nil {
+			return err
+		}
 		snap, err := t2.Snapshot()
 		if err != nil {
 			return err
@@ -448,10 +510,17 @@ func TestSnapshotRestoreRoundTrip(t *testing.T) {
 		return err
 	})
 
-	// Drift: remove a node (and with it its record), add one, edit one,
-	// change a setting and the custom rules.
+	// Drift: remove two nodes (one with its record, one in container
+	// mode), add one, edit one, change a setting and the custom rules.
 	tx(t, s, func(t2 *Tx) error {
 		if err := t2.DeleteNode(nodes["laptop"].ID); err != nil {
+			return err
+		}
+		box, err := t2.NodeByName("box")
+		if err != nil {
+			return err
+		}
+		if err := t2.DeleteNode(box.ID); err != nil {
 			return err
 		}
 		extra := node(testfix.Phone)
@@ -524,6 +593,33 @@ func TestRestoreOfAnOlderSnapshot(t *testing.T) {
 		}
 		return err
 	})
+	// The extra domains (amendment A39) came later still: none.
+	tx(t, s, func(t2 *Tx) error {
+		snap, err := t2.Snapshot()
+		if err != nil {
+			return err
+		}
+		delete(snap.Settings, SettingDNSExtraDomains)
+		if err := t2.SetSetting(SettingDNSExtraDomains, "example.lan"); err != nil {
+			return err
+		}
+		if err := t2.Restore(snap); err != nil {
+			return err
+		}
+		if v, err := t2.Setting(SettingDNSExtraDomains); !errors.Is(err, ErrNotFound) {
+			t.Errorf("dns_extra_domains after restoring an older snapshot = %q, %v; want none", v, err)
+		}
+		return nil
+	})
+}
+
+func TestSplitDomains(t *testing.T) {
+	if got := SplitDomains(" example.lan, ,home.arpa,"); !slices.Equal(got, []string{"example.lan", "home.arpa"}) {
+		t.Errorf("SplitDomains = %v", got)
+	}
+	if got := SplitDomains(""); got != nil {
+		t.Errorf("SplitDomains of nothing = %v", got)
+	}
 }
 
 func TestDecodeSnapshotRefusesUnknownShapes(t *testing.T) {
@@ -574,6 +670,90 @@ func TestRecordStatus(t *testing.T) {
 			t.Errorf("RecordStatus for a missing node = %v, want ErrNotFound", err)
 		}
 		return nil
+	})
+}
+
+// A report replaces the node's names and says whether anything changed;
+// the list is ordered by name, node and address.
+func TestContainerNames(t *testing.T) {
+	s, _, _ := openTest(t)
+	nodes := insertTopology(t, s)
+	nas, laptop := nodes["nas"].ID, nodes["laptop"].ID
+	web := func(ip string) ContainerName { return ContainerName{Name: "web", IP: ip, Kind: "service"} }
+	tx(t, s, func(t2 *Tx) error {
+		for _, c := range []struct {
+			node    int64
+			names   []ContainerName
+			changed bool
+		}{
+			{nas, []ContainerName{web("10.77.128.130"), {Name: "db", IP: "10.77.128.131", Kind: "container"}, web("10.77.128.129")}, true},
+			{nas, []ContainerName{web("10.77.128.129"), {Name: "db", IP: "10.77.128.131", Kind: "container"}, web("10.77.128.130")}, false},
+			{laptop, []ContainerName{web("10.77.129.130")}, true},
+			{nas, []ContainerName{web("10.77.128.129"), {Name: "db", IP: "10.77.128.131", Kind: "alias"}, web("10.77.128.130")}, true},
+		} {
+			changed, err := t2.SetContainerNames(c.node, c.names)
+			if err != nil {
+				return err
+			}
+			if changed != c.changed {
+				t.Errorf("SetContainerNames(%d, %v) changed = %v, want %v", c.node, c.names, changed, c.changed)
+			}
+		}
+		got, err := t2.ContainerNames()
+		if err != nil {
+			return err
+		}
+		want := []ContainerName{{NodeID: nas, Name: "db", IP: "10.77.128.131", Kind: "alias"},
+			{NodeID: nas, Name: "web", IP: "10.77.128.129", Kind: "service"}, {NodeID: nas, Name: "web", IP: "10.77.128.130", Kind: "service"},
+			{NodeID: laptop, Name: "web", IP: "10.77.129.130", Kind: "service"}}
+		if nas > laptop {
+			t.Fatalf("the fixture inserts the NAS before the laptop (ids %d, %d)", nas, laptop)
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("ContainerNames =\n%v\nwant\n%v", got, want)
+		}
+		if changed, err := t2.SetContainerNames(nas, nil); err != nil || !changed {
+			t.Errorf("clearing the NAS's names = %v, %v", changed, err)
+		}
+		if got, err := t2.ContainerNames(); err != nil || len(got) != 1 || got[0].NodeID != laptop {
+			t.Errorf("after clearing the NAS = %v, %v", got, err)
+		}
+		return nil
+	})
+}
+
+// The relay failover monitor's state (amendment A40) is operational: it
+// survives an update of the node's desired fields and stays out of the
+// snapshot.
+func TestHubState(t *testing.T) {
+	s, _, _ := openTest(t)
+	vps1 := insertTopology(t, s)["vps-1"]
+	tx(t, s, func(t2 *Tx) error {
+		if err := t2.SetHubState(vps1.ID, 100, 160); err != nil {
+			return err
+		}
+		n, err := t2.NodeByID(vps1.ID)
+		if err != nil {
+			return err
+		}
+		n.MTU = 1380
+		if err := t2.UpdateNode(n); err != nil {
+			return err
+		}
+		if n, err = t2.NodeByID(vps1.ID); err != nil || n.DownSince != 100 || n.HealthySince != 160 {
+			t.Errorf("after an update = %+v, %v", n, err)
+		}
+		snap, err := t2.Snapshot()
+		if err != nil {
+			return err
+		}
+		if b, _ := snap.Encode(); strings.Contains(string(b), "down_since") || strings.Contains(string(b), "healthy") {
+			t.Errorf("the snapshot carries the failover state: %s", b)
+		}
+		if err := t2.SetHubState(999, 1, 0); !errors.Is(err, ErrNotFound) {
+			t.Errorf("SetHubState for a missing node = %v", err)
+		}
+		return t2.SetHubState(vps1.ID, 0, 0)
 	})
 }
 

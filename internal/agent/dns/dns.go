@@ -67,8 +67,10 @@ type Registrar interface {
 // Want is what one apply asks of the DNS step.
 type Want struct {
 	Iface string
-	// IP is the node's mesh IP, which the resolver binds.
-	IP netip.Addr
+	// IP is the node's mesh IP, which the resolver binds, and Also its
+	// containers' gateway address, which it binds too (invalid: none).
+	IP   netip.Addr
+	Also netip.Addr
 	// Config is the config's DNS section; nil stops the resolver and takes
 	// the registration back.
 	Config *proto.DNS
@@ -88,11 +90,15 @@ type Service struct {
 	UpstreamPort int
 	Log          *slog.Logger
 
-	mu         sync.Mutex
-	res        *resolver
+	mu  sync.Mutex
+	res *resolver
+	// also answers the containers on their gateway address (amendment A37).
+	also       *resolver
 	last       *proto.DNS
 	registered bool
 	zone       atomic.Pointer[zone]
+	// names are the containers' names, set apart from any apply.
+	names atomic.Pointer[nameTable]
 }
 
 // New returns the service for this host.
@@ -151,18 +157,55 @@ func (s *Service) Apply(ctx context.Context, w Want) (string, int, error) {
 		n++
 		s.log().Info("resolver answering the mesh zone", "addr", r.addr)
 	}
+	c, err := s.serveAlso(w.Also)
+	n += c
+	if err != nil {
+		return "", n, err
+	}
 	state, c, err := s.register(ctx, w)
 	return state, n + c, err
 }
 
-// desired is the registration for w: the resolver for the mesh zone, and in
-// exit mode for every name.
+// serveAlso keeps the second listener on the containers' gateway address,
+// or stops it when there is none; the caller holds mu.
+func (s *Service) serveAlso(a netip.Addr) (int, error) {
+	if !a.IsValid() {
+		if s.also == nil {
+			return 0, nil
+		}
+		s.also.close()
+		s.also = nil
+		return 1, nil
+	}
+	want := netip.AddrPortFrom(a, s.Port)
+	if s.also != nil && !s.also.dead() && s.also.want == want {
+		return 0, nil
+	}
+	if s.also != nil {
+		s.also.close()
+		s.also = nil
+	}
+	r, err := serve(want, s)
+	if err != nil {
+		return 0, fmt.Errorf("dns: answer the containers on %s: %w (is another DNS server using port %d there?)", want, err, s.Port)
+	}
+	s.also = r
+	s.log().Info("resolver answering the containers", "addr", r.addr)
+	return 1, nil
+}
+
+// desired is the registration for w: the resolver for the mesh zone and the
+// extra domains, and in exit mode for every name.
 func desired(w Want) Registration {
 	zone := proto.DefaultZone
+	var extra []string
 	if w.Config != nil {
-		zone = w.Config.Zone
+		zone, extra = w.Config.Zone, w.Config.Domains
 	}
 	r := Registration{DNS: []netip.Addr{w.IP}, Domains: []Domain{{Name: zone, RouteOnly: true}}}
+	for _, d := range extra {
+		r.Domains = append(r.Domains, Domain{Name: d, RouteOnly: true})
+	}
 	if w.Exit {
 		r.Domains = append(r.Domains, Domain{Name: ".", RouteOnly: true})
 		r.DefaultRoute = true
@@ -244,6 +287,11 @@ func (s *Service) register(ctx context.Context, w Want) (string, int, error) {
 // returns how many of the two it did.
 func (s *Service) stopLocked(ctx context.Context, iface string) int {
 	n := 0
+	if s.also != nil {
+		s.also.close()
+		s.also = nil
+		n++
+	}
 	if s.res != nil {
 		s.res.close()
 		s.res, s.last = nil, nil
@@ -270,6 +318,12 @@ func (s *Service) Close(ctx context.Context, iface string) {
 	s.stopLocked(ctx, iface)
 }
 
+// SetNames replaces the containers' names the resolver answers (amendment
+// A38): <name>.<zone> with every node's addresses, round robin, and
+// <name>.<node>.<zone> with one node's. They come from the mesh view, not
+// the config, so they change without an apply.
+func (s *Service) SetNames(names []proto.MeshName) { s.names.Store(newNameTable(names)) }
+
 // ServeDNS answers one query from the current zone.
 func (s *Service) ServeDNS(w mdns.ResponseWriter, req *mdns.Msg) {
 	var src netip.Addr
@@ -281,7 +335,7 @@ func (s *Service) ServeDNS(w mdns.ResponseWriter, req *mdns.Msg) {
 		_ = w.WriteMsg(new(mdns.Msg).SetRcode(req, mdns.RcodeServerFailure)) // the client retries
 		return
 	}
-	resp, forward := z.answer(req, src)
+	resp, forward := z.answer(req, src, s.names.Load())
 	if forward {
 		var errs []error
 		resp, errs = exchange(req, z.upstream, w.LocalAddr().Network())

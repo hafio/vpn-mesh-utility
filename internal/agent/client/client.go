@@ -1,6 +1,6 @@
 // Package client is the agent's side of the agent API (spec S6): the join
-// request, then signed requests for config, events, status, prefs and the
-// mesh view. Every signed request carries a fresh nonce, so retries never
+// request, then signed requests for config, events, status, prefs, the
+// mesh view and the containers' names. Every signed request carries a fresh nonce, so retries never
 // look like replays.
 package client
 
@@ -238,10 +238,28 @@ func (c *Client) Mesh(ctx context.Context) (proto.MeshView, error) {
 	return v, nil
 }
 
-// Events opens the node's SSE stream and calls fn for every config event
-// until the stream ends, goes silent for streamIdle, or ctx is cancelled. It
-// always returns an error saying why the stream ended.
-func (c *Client) Events(ctx context.Context, fn func(proto.ConfigEvent)) error {
+// Names reports the node's container names (amendment A38).
+func (c *Client) Names(ctx context.Context, req proto.NamesRequest) (proto.NamesResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return proto.NamesResponse{}, fmt.Errorf("encode names: %w", err)
+	}
+	r, err := c.signed(ctx, http.MethodPut, proto.PathNames, body)
+	if err != nil {
+		return proto.NamesResponse{}, err
+	}
+	var resp proto.NamesResponse
+	if _, err := c.do(r, &resp); err != nil {
+		return proto.NamesResponse{}, err
+	}
+	return resp, nil
+}
+
+// Events opens the node's SSE stream and calls fn for every config event,
+// and mesh for every mesh event, until the stream ends, goes silent for
+// streamIdle, or ctx is cancelled. It always returns an error saying why the
+// stream ended.
+func (c *Client) Events(ctx context.Context, fn func(proto.ConfigEvent), mesh func()) error {
 	sctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	r, err := c.signed(sctx, http.MethodGet, proto.PathEvents, nil)
@@ -271,6 +289,10 @@ func (c *Client) Events(ctx context.Context, fn func(proto.ConfigEvent)) error {
 				return fmt.Errorf("event stream was silent for %s; reconnecting", streamIdle)
 			}
 			return fmt.Errorf("event stream ended: %w", err)
+		}
+		if ev.Name == proto.EventMesh {
+			mesh()
+			continue
 		}
 		if ev.Name != proto.EventConfig {
 			continue

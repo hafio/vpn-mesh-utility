@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -115,6 +116,44 @@ func Zone(field, s string) (string, error) {
 		return "", fail(field, s, "must not end in local or localhost, which hosts resolve themselves (mDNS, loopback)")
 	}
 	return s, nil
+}
+
+// MaxDomains caps the mesh's extra DNS domains.
+const MaxDomains = 8
+
+// Domains validates the mesh's extra DNS domains (amendment A39), which
+// every node resolves through the mesh and the hosts send to it: each as a
+// Zone, lower case without a trailing dot, at most MaxDomains, none under
+// another or listed twice, no .arpa domain but home.arpa and under it, and
+// none equal to, under or around zone ("" skips that check). It returns them
+// normalised and sorted.
+func Domains(field, zone string, ds []string) ([]string, error) {
+	if len(ds) > MaxDomains {
+		return nil, fail(field, strings.Join(ds, ","), fmt.Sprintf("at most %d domains", MaxDomains))
+	}
+	out := make([]string, 0, len(ds))
+	for _, d := range ds {
+		d = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(d), "."))
+		if _, err := Zone(field, d); err != nil {
+			return nil, err
+		}
+		if d == "arpa" || (strings.HasSuffix(d, ".arpa") && d != "home.arpa" && !strings.HasSuffix(d, ".home.arpa")) {
+			return nil, fail(field, d, "must not be an .arpa domain other than home.arpa (reverse lookups are the host's)")
+		}
+		if zone != "" && (d == zone || strings.HasSuffix(d, "."+zone) || strings.HasSuffix(zone, "."+d)) {
+			return nil, fail(field, d, "must not be the mesh's zone "+zone+", inside it or around it")
+		}
+		out = append(out, d)
+	}
+	sort.Strings(out)
+	for i := range out {
+		for j := range out {
+			if i != j && (out[i] == out[j] || strings.HasSuffix(out[i], "."+out[j])) {
+				return nil, fail(field, out[i], "is listed twice or inside "+out[j]+"; list each domain once")
+			}
+		}
+	}
+	return out, nil
 }
 
 // Hostname validates a hostname an agent reports about itself (RFC 1123,

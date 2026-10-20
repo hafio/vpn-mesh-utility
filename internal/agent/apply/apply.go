@@ -4,8 +4,9 @@
 // the same config twice changes nothing (TestApplyIsIdempotent).
 //
 // Steps 1-7 are fatal: if one fails the config is not recorded as applied and
-// the agent reports the error. Steps 8-9 (firewall, DNS) are optional: a
-// failure is reported as degraded and the tunnel stays up.
+// the agent reports the error. Steps 8-10 (firewall, the container network,
+// DNS) are optional: a failure is reported as degraded and the tunnel stays
+// up.
 //
 // Reassert is the drift check: it applies a config again after the steps
 // that remember what they found on the host (Rechecker) forget it, so a
@@ -21,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hafio/vpn-mesh-utility/internal/agent/containers"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/dns"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/exitmode"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/routes"
@@ -30,15 +32,16 @@ import (
 
 // Step names, as reported in errors and status.
 const (
-	StepValidate  = "validate"
-	StepInterface = "interface"
-	StepAddress   = "address"
-	StepPeers     = "peers"
-	StepRoutes    = "routes"
-	StepExit      = "exit"
-	StepSysctl    = "sysctl"
-	StepFirewall  = "firewall"
-	StepDNS       = "dns"
+	StepValidate   = "validate"
+	StepInterface  = "interface"
+	StepAddress    = "address"
+	StepPeers      = "peers"
+	StepRoutes     = "routes"
+	StepExit       = "exit"
+	StepSysctl     = "sysctl"
+	StepFirewall   = "firewall"
+	StepContainers = "containers"
+	StepDNS        = "dns"
 )
 
 // Sysctls applies kernel parameters (internal/agent/sysctl).
@@ -78,6 +81,9 @@ type Deps struct {
 	Firewall Firewall
 	// DNS is nil when the agent runs no resolver.
 	DNS DNS
+	// Containers is the host of the node's container network (amendment
+	// A37); nil refuses a config that has one, as degraded.
+	Containers containers.Net
 	// Iface is the mesh interface ("wg0").
 	Iface string
 	// Key is the node's WireGuard private key.
@@ -214,10 +220,29 @@ func (e *Engine) Apply(ctx context.Context, cfg proto.NodeConfig) (Result, error
 			e.d.Log.Warn("firewall step failed; the tunnel stays up", "err", err)
 		}
 	}
-	// 9. DNS: optional. The resolver binds the address step 3 put on the
-	// interface.
+	// 9. The container network: optional, and before DNS, whose resolver
+	// answers the containers on their gateway address.
+	var also netip.Addr
+	switch {
+	case e.d.Containers != nil:
+		n, err := containers.Sync(e.d.Containers, e.d.Sysctl, cfg.Containers, e.d.Iface)
+		res.Changes += n
+		if err != nil {
+			res.Degraded = append(res.Degraded, StepContainers)
+			res.Errors = append(res.Errors, err.Error())
+			e.d.Log.Warn("containers step failed; the tunnel stays up", "err", err)
+		} else if cfg.Containers != nil {
+			also, _ = netip.ParseAddr(cfg.Containers.Gateway) // validated in step 1
+		}
+	case cfg.Containers != nil:
+		res.Degraded = append(res.Degraded, StepContainers)
+		res.Errors = append(res.Errors, "containers: this agent manages no container network; the mesh reaches the node, not its containers")
+	}
+	// 10. DNS: optional. The resolver binds the address step 3 put on the
+	// interface, and the containers' gateway.
 	if e.d.DNS != nil {
-		state, n, err := e.d.DNS.Apply(ctx, dns.Want{Iface: e.d.Iface, IP: addr.Addr(), Config: cfg.DNS, Exit: exitOn, Off: e.dnsOff})
+		state, n, err := e.d.DNS.Apply(ctx, dns.Want{Iface: e.d.Iface, IP: addr.Addr(), Also: also, Config: cfg.DNS, Exit: exitOn,
+			Off: e.dnsOff})
 		res.Changes += n
 		res.DNS = state
 		if err != nil {

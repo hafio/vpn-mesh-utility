@@ -1,6 +1,6 @@
 // Package agentfake holds in-memory fakes of the agent's host interfaces for
 // tests: a WireGuard host, a routing table, policy routing, sysctls, the
-// firewall and DNS steps. Each applies changes the way the host would and
+// firewall and DNS steps, and the container network's host. Each applies changes the way the host would and
 // counts every mutation, so a test can assert that applying the same config
 // twice changes nothing. Production code never imports it
 // (TestModuleBoundaries).
@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/hafio/vpn-mesh-utility/internal/agent/containers"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/dns"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/exitmode"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/wg"
@@ -278,16 +279,20 @@ func (r *Routes) Mutations() int {
 	return len(r.Calls)
 }
 
-// Sysctl is a fake sysctl writer.
+// Sysctl is a fake sysctl writer; Err makes every Apply fail.
 type Sysctl struct {
 	mu     sync.Mutex
 	Values map[string]string
 	Writes int
+	Err    error
 }
 
 func (s *Sysctl) Apply(params []proto.Sysctl) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.Err != nil {
+		return 0, s.Err
+	}
 	if s.Values == nil {
 		s.Values = map[string]string{}
 	}
@@ -337,9 +342,24 @@ func (f *Firewall) Rechecked() int {
 type DNS struct {
 	mu          sync.Mutex
 	wants       []dns.Want
+	names       []proto.MeshName
 	Err         error
 	Unavailable bool
 	Closed      bool
+}
+
+// SetNames records the containers' names the resolver answers.
+func (d *DNS) SetNames(names []proto.MeshName) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.names = slices.Clone(names)
+}
+
+// Names returns the names last set.
+func (d *DNS) Names() []proto.MeshName {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return slices.Clone(d.names)
 }
 
 func (d *DNS) Apply(_ context.Context, w dns.Want) (string, int, error) {
@@ -484,4 +504,178 @@ func (p *Policy) InstallRoute(r exitmode.Route) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.routes = append(p.routes, r)
+}
+
+// Net is a fake containers.Net: the agent's rules, the blackhole table,
+// interface addresses and bridges.
+type Net struct {
+	mu    sync.Mutex
+	rules []containers.Rule
+	hole  bool
+	addrs map[string][]netip.Prefix
+	// Calls lists the mutating calls in order ("add rule 1000: ...").
+	Calls []string
+	// Fail makes the named method fail (FailOn), or with FailOn empty every
+	// mutating one.
+	Fail   error
+	FailOn string
+}
+
+// NewNet returns a host with no interfaces.
+func NewNet() *Net { return &Net{addrs: map[string][]netip.Prefix{}} }
+
+// Attach gives an interface an address, as a runtime attaching the agent
+// to a network does.
+func (n *Net) Attach(link string, a netip.Prefix) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.addrs[link] = append(n.addrs[link], a)
+}
+
+// Install puts a rule in place as if something else had added it.
+func (n *Net) Install(r containers.Rule) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.rules = append(n.rules, r)
+}
+
+// AddrsOf returns an interface's addresses, for assertions.
+func (n *Net) AddrsOf(link string) []netip.Prefix {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return slices.Clone(n.addrs[link])
+}
+
+// HasBlackhole reports the blackhole route, for assertions.
+func (n *Net) HasBlackhole() bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.hole
+}
+
+func (n *Net) failure(method string) error {
+	mutating := slices.Contains([]string{"AddRule", "DelRule", "SetBlackhole", "AddAddr", "EnsureBridge"}, method)
+	if n.FailOn == method || n.FailOn == "" && mutating {
+		return n.Fail
+	}
+	return nil
+}
+
+func (n *Net) record(call string) { n.Calls = append(n.Calls, call) }
+
+func (n *Net) Rules() ([]containers.Rule, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if err := n.failure("Rules"); err != nil {
+		return nil, err
+	}
+	return slices.Clone(n.rules), nil
+}
+
+func (n *Net) AddRule(r containers.Rule) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if err := n.failure("AddRule"); err != nil {
+		return err
+	}
+	if slices.Contains(n.rules, r) {
+		return fmt.Errorf("add %s: file exists", r)
+	}
+	n.rules = append(n.rules, r)
+	n.record("add " + r.String())
+	return nil
+}
+
+func (n *Net) DelRule(r containers.Rule) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if err := n.failure("DelRule"); err != nil {
+		return err
+	}
+	i := slices.Index(n.rules, r)
+	if i < 0 {
+		return fmt.Errorf("remove %s: no such rule", r)
+	}
+	n.rules = slices.Delete(n.rules, i, i+1)
+	n.record("remove " + r.String())
+	return nil
+}
+
+func (n *Net) Blackhole() (bool, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.hole, n.failure("Blackhole")
+}
+
+func (n *Net) SetBlackhole(on bool) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if err := n.failure("SetBlackhole"); err != nil {
+		return err
+	}
+	n.hole = on
+	n.record(fmt.Sprintf("blackhole %v", on))
+	return nil
+}
+
+func (n *Net) LinkHolding(p netip.Prefix, skip string) (string, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if err := n.failure("LinkHolding"); err != nil {
+		return "", err
+	}
+	links := make([]string, 0, len(n.addrs))
+	for l := range n.addrs {
+		links = append(links, l)
+	}
+	slices.Sort(links)
+	for _, l := range links {
+		for _, a := range n.addrs[l] {
+			if l != skip && p.Contains(a.Addr()) {
+				return l, nil
+			}
+		}
+	}
+	return "", nil
+}
+
+func (n *Net) Addrs(link string) ([]netip.Prefix, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if err := n.failure("Addrs"); err != nil {
+		return nil, err
+	}
+	a, ok := n.addrs[link]
+	if !ok {
+		return nil, fmt.Errorf("look up interface %s: no such interface", link)
+	}
+	return slices.Clone(a), nil
+}
+
+func (n *Net) AddAddr(link string, a netip.Prefix) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if err := n.failure("AddAddr"); err != nil {
+		return err
+	}
+	if _, ok := n.addrs[link]; !ok {
+		return fmt.Errorf("look up interface %s: no such interface", link)
+	}
+	n.addrs[link] = append(n.addrs[link], a)
+	n.record("addr " + link + " " + a.String())
+	return nil
+}
+
+func (n *Net) EnsureBridge(name string) (bool, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if err := n.failure("EnsureBridge"); err != nil {
+		return false, err
+	}
+	if _, ok := n.addrs[name]; ok {
+		return false, nil
+	}
+	n.addrs[name] = []netip.Prefix{}
+	n.record("bridge " + name)
+	return true, nil
 }

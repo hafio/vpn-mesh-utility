@@ -53,7 +53,7 @@ func TestZoneAnswers(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			resp, fwd := z.answer(c.q, c.src)
+			resp, fwd := z.answer(c.q, c.src, nil)
 			if fwd != c.forward {
 				t.Fatalf("forward = %v, want %v", fwd, c.forward)
 			}
@@ -81,7 +81,7 @@ func TestZoneAnswers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, fwd := exit.answer(query("example.com.", mdns.TypeA), laptop); !fwd {
+	if _, fwd := exit.answer(query("example.com.", mdns.TypeA), laptop, nil); !fwd {
 		t.Fatal("exit mode refused another zone")
 	}
 	// Malformed queries.
@@ -90,9 +90,119 @@ func TestZoneAnswers(t *testing.T) {
 	two := query("nas.mesh.", mdns.TypeA)
 	two.Question = append(two.Question, two.Question[0])
 	for q, want := range map[*mdns.Msg]int{chaos: mdns.RcodeRefused, two: mdns.RcodeFormatError} {
-		if resp, _ := z.answer(q, laptop); resp == nil || resp.Rcode != want {
+		if resp, _ := z.answer(q, laptop, nil); resp == nil || resp.Rcode != want {
 			t.Errorf("answer(%v) = %v, want rcode %d", q.Question, resp, want)
 		}
+	}
+}
+
+// Container names (amendment A38): <name>.<zone> is every node's, round
+// robin, <name>.<node>.<zone> one node's, both with a short TTL; a name of
+// the config wins, and a container may take an empty non-terminal.
+func TestZoneAnswersContainerNames(t *testing.T) {
+	z, err := newZone(meshDNS(true), 53)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := newNameTable([]proto.MeshName{
+		{Name: "db", Node: "nas", IP: "10.77.128.131"},
+		{Name: "web", Node: "laptop", IP: "10.77.129.130"},
+		{Name: "web", Node: "nas", IP: "10.77.128.130"},
+		{Name: "web", Node: "nas", IP: "10.77.128.129"},
+		{Name: "web", Node: "nas", IP: "10.77.128.129"}, // twice: answered once
+		{Name: "nas", Node: "laptop", IP: "10.77.129.131"},
+		{Name: "office", Node: "nas", IP: "10.77.128.140"},
+		{Name: "web.example.org", Node: "nas", IP: "10.77.128.132"},
+		{Name: "bad", Node: "nas", IP: "fd00::1"},
+	})
+	laptop := netip.MustParseAddr("10.77.2.1")
+	addrs := func(name string, qtype uint16) ([]string, *mdns.Msg) {
+		t.Helper()
+		resp, fwd := z.answer(query(name, qtype), laptop, names)
+		if fwd || resp == nil {
+			t.Fatalf("%s forwarded", name)
+		}
+		var out []string
+		for _, rr := range resp.Answer {
+			a := rr.(*mdns.A)
+			if a.Hdr.Ttl != nameTTL {
+				t.Errorf("%s TTL %d, want %d", name, a.Hdr.Ttl, nameTTL)
+			}
+			out = append(out, a.A.String())
+		}
+		return out, resp
+	}
+	first, _ := addrs("web.mesh.", mdns.TypeA)
+	second, _ := addrs("WEB.mesh.", mdns.TypeA)
+	if len(first) != 3 || len(second) != 3 || first[0] == second[0] {
+		t.Fatalf("web.mesh = %v then %v; want the three addresses, rotated", first, second)
+	}
+	if got, _ := addrs("web.nas.mesh.", mdns.TypeA); len(got) != 2 || strings.Contains(strings.Join(got, " "), "10.77.129.130") {
+		t.Errorf("web.nas.mesh = %v, want only the NAS's two", got)
+	}
+	if got, _ := addrs("office.mesh.", mdns.TypeA); len(got) != 1 || got[0] != "10.77.128.140" {
+		t.Errorf("office.mesh = %v, want the container in the empty non-terminal", got)
+	}
+	if got, resp := addrs("db.mesh.", mdns.TypeAAAA); len(got) != 0 || resp.Rcode != mdns.RcodeSuccess || len(resp.Ns) != 1 {
+		t.Errorf("db.mesh AAAA = %v, %v; want NODATA", got, resp)
+	}
+	resp, _ := z.answer(query("nas.mesh.", mdns.TypeA), laptop, names)
+	if len(resp.Answer) != 1 || resp.Answer[0].(*mdns.A).A.String() != "10.77.1.1" || resp.Answer[0].Header().Ttl != ttl {
+		t.Errorf("nas.mesh = %v; the node's record must win", resp.Answer)
+	}
+	for _, name := range []string{"ghost.mesh.", "web.example.org.mesh.", "bad.mesh.", "db.laptop.mesh."} {
+		if resp, _ := z.answer(query(name, mdns.TypeA), laptop, names); resp.Rcode != mdns.RcodeNameError {
+			t.Errorf("%s = rcode %d, want NXDOMAIN", name, resp.Rcode)
+		}
+	}
+}
+
+// Extra domains (amendment A39): a container's name there is answered, any
+// other name there is forwarded whoever asks; a name outside them is
+// refused in split mode as before; the host registers them with the zone.
+func TestZoneAnswersExtraDomains(t *testing.T) {
+	d := meshDNS(true, "1.1.1.1")
+	d.Domains = []string{"example.lan", "home.arpa"}
+	z, err := newZone(d, 53)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := newNameTable([]proto.MeshName{
+		{Name: "web.example.lan", Node: "nas", IP: "10.77.128.129"},
+		{Name: "web.example.lan", Node: "laptop", IP: "10.77.129.130"},
+		{Name: "web", Node: "nas", IP: "10.77.128.129"},
+	})
+	laptop := netip.MustParseAddr("10.77.2.1")
+	resp, fwd := z.answer(query("WEB.Example.Lan.", mdns.TypeA), laptop, names)
+	if fwd || len(resp.Answer) != 2 || resp.Answer[0].Header().Ttl != nameTTL || resp.Authoritative ||
+		resp.Answer[0].Header().Name != "WEB.Example.Lan." {
+		t.Fatalf("web.example.lan = %v, forwarded %v", resp, fwd)
+	}
+	if resp, fwd := z.answer(query("web.example.lan.", mdns.TypeAAAA), laptop, names); fwd || len(resp.Answer) != 0 ||
+		resp.Rcode != mdns.RcodeSuccess {
+		t.Fatalf("web.example.lan AAAA = %v, forwarded %v", resp, fwd)
+	}
+	for _, name := range []string{"printer.example.lan.", "example.lan.", "nas.home.arpa.", "web.home.arpa."} {
+		if resp, fwd := z.answer(query(name, mdns.TypeA), laptop, names); !fwd || resp != nil {
+			t.Errorf("%s = %v, want it forwarded from a split node too", name, resp)
+		}
+		if _, fwd := z.answer(query(name, mdns.TypeA), laptop, nil); !fwd {
+			t.Errorf("%s without names = not forwarded", name)
+		}
+	}
+	if resp, fwd := z.answer(query("web.example.org.", mdns.TypeA), laptop, names); fwd || resp.Rcode != mdns.RcodeRefused {
+		t.Errorf("a domain that is not extra = %v, forwarded %v", resp, fwd)
+	}
+	chaos := query("web.example.lan.", mdns.TypeTXT)
+	chaos.Question[0].Qclass = mdns.ClassCHAOS
+	if resp, _ := z.answer(chaos, laptop, names); resp.Rcode != mdns.RcodeRefused {
+		t.Errorf("CHAOS for a container's name = rcode %d", resp.Rcode)
+	}
+	r := desired(Want{IP: laptop, Config: d})
+	want := Registration{DNS: []netip.Addr{laptop}, Domains: []Domain{{Name: "mesh", RouteOnly: true},
+		{Name: "example.lan", RouteOnly: true}, {Name: "home.arpa", RouteOnly: true}}}
+	if !same(r, want) {
+		t.Errorf("registration %+v, want %+v", r, want)
 	}
 }
 
@@ -121,10 +231,10 @@ func TestZoneFollowsTheConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	laptop := netip.MustParseAddr("10.77.2.1")
-	if resp, fwd := z.answer(query("nas.home.arpa.", mdns.TypeA), laptop); fwd || len(resp.Answer) != 1 {
+	if resp, fwd := z.answer(query("nas.home.arpa.", mdns.TypeA), laptop, nil); fwd || len(resp.Answer) != 1 {
 		t.Fatalf("nas.home.arpa = %v, forward %v", resp, fwd)
 	}
-	if resp, fwd := z.answer(query("nas.mesh.", mdns.TypeA), laptop); fwd || resp.Rcode != mdns.RcodeRefused {
+	if resp, fwd := z.answer(query("nas.mesh.", mdns.TypeA), laptop, nil); fwd || resp.Rcode != mdns.RcodeRefused {
 		t.Fatalf("nas.mesh in the home.arpa zone = %v, forward %v", resp, fwd)
 	}
 	if r := desired(Want{IP: laptop, Config: d}); len(r.Domains) != 1 || r.Domains[0].Name != "home.arpa" {
@@ -293,6 +403,54 @@ func TestServiceAnswersAndRegisters(t *testing.T) {
 		t.Fatal("the resolver or the registration outlived the DNS section")
 	}
 	apply(Want{Iface: "wg0", IP: lo}, "", 0)
+}
+
+// The containers' gateway (amendment A37) gets a listener of its own,
+// answering the same zone; it follows the want, and stops with the rest.
+func TestServiceAnswersTheContainers(t *testing.T) {
+	up, _ := upstream(t)
+	s := &Service{Registrar: newRegistrar(), UpstreamPort: up}
+	t.Cleanup(func() { s.Close(context.Background(), "wg0") })
+	ctx, lo, gw := context.Background(), netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("127.0.0.2")
+	w := Want{Iface: "wg0", IP: lo, Also: gw, Config: meshDNS(true, "127.0.0.1")}
+	if _, n, err := s.Apply(ctx, w); err != nil || n != 4 {
+		t.Fatalf("Apply = %d, %v; want the zone, both listeners and the registration", n, err)
+	}
+	s.mu.Lock()
+	at := s.also.addr
+	s.mu.Unlock()
+	if at.Addr() != gw || answerOf(ask(t, "udp", at, "nas.mesh.")) != "10.77.1.1" {
+		t.Fatalf("the containers' listener on %s does not answer the zone", at)
+	}
+	if got := answerOf(ask(t, "udp", at, "db.mesh.")); got != "NXDOMAIN" {
+		t.Fatalf("db.mesh before any names = %s", got)
+	}
+	s.SetNames([]proto.MeshName{{Name: "db", Node: "nas", IP: "10.77.128.131"}}) // no apply needed
+	if got := answerOf(ask(t, "udp", at, "db.nas.mesh.")); got != "10.77.128.131" {
+		t.Fatalf("db.nas.mesh after SetNames = %s", got)
+	}
+	if _, n, err := s.Apply(ctx, w); err != nil || n != 0 {
+		t.Fatalf("second Apply = %d, %v", n, err)
+	}
+	w.Also = netip.Addr{}
+	if _, n, err := s.Apply(ctx, w); err != nil || n != 1 || s.also != nil {
+		t.Fatalf("without containers = %d, %v", n, err)
+	}
+	w.Also = netip.MustParseAddr("192.0.2.1")
+	if _, _, err := s.Apply(ctx, w); err == nil || !strings.Contains(err.Error(), "answer the containers on") || !s.Addr().IsValid() {
+		t.Fatalf("an address this host lacks = %v; the mesh IP must keep answering", err)
+	}
+	w.Also = netip.MustParseAddr("127.0.0.3")
+	if _, _, err := s.Apply(ctx, w); err != nil {
+		t.Fatal(err)
+	}
+	w.Also = gw // a new gateway address: the old listener goes
+	if _, n, err := s.Apply(ctx, w); err != nil || n != 1 || s.also.addr.Addr() != gw {
+		t.Fatalf("a moved gateway = %d, %v", n, err)
+	}
+	if _, n, err := s.Apply(ctx, Want{Iface: "wg0", IP: lo}); err != nil || n != 3 || s.also != nil {
+		t.Fatalf("no DNS section = %d, %v; want both listeners and the registration gone", n, err)
+	}
 }
 
 func TestServiceWithoutAResolverToRegisterWith(t *testing.T) {
