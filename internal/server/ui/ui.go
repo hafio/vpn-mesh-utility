@@ -123,7 +123,10 @@ func headers(next http.Handler) http.Handler {
 		h.Set("Content-Security-Policy", CSP)
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("X-Frame-Options", "DENY")
-		h.Set("Referrer-Policy", "no-referrer")
+		// same-origin, not no-referrer: under no-referrer browsers send
+		// "Origin: null" on the UI's own form posts, which the origin
+		// check then refuses. Nothing is sent to another site either way.
+		h.Set("Referrer-Policy", "same-origin")
 		h.Set("Cache-Control", "no-store")
 		next.ServeHTTP(w, r)
 	})

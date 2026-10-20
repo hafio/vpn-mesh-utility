@@ -36,7 +36,7 @@ The web UI (internal/server/ui) and the `meshctl user` commands share these acco
 | Script injection | `html/template` escapes every value by context. A strict CSP (`default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`) allows no inline script or style; `TestTemplatesHaveNoInlineScriptOrStyle` keeps the templates that way. htmx runs with `allowEval` and `allowScriptTags` off. |
 | Third-party code | one file, htmx 2.0.11, vendored (checked against the npm registry's sha512 when vendored) and pinned by `HTMXSHA256` / `TestHTMXIsPinned`. No CDN, no fonts, no other assets. |
 | Cross-site requests | every request that changes something must carry `Origin: <--url>` and the session's CSRF token; the session cookie is SameSite=Strict as well. Sign-in POSTs need the same origin. |
-| Framing, sniffing, referrers | `X-Frame-Options: DENY`, `frame-ancestors 'none'`, `nosniff`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store` on pages. |
+| Framing, sniffing, referrers | `X-Frame-Options: DENY`, `frame-ancestors 'none'`, `nosniff`, `Referrer-Policy: same-origin` (no referrer to other sites; `no-referrer` would make browsers send `Origin: null` on the UI's own posts, failing the origin check), `Cache-Control: no-store` on pages. |
 | Idle sessions | only what the user does extends a session; the dashboard's background refresh does not. |
 | Writes | every change goes through the same audited, versioned path as `meshctl node`, with actor `user:<name>`; join tokens and phone profiles are shown once and never stored in the clear. |
 
@@ -207,7 +207,7 @@ A7, A32). Loopback TCP is open to every local user and, through DNS rebinding, t
   page, and exit, keepalive and MTU go to the server through the same signed relay as `meshctl
   exit`, where they are checked again and audited as `node:<id>`.
 - **Every answer** carries `default-src 'self'; frame-ancestors 'none'; form-action 'self';
-  base-uri 'none'`, `X-Frame-Options: DENY`, `nosniff`, `no-referrer` and `no-store`; the pages
+  base-uri 'none'`, `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy: same-origin` and `no-store`; the pages
   carry no script.
 
 What remains: browsers send a host's cookies to every port of it, so a program another local

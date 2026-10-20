@@ -223,7 +223,9 @@ func (u *UI) Handler() http.Handler {
 		h.Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'")
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("X-Frame-Options", "DENY")
-		h.Set("Referrer-Policy", "no-referrer")
+		// same-origin, not no-referrer: under no-referrer browsers send
+		// "Origin: null" on the UI's own form posts, which change refuses.
+		h.Set("Referrer-Policy", "same-origin")
 		h.Set("Cache-Control", "no-store")
 		if !slices.Contains(u.hosts, r.Host) {
 			http.Error(w, "This is meshctl's local UI; open it at http://"+u.c.Addr.String()+"/", http.StatusMisdirectedRequest)

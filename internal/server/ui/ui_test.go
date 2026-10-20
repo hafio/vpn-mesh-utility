@@ -173,7 +173,10 @@ func TestEveryResponseCarriesTheSecurityHeaders(t *testing.T) {
 	for _, p := range []string{"/login", "/", "/nodes", "/versions", "/audit", "/settings", "/users", "/account", "/static/app.css", "/nope"} {
 		w := r.do(http.MethodGet, p, cookie, nil)
 		h := w.Header()
-		if h.Get("Content-Security-Policy") != CSP || h.Get("X-Frame-Options") != "DENY" || h.Get("X-Content-Type-Options") != "nosniff" {
+		// same-origin keeps the browser's Origin on the UI's own posts
+		// (no-referrer would make it "null", and sign-in impossible).
+		if h.Get("Content-Security-Policy") != CSP || h.Get("X-Frame-Options") != "DENY" || h.Get("X-Content-Type-Options") != "nosniff" ||
+			h.Get("Referrer-Policy") != "same-origin" {
 			t.Errorf("%s: headers %v", p, h)
 		}
 	}

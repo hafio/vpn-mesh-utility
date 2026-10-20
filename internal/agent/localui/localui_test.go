@@ -406,7 +406,8 @@ func TestDashboard(t *testing.T) {
 	w := r.do(http.MethodGet, "/", cookie, nil, nil)
 	h := w.Header()
 	if w.Code != http.StatusOK || h.Get("Content-Security-Policy") != "default-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'" ||
-		h.Get("X-Frame-Options") != "DENY" || h.Get("Cache-Control") != "no-store" || h.Get("Content-Type") != "text/html; charset=utf-8" {
+		h.Get("X-Frame-Options") != "DENY" || h.Get("Cache-Control") != "no-store" || h.Get("Content-Type") != "text/html; charset=utf-8" ||
+		h.Get("Referrer-Policy") != "same-origin" {
 		t.Fatalf("dashboard = %d %v", w.Code, h)
 	}
 	golden(t, "dashboard.golden.html", w.Body.String())

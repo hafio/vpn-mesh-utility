@@ -648,8 +648,8 @@
     "semantic_hash": ""
   },
   "deploy/compose.server.yml": {
-    "mtime": 1791769189.598024,
-    "seen": 1792449250.1833954,
+    "mtime": 1792453776.458655,
+    "seen": 1792454172.4219186,
     "ast_hash": "7e34d98dad77c57ca56eaef97dc4620e",
     "semantic_hash": ""
   },
@@ -672,9 +672,9 @@
     "semantic_hash": ""
   },
   "docs/security.md": {
-    "mtime": 1792449617.7374623,
-    "seen": 1792449969.711782,
-    "ast_hash": "992e99b828bcca1e625329fe7c4ee303",
+    "mtime": 1792453433.8313196,
+    "seen": 1792454172.4220722,
+    "ast_hash": "6ea4efc3b3f7d521a5c8687ba4901242",
     "semantic_hash": ""
   },
   "cmd/meshctl/import.go": {
@@ -852,15 +852,15 @@
     "semantic_hash": ""
   },
   "internal/server/ui/ui.go": {
-    "mtime": 1792108818.8459587,
-    "seen": 1792449250.1833763,
-    "ast_hash": "a49de7e528704dd05130be38e97e8f04",
+    "mtime": 1792453433.8303456,
+    "seen": 1792454172.4212692,
+    "ast_hash": "c6c554fcae058b353d26e21610fa6078",
     "semantic_hash": ""
   },
   "internal/server/ui/ui_test.go": {
-    "mtime": 1792450453.2821596,
-    "seen": 1792450780.0796618,
-    "ast_hash": "5cdd11fe7266f0827367355e67ba0958",
+    "mtime": 1792453433.8308873,
+    "seen": 1792454172.4212706,
+    "ast_hash": "43b7c05748e71edc0341c1fea5be3785",
     "semantic_hash": ""
   },
   "internal/server/ui/templates/account.html": {
@@ -1266,15 +1266,15 @@
     "semantic_hash": ""
   },
   "internal/agent/localui/localui.go": {
-    "mtime": 1792160827.337315,
-    "seen": 1792449250.1832354,
-    "ast_hash": "753555075f5ac56c41bdd74bed69e805",
+    "mtime": 1792453433.8305962,
+    "seen": 1792454172.4153214,
+    "ast_hash": "e8d9d3f30ac9719411d6b149b979f339",
     "semantic_hash": ""
   },
   "internal/agent/localui/localui_test.go": {
-    "mtime": 1792162081.757649,
-    "seen": 1792449250.1832364,
-    "ast_hash": "a91cfc4497622c3f01cd04a76decd685",
+    "mtime": 1792453433.8311005,
+    "seen": 1792454172.4153242,
+    "ast_hash": "1dca5c1c187e44040a0e390a889b21ef",
     "semantic_hash": ""
   },
   "internal/agent/localui/pages.go": {
