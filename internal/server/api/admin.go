@@ -434,12 +434,19 @@ func (s *Nodes) Set(ctx context.Context, by Actor, name string, req NodeSetReque
 	if err := validateSet(req); err != nil {
 		return NodeChange{}, err
 	}
+	var notes []string
 	res, err := s.rec.Apply(ctx, Change{Actor: by.Name, UserID: by.UserID, Action: "node.set", Target: name}, func(tx *store.Tx, c *Change) error {
 		n, err := nodeByName(tx, name, "node")
 		if err != nil {
 			return err
 		}
 		detail := map[string]any{}
+		if req.MeshIP != nil {
+			if notes, err = moveMeshIP(tx, &n, *req.MeshIP); err != nil {
+				return err
+			}
+			detail["mesh_ip"] = n.MeshIP
+		}
 		if req.Endpoint != nil {
 			n.Endpoint = *req.Endpoint
 			if n.Endpoint != "" {
@@ -488,7 +495,54 @@ func (s *Nodes) Set(ctx context.Context, by Actor, name string, req NodeSetReque
 	if err != nil {
 		return NodeChange{}, err
 	}
-	return s.answer(ctx, name, res, nil)
+	ch, err := s.answer(ctx, name, res, nil)
+	ch.Notes = notes
+	return ch, err
+}
+
+// moveMeshIP gives n the mesh IP ip (amendment A41), checked as a fixed IP
+// at add is: inside the mesh, not the network or broadcast address of its
+// /24, not another node's; the plan check that follows refuses one inside a
+// container subnet. The same address changes nothing. The notes are what
+// the move does not reach.
+func moveMeshIP(tx *store.Tx, n *store.Node, ip string) ([]string, error) {
+	addr, _ := validate.IPv4("mesh_ip", ip) // validated in validateSet
+	old := n.MeshIP
+	if addr.String() == old {
+		return nil, nil
+	}
+	in, nodes, err := LoadInput(tx)
+	if err != nil {
+		return nil, err
+	}
+	used := map[netip.Addr]bool{}
+	for _, o := range nodes {
+		if a, err := netip.ParseAddr(o.MeshIP); err == nil && o.ID != n.ID {
+			used[a] = true
+		}
+	}
+	if err := planner.CheckRequested(in.MeshCIDR, addr, used); err != nil {
+		return nil, invalid(err)
+	}
+	n.MeshIP = addr.String()
+	notes := []string{fmt.Sprintf("%s moves from %s to %s; open connections to the old address drop", n.Name, old, n.MeshIP)}
+	switch n.Role {
+	case string(proto.RoleServer):
+		notes = append(notes, fmt.Sprintf("anything set up with %s on %s keeps it -- Swarm's advertise address above all: rejoin Swarm there with --advertise-addr %s", old, n.Name, n.MeshIP))
+	case string(proto.RolePhone):
+		notes = append(notes, fmt.Sprintf("the phone's profile still has %s: make a new one (`meshctl node phone %s`)", old, n.Name))
+	}
+	rules, err := tx.FirewallRules()
+	if err != nil {
+		return nil, err
+	}
+	oldIP, _ := netip.ParseAddr(old) // stored validated
+	for _, r := range rules {
+		if p, err := netip.ParsePrefix(r.SourceCIDR); err == nil && p.Contains(oldIP) && !p.Contains(addr) {
+			notes = append(notes, fmt.Sprintf("custom firewall rule %d opens %d/%s from %s, which held the old address", r.ID, r.Port, r.Proto, r.SourceCIDR))
+		}
+	}
+	return notes, nil
 }
 
 // SetDisabled disables a node (every peer drops it; its stream is closed) or
@@ -752,6 +806,10 @@ func validateSet(req NodeSetRequest) error {
 	}
 	if req.MTU != nil {
 		_, err := validate.IntRange("mtu", *req.MTU, proto.MinMTU, proto.MaxMTU)
+		check(err)
+	}
+	if req.MeshIP != nil {
+		_, err := validate.IPv4("mesh_ip", *req.MeshIP)
 		check(err)
 	}
 	if err := errors.Join(errs...); err != nil {

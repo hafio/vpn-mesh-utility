@@ -94,6 +94,9 @@ type NodeSetRequest struct {
 	// Containers gives a host-mode node a container subnet, or takes it
 	// away; a node's mode is chosen when it is added.
 	Containers *bool `json:"containers,omitempty"`
+	// MeshIP moves the node to another mesh IP (amendment A41): inside the
+	// mesh and not taken. Its peers, its DNS name and its agent follow.
+	MeshIP *string `json:"mesh_ip,omitempty"`
 }
 
 // Enrollment is a freshly issued join token and the commands that use it.
@@ -115,6 +118,9 @@ type NodeChange struct {
 	Version    int64       `json:"version"`
 	Enrollment *Enrollment `json:"enrollment,omitempty"`
 	Warnings   []string    `json:"warnings,omitempty"`
+	// Notes are what the operator must do by hand after the change: what
+	// a new mesh IP does not reach (Swarm, a phone's profile, a rule).
+	Notes []string `json:"notes,omitempty"`
 }
 
 // PhoneRequest is POST /admin/v1/nodes/{name}/phone. An empty Exit is the

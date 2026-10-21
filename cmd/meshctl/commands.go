@@ -9,7 +9,9 @@ import (
 	"log/slog"
 	"net/netip"
 	"runtime"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // command is one node of the command tree: a group (sub set, setup nil) or a
@@ -57,10 +59,65 @@ func newFlags(path string, c command, stderr io.Writer) *flag.FlagSet {
 		fs.VisitAll(func(*flag.Flag) { n++ })
 		if n > 0 {
 			fmt.Fprint(stderr, "\nflags:\n")
-			fs.PrintDefaults()
+			printFlags(stderr, fs)
 		}
 	}
 	return fs
+}
+
+// flagName is how help and docs/commands.md spell a flag: -f for a
+// one-letter flag, --name otherwise. The flag package takes either.
+func flagName(name string) string {
+	if len(name) == 1 {
+		return "-" + name
+	}
+	return "--" + name
+}
+
+// printFlags is flag.PrintDefaults with flagName's spelling: the flag, its
+// value's kind, then its meaning and default on an indented line.
+func printFlags(w io.Writer, fs *flag.FlagSet) {
+	fs.VisitAll(func(f *flag.Flag) {
+		kind, usage := flag.UnquoteUsage(f)
+		line := "  " + flagName(f.Name)
+		if kind != "" {
+			line += " " + kind
+		}
+		line += "\n    \t" + strings.ReplaceAll(usage, "\n", "\n    \t")
+		if def := shownDefault(f); def != "" {
+			line += " (default " + def + ")"
+		}
+		fmt.Fprintln(w, line)
+	})
+}
+
+// shownDefault is a flag's default as help shows it, as PrintDefaults does:
+// text quoted, nothing for a zero value.
+func shownDefault(f *flag.Flag) string {
+	g, ok := f.Value.(flag.Getter)
+	if !ok {
+		return f.DefValue
+	}
+	switch g.Get().(type) {
+	case string:
+		if f.DefValue == "" {
+			return ""
+		}
+		return strconv.Quote(f.DefValue)
+	case bool:
+		if f.DefValue == "false" {
+			return ""
+		}
+	case time.Duration:
+		if f.DefValue == "0s" {
+			return ""
+		}
+	case int, int64, uint, uint64, float64:
+		if f.DefValue == "0" {
+			return ""
+		}
+	}
+	return f.DefValue
 }
 
 func argSynopsis(args string) string {

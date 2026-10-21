@@ -611,6 +611,15 @@ func TestEditSpoke(t *testing.T) {
 	if n := r.nodes(); len(n) != 3 || n[2].Keepalive != 15 || n[2].PrimaryHubID != byName["vps-1"].ID {
 		t.Fatalf("a refused edit changed the spoke: %+v", n)
 	}
+	// A new mesh IP from the form (amendment A41), and what it does not reach.
+	if w := post("/nodes/laptop", url.Values{"mesh_ip": {"10.77.2.9"}, "hub": {"vps-1"}, "keepalive": {"15"}, "mtu": {"1380"}}); w.Code != http.StatusOK ||
+		!strings.Contains(w.Body.String(), "laptop moves from 10.77.2.1 to 10.77.2.9") || !strings.Contains(w.Body.String(), `name="mesh_ip" value="10.77.2.9"`) {
+		t.Fatalf("a new mesh IP = %d\n%s", w.Code, w.Body)
+	}
+	if w := post("/nodes/laptop", url.Values{"mesh_ip": {"10.77.0.1"}, "hub": {"vps-1"}, "keepalive": {"15"}, "mtu": {"1380"}}); w.Code != http.StatusBadRequest ||
+		!strings.Contains(w.Body.String(), "already assigned") {
+		t.Fatalf("a taken mesh IP = %d\n%s", w.Code, w.Body)
+	}
 	if w := post("/nodes/laptop/disable", url.Values{}); w.Code != http.StatusOK {
 		t.Fatalf("disable = %d", w.Code)
 	}
@@ -1036,5 +1045,13 @@ func TestHelpers(t *testing.T) {
 	}
 	if !sameOrigin("https://MESH.example.com", origin) || sameOrigin("", origin) || sameOrigin("https://mesh.example.com.evil", origin) {
 		t.Fatal("sameOrigin")
+	}
+	// Times are shown in the server's time zone (TZ, the clock's location).
+	sgt := time.FixedZone("SGT", 8*3600)
+	for zone, want := range map[*time.Location]string{time.UTC: "2026-10-12 08:00:00 UTC", sgt: "2026-10-12 16:00:00 SGT"} {
+		u := &ui{Deps: Deps{Now: func() time.Time { return now.In(zone) }}}
+		if got := u.stamp(now.Unix()); got != want {
+			t.Errorf("stamp in %s = %q, want %q", zone, got, want)
+		}
 	}
 }

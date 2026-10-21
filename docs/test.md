@@ -124,7 +124,7 @@ in through the UI itself (password, then TOTP enrolment).
 | `TestPagesNeedAFullSession` | redirects and 401s without a session; htmx refreshes get `HX-Redirect`; a pending session reaches no page |
 | `TestChangesNeedOriginAndCSRF` | missing or wrong CSRF token, another origin, no Origin: refused, and nothing written |
 | `TestNodeLifecycle` | add (token shown once, form kept on errors), edit, disable, enable, new token, remove with confirmation, audited as `user:admin` |
-| `TestEditSpoke` | a spoke's hub, exit and keepalive edit; the hub and exit choices offered; refused edits (400/404) change nothing; no token for a disabled node; the computed config on a server's page |
+| `TestEditSpoke` | a spoke's hub, exit and keepalive edit; the hub and exit choices offered; refused edits (400/404) change nothing; a new mesh IP from the form with its note, a taken one refused; no token for a disabled node; the computed config on a server's page |
 | `TestDNSAndFirewallPages` | the zone with automatic names and the upstreams; a custom record added and removed; a record named like a node (409) and a refusal without CSRF (403) changing nothing; each server's rules with their source; a custom rule added and removed; a bad port (400) and a missing rule (404) coming back on the page with the form kept |
 | `TestContainerModePages` | a container-mode node from the add form: its page names the mode and subnet, offers the compose file per runtime and no exit; a host-mode node's edit form puts its containers on the mesh and takes them off; a container-mode phone is refused; the DNS page lists no names, then box's reported names with how one resolves (`web.mesh`, `web.box.mesh`) and why another is not published |
 | `TestSpokeComposeDownload` | a spoke's page offers its compose file (a server's does not); the download carries the form's backend and directory as `compose.yml`; a server (409) and a hostile directory (400) come back on the page; no download without a session |
@@ -133,7 +133,7 @@ in through the UI itself (password, then TOTP enrolment).
 | `TestSettings`, `TestUsersAndAccount`, `TestDashboardFragmentAndExport` | validation of every setting (CIDR only while empty), user management (not on yourself), password change ending the session, the refresh fragment, the export download; the DNS zone shown, refused when it ends in local, and a new one renaming the DNS page's names; extra domains saved sorted and shown on the DNS page, a bad one and the server's own domain refused (400), one inside the zone refused by the plan (409), kept by a form without the field and cleared by an empty one |
 | `TestHTMXIsPinned`, `TestTemplatesHaveNoInlineScriptOrStyle` | the vendored htmx's sha256; no inline script, style or event handler in any template; no static directory listing or path escape |
 | `TestPageGoldens` | `testdata/{login,dashboard,node,version}.golden.html` for fixed data, the node's DNS state included (`./scripts/dev.sh regen` creates and updates them) |
-| `TestEveryPageRenders`, `TestHelpers` | every template renders; ages (never, a clock ahead of the report shows 0s), byte sizes and the origin check (the dashboard colours are `api`'s `TestDashboardHealth`) |
+| `TestEveryPageRenders`, `TestHelpers` | every template renders; ages (never, a clock ahead of the report shows 0s), byte sizes, the origin check, and times in the server's time zone (UTC, SGT) (the dashboard colours are `api`'s `TestDashboardHealth`) |
 | `TestPhonePage`, `TestQRCode` (`phone_test.go`) | a phone added from the nodes page (no token, no compose, no peers table, no exit setting); its via-exit profile shown once as an inline SVG QR code and text, `no-store`, the private key never in the log; a server that is no exit (409) refused on the page; a hub change marks the profile out of date; audited `phone.profile` as `user:admin`. The QR path draws exactly the library's dark modules with a 4-module quiet zone, and a too-long profile's error does not quote it |
 
 ## `internal/server/versions`
@@ -169,13 +169,14 @@ and counts transactions, so a refusal can be shown to happen before any database
 | | `TestAdminSetDisableEnableRemove`, `TestAdminTokenAndShow` | each write; disable closes the node's stream and drops it from peers |
 | | `TestAdminClientOverTheSocket` | `AdminClient` against the handler on a real Unix socket, including error codes |
 | | `TestContainerNetworksNeedRoom`, `TestAdminContainerMode` | container networks over the admin API: the lowest free /24 for a container-mode node and for a host-mode one on request, the refusals (no endpoint, an exit, a phone, an unknown mode, turning container mode's off), the compose file per runtime and backend, a hub's published port, a hub without an endpoint (409), and deploy's network names equal proto's |
+| | `TestMoveMeshIP` | a new mesh IP (amendment A41): every peer and the DNS name follow in a new version; the notes name a custom rule holding the old address, a server's Swarm advertise address, a phone's profile; the same address changes nothing; a taken, outside, broadcast or malformed address is 400, one inside a container subnet 409, and nothing moves |
 | | `TestAdminCompose` | a spoke's compose file with the server's release and origin, both backends and a chosen directory; a server (409), an unknown node (404), a bad name, backend or directory (400) and a development build refused |
 | | `TestCustomDNSRecords` (`records_test.go`) | an alias and a fixed record reach every config; an alias of a node not on the mesh changes no config but shows as not live; the DNS page's rows; bad names, both or neither target, a bad IP: 400 before any transaction; a duplicate, a node's name, an IP outside the mesh (409) and an unknown node (404) write nothing; removal; audited `dns.add`/`dns.rm`; a name given with the zone is refused (409) |
 | | `TestCustomFirewallRules` (`records_test.go`) | a rule for every server and one for vps-1 rendered with their notes; every bad field at once (400, no transaction); a spoke (400) and an unknown server (404) refused; removal; audited `firewall.add`/`firewall.rm` |
 | | `TestAdminErrorCodes`, `TestAdminSetClearsReferences` | every refusal of every admin write (404, 400, 409) leaves state untouched, a phone's profile included (a server, a bad, unknown or non-exit exit, an unknown field); clearing an endpoint warns |
 | `phone_test.go` | `TestPhoneProfile` | a phone added without a token; a mesh-only profile whose private key matches the public key all three servers peer with, the hub's resolver as DNS; a via-exit profile replaces the key and adds `0.0.0.0/0, ::/0` to the exit's peer; no audit row carries a private key; a hub change marks the profile out of date; the servers' reported handshake in `node list` and `node show` |
 | | `TestPhoneProfileNeedsAServer` | without a joined server with an endpoint: 409, the phone keeps no key and nothing is audited |
-| `health_test.go` | `TestDashboardHealth` | the dashboard colour and label the web UI and the mesh view share: disabled, not joined, no or a silent heartbeat, a rollback, degraded, applying, a late heartbeat; a phone by its profile and its servers' handshakes; a phone is seen by its handshake; a hub relay failover judged down says since when |
+| `health_test.go` | `TestDashboardHealth` | the dashboard colour and label the web UI and the mesh view share: disabled, not joined, no or a silent heartbeat, a rollback, degraded, applying, a late heartbeat; a phone by its profile and its servers' handshakes; a phone is seen by its handshake; a hub relay failover judged down says since when, in the server's time zone |
 | `reconcile_test.go` | `TestReconcilerVersionsOnlyRealChanges` | a no-op writes no version; a change notifies exactly the nodes whose config changed; the snapshot is stored (amendment A16) |
 | | `TestReconcilerRollsBackAFailedMutation`, `TestPlanErrorListsTheProblems`, `TestLoadInputRefusesBrokenSettings` | rollback, the 409 mapping, broken settings |
 | | `TestRollbackIsANewVersion` | restoring version N writes a new version recording N, notifies the changed nodes, writes nothing when the state already matches, 404 for an unknown N |
@@ -208,7 +209,7 @@ no secrets), `TestReadRoundTripsAndRefusesUnknownShapes`, `TestToSnapshotRoundTr
 | `TestUnitPosture` | the unit's `[Service]` section exactly (`ProtectKernelLogs=yes` included) -- any added, removed or widened setting fails |
 | `TestInstallGolden`, `TestInstallChangesOnlyTheMarkers`, `TestInstallParses` | `testdata/install.golden.sh`; rendering changes only the four quoted markers; `sh -n` accepts it |
 | `TestInstallRefusesHostileValues` | quotes, paths, `$(...)`, newlines, bad checksums are refused before rendering |
-| `TestServerComposePosture`, `TestDevComposePosture` | the exact service keys, user, no privileges, no capabilities, read-only root, named volumes only, no widening token anywhere in the file |
+| `TestServerComposePosture`, `TestDevComposePosture` | the exact service keys, user, no privileges, no capabilities, read-only root, named volumes only, no widening token anywhere in the file; the server's environment is `TZ` only |
 | `TestNASComposeGolden` | `testdata/compose.nas-{userspace,kernel}.golden.yml`; empty backend and directory are the userspace variant in `/volume1/docker/meshctl`, and 1.2.3 is the same image as v1.2.3 |
 | `TestNASComposePosture` | both variants' exact service keys and values: uid 0, host network, NET_ADMIN and NET_BIND_SERVICE only, the tun device in userspace only, one bind mount; no other widening token |
 | `TestContainerComposeGolden` | `testdata/compose.container-{hub-docker,podman,swarm}.golden.yml` (amendment A37; swarm without names); the defaults are docker, auto and the named volume |
@@ -300,8 +301,8 @@ and `Policy.Fail`/`FailOn` inject a failure into one method, also while an agent
 | Test | Pins |
 | --- | --- |
 | `TestCommandsDoc` | docs/commands.md equals the registry's rendering (`./scripts/dev.sh regen` rewrites it) |
-| `TestEveryCommandHasHelp`, `TestGroupsNeedASubcommand`, `TestFlagsMayFollowPositionalArguments` | the command tree |
-| `TestNodeLifecycle`, `TestNodeCommandsExplainAMissingServer` | every `node` command against a real admin socket, `node compose` with both backends, for a server and with a hostile directory |
+| `TestEveryCommandHasHelp`, `TestHelpShowsFlagsAsTheDocsDo`, `TestGroupsNeedASubcommand`, `TestFlagsMayFollowPositionalArguments` | the command tree; help spells flags as the docs do (`--name`, a one-letter `-f`) with their kind and a non-zero default |
+| `TestNodeLifecycle`, `TestNodeCommandsExplainAMissingServer` | every `node` command against a real admin socket (`node set --mesh-ip` with its note), `node compose` with both backends, for a server and with a hostile directory |
 | `TestNodePhone` | `node add --role phone` prints the profile command, not a token; `node phone` prints the profile alone on stdout (the note on stderr) and `--json`; `node list` and `node show` of a phone; a server and a non-exit exit refused |
 | `TestExportCommand`, `TestServerFlagErrors`, `TestAgentJoinTakesTheTokenFromTheEnvironment`, `TestHealthcheckServer`, `TestStatusAndAgentHealthcheck`, `TestPrintStatusOfALaptop`, `TestBytesize` | the other commands; the token never echoed; `status` of a laptop with nothing applied, an exit and errors; `server --hub-down-after` only 0 or 1s to 1h |
 | `TestNodeShowAnEnrolledServer` | `node show` of a joined server: rows, peers, the computed config, a reported rollback; `node list` shows it rolled back |
@@ -311,6 +312,7 @@ and `Policy.Fail`/`FailOn` inject a failure into one method, also while an agent
 | `TestLogsCommand` | `meshctl logs` prints the agent's ring as it holds it; an argument is a usage error; no agent is exit 1 |
 | `TestDNSCommand` (`exit_test.go`) | `meshctl dns` shows the state, `on`/`off` switch it through the agent, usage errors never reach it, no agent is exit 1; the state names the zone the node serves |
 | `TestExitCommand`, `TestExitReportsAnAgentThatDoesNotApply` (`exit_test.go`) | `meshctl exit` shows the exit and choices, switches and waits for the applied hash, `off` sends an empty exit, `--wait 0`; a refusal is exit 1 with the server's reason; usage errors never reach the agent; an agent that does not apply in time is reported with its error |
+| `TestPrintEnrollmentInTheLocalZone` (`commands_test.go`) | a join token's expiry in the local time zone; no enrollment, nothing printed |
 | `TestUserCommands` | passwords only from a terminal (a fake in tests), twice and matching, never echoed; add, passwd, reset-totp |
 | `TestImportCommand` | import then export round trip; a file with unknown fields refused (Linux only) |
 
@@ -320,8 +322,9 @@ Build tags `e2e linux`, root, `./scripts/dev.sh e2e`. Network namespaces on a br
 binary with kernel WireGuard -- the NAS spoke with the userspace backend -- and the server behind a
 TLS proxy (a helper process of the test binary).
 
-`TestServerMesh` checks: join -> two peers and traffic between every pair within 60 s; `node
-disable` -> the node leaves both other servers within 30 s and is unreachable; server stopped, an
+`TestServerMesh` checks: join -> two peers and traffic between every pair within 60 s; `node set
+vps-2 --mesh-ip` -> vps-2 reports the new address and the others reach it there, not at the old
+one; `node disable` -> the node leaves both other servers within 30 s and is unreachable; server stopped, an
 agent killed and its `wg0` deleted -> the restarted agent rebuilds `wg0` from its cache and reaches
 the other server.
 

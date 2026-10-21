@@ -559,6 +559,19 @@ func TestServerMesh(t *testing.T) {
 		}
 	}
 
+	// A new mesh IP (amendment A41): vps-2 takes it and the others reach it
+	// there, no longer at the old one.
+	if out, err := l.meshctl("", nil, "node", "set", "vps-2", "--mesh-ip", "10.77.0.9", "--data", l.data("server")); err != nil {
+		t.Fatalf("node set --mesh-ip: %v\n%s", err, out)
+	}
+	eventually(t, 30*time.Second, "vps-2 to move to 10.77.0.9", func() bool {
+		st, err := l.status("b")
+		return err == nil && st.MeshIP == "10.77.0.9" && l.ping("a", "10.77.0.9") && l.ping("c", "10.77.0.9")
+	})
+	if l.ping("a", "10.77.0.2") {
+		t.Error("vps-2 still answers on its old mesh IP")
+	}
+
 	// Disable -> gone from every peer within 30 s.
 	if out, err := l.meshctl("", nil, "node", "disable", "vps-3", "--data", l.data("server")); err != nil {
 		t.Fatalf("node disable: %v\n%s", err, out)

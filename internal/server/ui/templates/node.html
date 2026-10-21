@@ -51,6 +51,7 @@
 <h2>Edit</h2>
 <form method="post" action="/nodes/{{.Node.Name}}" class="grid">
 <input type="hidden" name="csrf" value="{{$.CSRF}}">
+<label>Mesh IP <input name="mesh_ip" value="{{.Node.MeshIP}}"></label>
 {{- if .IsServer}}
 <label>Endpoint <input name="endpoint" value="{{.Node.Endpoint}}" placeholder="IPv4:port"></label>
 <label>Listen port <input name="listen_port" value="{{.Node.ListenPort}}"></label>

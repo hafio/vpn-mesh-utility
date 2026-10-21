@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hafio/vpn-mesh-utility/internal/agent/localapi"
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
@@ -133,6 +134,10 @@ func TestNodeLifecycle(t *testing.T) {
 	}
 	if code, out, _ = runArgs("node", "set", "laptop", "--hub", "default", "--data", data, "--json"); code != exitOK || !strings.Contains(out, `"name": "laptop"`) || strings.Contains(out, `"hub"`) {
 		t.Fatalf("set --hub default must clear the hub: %d\n%s", code, out)
+	}
+	if code, out, _ = runArgs("node", "set", "laptop", "--mesh-ip", "10.77.2.9", "--data", data); code != exitOK ||
+		!strings.Contains(out, "laptop moves from 10.77.2.1 to 10.77.2.9") {
+		t.Fatalf("set --mesh-ip: %d\n%s", code, out)
 	}
 	if code, _, errOut = runArgs("node", "set", "laptop", "--data", data); code != exitUsage || !strings.Contains(errOut, "nothing to change") {
 		t.Fatalf("set without changes: %d %s", code, errOut)
@@ -584,5 +589,18 @@ func TestImportCommand(t *testing.T) {
 	}
 	if code, _, _ = runArgs("import", "--data", data); code != exitUsage {
 		t.Fatalf("no file: %d", code)
+	}
+}
+
+// A join token's expiry is shown in the local time zone.
+func TestPrintEnrollmentInTheLocalZone(t *testing.T) {
+	var b strings.Builder
+	printEnrollment(&b, time.FixedZone("SGT", 8*3600), &api.Enrollment{Token: testfix.Token, ExpiresAt: testfix.Epoch.Unix()})
+	if !strings.Contains(b.String(), "valid until 2026-10-12T16:00:00+08:00") {
+		t.Fatalf("printEnrollment =\n%s", b.String())
+	}
+	b.Reset()
+	if printEnrollment(&b, time.UTC, nil); b.Len() != 0 {
+		t.Fatalf("no enrollment printed %q", b.String())
 	}
 }

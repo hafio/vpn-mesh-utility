@@ -41,6 +41,9 @@ func TestDashboardHealth(t *testing.T) {
 	if got, label := Health(down, now); got != proto.HealthBad || label != "down since 2026-10-12 07:00 UTC; its pairs relay through other hubs" {
 		t.Errorf("a down hub = %s %q", got, label)
 	}
+	if _, label := Health(down, now.In(time.FixedZone("SGT", 8*3600))); label != "down since 2026-10-12 15:00 SGT; its pairs relay through other hubs" {
+		t.Errorf("a down hub, the server in SGT = %q", label)
+	}
 	// A phone is heard of through its servers' handshakes, anything else by
 	// its heartbeat.
 	if (NodeInfo{Role: "phone", LastSeen: 1, LastHandshake: 2}).Seen() != 2 || (NodeInfo{Role: "spoke", LastSeen: 1, LastHandshake: 2}).Seen() != 1 {

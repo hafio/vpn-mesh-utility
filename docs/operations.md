@@ -16,6 +16,7 @@ The server is one container behind Dokploy's Traefik. Create a compose app from
 | `MESHCTL_VERSION` | the release to run, e.g. `1.0.0` (the image tag, without the `v`) |
 | `MESHCTL_URL` | the public origin agents use, e.g. `https://mesh.example.com` |
 | `MESHCTL_TRUSTED_PROXIES` | optional: the CIDR of `dokploy-network`, so the server sees real client addresses |
+| `TZ` | optional: the time zone the web UI, the dashboard and the server's log show times in, e.g. `Asia/Singapore` (default `UTC`) |
 
 Point the domain at the service's port 8080 in Dokploy. Nothing is published on the host. The
 container runs as uid 65532 with no capabilities and a read-only root file system; the database
@@ -304,6 +305,7 @@ node ...`. Each change is versioned, audited and pushed to the affected agents a
 | re-install a node from scratch | `node token vps-3`, then the install command again |
 | a phone's new profile (a new key) | `node phone <name>`, `--exit vps-2` for all its traffic |
 | remove a node | `node rm vps-3` |
+| move a node to another mesh IP | `node set laptop --mesh-ip 10.77.2.9`, or Mesh IP on its page: peers, its DNS name and its agent follow; the answer lists what does not (a server's Swarm advertise address, a phone's profile, a custom firewall rule naming the old address) |
 
 **Relay failover** (amendment A40). Two spokes with different hubs talk through one of them (the
 lower-id spoke's hub). When that hub goes down, the server moves the pair to the other spoke's hub,

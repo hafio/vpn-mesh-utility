@@ -54,7 +54,7 @@ func renderCommands() string {
 				if f.DefValue != "" {
 					def = "`" + f.DefValue + "`"
 				}
-				fmt.Fprintf(&b, "| `--%s` | %s | %s |\n", f.Name, def, cell(f.Usage))
+				fmt.Fprintf(&b, "| `%s` | %s | %s |\n", flagName(f.Name), def, cell(f.Usage))
 			})
 		}
 	}
@@ -113,10 +113,39 @@ func TestEveryCommandHasHelp(t *testing.T) {
 				walk(args, c.sub)
 				continue
 			}
-			if code, _, errOut := runArgs(append(args, "-h")...); code != exitOK || !strings.Contains(errOut, "usage: meshctl") {
+			code, _, errOut := runArgs(append(args, "-h")...)
+			if code != exitOK || !strings.Contains(errOut, "usage: meshctl") {
 				t.Errorf("%v -h: code %d, stderr %q", args, code, errOut)
+			}
+			// Flags are spelled as the docs spell them: --name, or -f.
+			for _, line := range strings.Split(errOut, "\n") {
+				if f, ok := strings.CutPrefix(line, "  -"); ok && !strings.HasPrefix(f, "-") && len(strings.Fields(f + " x")[0]) > 1 {
+					t.Errorf("%v -h spells a flag with one dash: %q", args, line)
+				}
 			}
 		}
 	}
 	walk(nil, commands())
+}
+
+// Help shows each flag as the docs do, with its kind and its default.
+func TestHelpShowsFlagsAsTheDocsDo(t *testing.T) {
+	_, _, join := runArgs("agent", "join", "-h")
+	_, _, run := runArgs("agent", "run", "-h")
+	_, _, logs := runArgs("logs", "-h")
+	for _, c := range []struct{ out, want string }{
+		{join, "  --server string\n    \tserver origin, e.g. https://mesh.example.com\n"},
+		{join, "  --token string\n"},
+		{run, `(default "auto")`},
+		{run, "  --status-every duration\n"},
+		{run, "(default 30s)"},
+		{logs, "  -f\n    \tkeep printing new lines until interrupted\n"},
+	} {
+		if !strings.Contains(c.out, c.want) {
+			t.Errorf("help lacks %q:\n%s", c.want, c.out)
+		}
+	}
+	if strings.Contains(run, "(default false)") || strings.Contains(join, `(default "")`) {
+		t.Errorf("help shows a zero default:\n%s%s", run, join)
+	}
 }

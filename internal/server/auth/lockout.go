@@ -28,7 +28,7 @@ type LockoutError struct {
 }
 
 func (e *LockoutError) Error() string {
-	return fmt.Sprintf("too many failed sign-ins; try again after %s", e.Until.UTC().Format(time.RFC3339))
+	return fmt.Sprintf("too many failed sign-ins; try again after %s", e.Until.Format(time.RFC3339))
 }
 
 type failures struct {

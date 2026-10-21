@@ -102,7 +102,7 @@ func setupNodeAdd(fs *flag.FlagSet, e *env) action {
 		if ch.Node.Mode == "container" {
 			fmt.Fprintf(e.stdout, "\ncontainer mode: run its agent from the compose file\n  meshctl node compose %s [--runtime docker|podman|swarm] > compose.yml\n", ch.Node.Name)
 		}
-		printEnrollment(e.stdout, ch.Enrollment)
+		printEnrollment(e.stdout, e.now().Location(), ch.Enrollment)
 		if ch.Node.Role == "phone" {
 			fmt.Fprintf(e.stdout, "\nmake its profile for the WireGuard app:\n  meshctl node phone %s [--exit <server>]\nor as a QR code on its page in the web UI\n", ch.Node.Name)
 		}
@@ -111,11 +111,13 @@ func setupNodeAdd(fs *flag.FlagSet, e *env) action {
 	}
 }
 
-func printEnrollment(w io.Writer, en *api.Enrollment) {
+// printEnrollment shows a join token and how to use it; times are in loc,
+// the local time zone (TZ).
+func printEnrollment(w io.Writer, loc *time.Location, en *api.Enrollment) {
 	if en == nil {
 		return
 	}
-	fmt.Fprintf(w, "\njoin token (shown once, valid until %s):\n  %s\n", time.Unix(en.ExpiresAt, 0).UTC().Format(time.RFC3339), en.Token)
+	fmt.Fprintf(w, "\njoin token (shown once, valid until %s):\n  %s\n", time.Unix(en.ExpiresAt, 0).In(loc).Format(time.RFC3339), en.Token)
 	fmt.Fprintf(w, "\non the node, as root:\n  %s\n", en.Install)
 	fmt.Fprintf(w, "or, where meshctl is already installed:\n  %s\n", en.Join)
 }
@@ -383,6 +385,7 @@ func setupNodeSet(fs *flag.FlagSet, e *env) action {
 	keepalive := fs.Int("keepalive", 0, "PersistentKeepalive seconds (0 turns it off)")
 	mtu := fs.Int("mtu", 0, "interface MTU")
 	containers := fs.Bool("containers", false, "host mode: put the node's containers on the mesh (--containers=false takes them off)")
+	meshIP := fs.String("mesh-ip", "", "move the node to another mesh IP in the mesh (its peers, DNS name and agent follow)")
 	return func(ctx context.Context, args []string) error {
 		name, err := nodeName(args)
 		if err != nil {
@@ -410,14 +413,16 @@ func setupNodeSet(fs *flag.FlagSet, e *env) action {
 				req.MTU = mtu
 			case "containers":
 				req.Containers = containers
+			case "mesh-ip":
+				req.MeshIP = meshIP
 			default:
 				set-- // --data, --json
 			}
 		})
 		if set == 0 {
-			return usagef("nothing to change; give at least one of --endpoint, --listen-port, --hub, --can-exit, --exit, --keepalive, --mtu, --containers")
+			return usagef("nothing to change; give at least one of --endpoint, --listen-port, --hub, --can-exit, --exit, --keepalive, --mtu, --containers, --mesh-ip")
 		}
-		return printChange(e.stdout, *asJSON, "updated", func() (api.NodeChange, error) { return client().Set(ctx, name, req) })
+		return printChange(e.stdout, e.now().Location(), *asJSON, "updated", func() (api.NodeChange, error) { return client().Set(ctx, name, req) })
 	}
 }
 
@@ -445,12 +450,12 @@ func nodeAction(verb string) func(fs *flag.FlagSet, e *env) action {
 				"token":   func() (api.NodeChange, error) { return c.Token(ctx, name) },
 			}[verb]
 			done := map[string]string{"disable": "disabled", "enable": "enabled", "rm": "removed", "token": "issued a token for"}[verb]
-			return printChange(e.stdout, *asJSON, done, call)
+			return printChange(e.stdout, e.now().Location(), *asJSON, done, call)
 		}
 	}
 }
 
-func printChange(w io.Writer, asJSON bool, done string, call func() (api.NodeChange, error)) error {
+func printChange(w io.Writer, loc *time.Location, asJSON bool, done string, call func() (api.NodeChange, error)) error {
 	ch, err := call()
 	if err != nil {
 		return err
@@ -463,7 +468,8 @@ func printChange(w io.Writer, asJSON bool, done string, call func() (api.NodeCha
 	} else {
 		fmt.Fprintf(w, "%s %s; no node's config changed\n", done, ch.Node.Name)
 	}
-	printEnrollment(w, ch.Enrollment)
+	printEnrollment(w, loc, ch.Enrollment)
+	printWarnings(w, ch.Notes)
 	printWarnings(w, ch.Warnings)
 	return nil
 }

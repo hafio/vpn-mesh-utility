@@ -507,3 +507,76 @@ func TestAdminSetClearsReferences(t *testing.T) {
 		t.Fatalf("set endpoint back: %d %+v", code, ch.Node)
 	}
 }
+
+// A node moves to another mesh IP (amendment A41): every peer and its DNS
+// name follow in a new version, and the notes say what does not -- a rule
+// naming the old address, a server's Swarm, a phone's profile. The same
+// address changes nothing; a taken, outside, broadcast or malformed one is
+// refused, and one inside a container subnet is the plan's to refuse.
+func TestMoveMeshIP(t *testing.T) {
+	h := newHarness(t)
+	nas := storeNode(testfix.NAS, true)
+	nas.ContainerSubnet = testfix.ContainerSubnet
+	h.seed(t, storeNode(testfix.VPS1, true), storeNode(testfix.VPS2, true), storeNode(testfix.VPS3, true), nas,
+		storeNode(testfix.Laptop, true), storeNode(testfix.Phone, true))
+	if err := h.st.Tx(context.Background(), func(tx *store.Tx) error {
+		return tx.InsertFirewallRule(&store.FirewallRule{NodeID: testfix.VPS1.ID, Proto: "tcp", Port: 5432, SourceCIDR: testfix.Laptop.MeshIP + "/32"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	move := func(name, ip string) (NodeChange, int, proto.ErrorBody) {
+		t.Helper()
+		var ch NodeChange
+		code, eb := adminCall(t, h, http.MethodPatch, AdminNodes+"/"+name, NodeSetRequest{MeshIP: ptr(ip)}, &ch)
+		return ch, code, eb
+	}
+	before := h.latestVersion(t)
+	ch, code, eb := move("laptop", "10.77.2.9")
+	if code != 200 || ch.Node.MeshIP != "10.77.2.9" || ch.Version <= before {
+		t.Fatalf("move the laptop: %d %+v %+v", code, ch, eb)
+	}
+	notes := strings.Join(ch.Notes, "\n")
+	if !strings.Contains(notes, "laptop moves from 10.77.2.1 to 10.77.2.9") || !strings.Contains(notes, "custom firewall rule 1 opens 5432/tcp from 10.77.2.1/32") {
+		t.Errorf("notes:\n%s", notes)
+	}
+	vps1 := h.config(t, "vps-1")
+	var peer, record string
+	for _, p := range vps1.Peers {
+		if p.Name == "laptop" {
+			peer = strings.Join(p.AllowedIPs, ",")
+		}
+	}
+	for _, r := range vps1.DNS.Records {
+		if r.Name == "laptop" {
+			record = r.IP
+		}
+	}
+	if peer != "10.77.2.9/32" || record != "10.77.2.9" {
+		t.Errorf("vps-1 after the move: peer %q, record %q", peer, record)
+	}
+	if ch, code, _ := move("laptop", "10.77.2.9"); code != 200 || ch.Version != 0 || len(ch.Notes) != 0 {
+		t.Errorf("the same address: %d %+v", code, ch)
+	}
+	for ip, want := range map[string]string{
+		testfix.VPS1.MeshIP: "already assigned",
+		"192.168.1.5":       "outside the mesh",
+		"10.77.2.255":       "broadcast",
+		"laptop":            "mesh_ip",
+	} {
+		if _, code, eb := move("laptop", ip); code != 400 || !strings.Contains(eb.Message, want) {
+			t.Errorf("move to %q: %d %q, want 400 with %q", ip, code, eb.Message, want)
+		}
+	}
+	if _, code, eb := move("laptop", "10.77.128.5"); code != 409 || !strings.Contains(eb.Message, "container subnet") {
+		t.Errorf("into the NAS's container subnet: %d %q", code, eb.Message)
+	}
+	if h.node(t, "laptop").MeshIP != "10.77.2.9" {
+		t.Fatal("a refused move changed the address")
+	}
+	if ch, _, _ := move("vps-3", "10.77.0.9"); !strings.Contains(strings.Join(ch.Notes, "\n"), "--advertise-addr 10.77.0.9") {
+		t.Errorf("a server's notes: %v", ch.Notes)
+	}
+	if ch, _, _ := move("phone", "10.77.3.9"); !strings.Contains(strings.Join(ch.Notes, "\n"), "meshctl node phone phone") {
+		t.Errorf("a phone's notes: %v", ch.Notes)
+	}
+}

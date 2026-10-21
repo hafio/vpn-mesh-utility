@@ -255,8 +255,11 @@ func TestServerComposePosture(t *testing.T) {
 		t.Fatal("the embedded compose file is stale")
 	}
 	doc, svc := service(t, "compose.server.yml")
-	checkPosture(t, "compose.server.yml", svc, []string{"image", "command", "user", "privileged", "cap_drop", "security_opt",
+	checkPosture(t, "compose.server.yml", svc, []string{"image", "command", "environment", "user", "privileged", "cap_drop", "security_opt",
 		"read_only", "tmpfs", "volumes", "expose", "networks", "restart", "mem_limit", "pids_limit", "healthcheck"})
+	if !reflect.DeepEqual(svc["environment"], []any{"TZ=${TZ:-UTC}"}) {
+		t.Errorf("the server's environment is its time zone only: %#v", svc["environment"])
+	}
 	if img, _ := svc["image"].(string); !strings.HasPrefix(img, "ghcr.io/hafio/vpn-mesh-utility:${MESHCTL_VERSION:?") {
 		t.Errorf("image %q must be the pinned release, required from the environment", img)
 	}

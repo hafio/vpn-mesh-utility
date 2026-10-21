@@ -5,6 +5,8 @@
 #   MESHCTL_URL      the public origin, e.g. https://mesh.example.com
 #   MESHCTL_TRUSTED_PROXIES  optional: Traefik's network CIDR, so the server
 #                    believes X-Forwarded-For from it
+#   TZ               optional: the time zone the web UI's times are shown in,
+#                    e.g. Asia/Singapore (default UTC)
 # Posture: non-root, no capabilities, no privilege escalation, read-only
 # root file system; deploy_test.go forbids every widening token.
 name: meshctl
@@ -21,6 +23,7 @@ services:
       - ${MESHCTL_URL:?set MESHCTL_URL to the public https origin}
       - --trusted-proxies
       - ${MESHCTL_TRUSTED_PROXIES:-}
+    environment: ["TZ=${TZ:-UTC}"]
     user: "65532:65532"
     privileged: false
     cap_drop: [ALL]

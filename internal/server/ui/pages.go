@@ -37,7 +37,11 @@ func ago(unix int64, now time.Time) string {
 	return d.String() + " ago"
 }
 
-func stamp(unix int64) string { return time.Unix(unix, 0).UTC().Format("2006-01-02 15:04:05 UTC") }
+// stamp is a time as the pages show it: in the server's time zone (TZ; the
+// clock's location), with the zone named.
+func (u *ui) stamp(unix int64) string {
+	return time.Unix(unix, 0).In(u.Now().Location()).Format("2006-01-02 15:04:05 MST")
+}
 
 type peerAge struct {
 	Name string
@@ -220,7 +224,7 @@ type enrollmentData struct {
 func (u *ui) showEnrollment(w http.ResponseWriter, r *http.Request, s auth.Session, ch api.NodeChange, flash string) {
 	d := enrollmentData{Node: ch.Node.Name, Warnings: ch.Warnings}
 	if e := ch.Enrollment; e != nil {
-		d.Token, d.Expires, d.Install, d.Join = e.Token, stamp(e.ExpiresAt), e.Install, e.Join
+		d.Token, d.Expires, d.Install, d.Join = e.Token, u.stamp(e.ExpiresAt), e.Install, e.Join
 	}
 	u.show(w, r, s, http.StatusOK, "enrollment", "nodes", "Join "+ch.Node.Name, page{Flash: flash, Data: d})
 }
@@ -361,6 +365,10 @@ func (u *ui) editNode(w http.ResponseWriter, r *http.Request, s auth.Session) {
 	var req api.NodeSetRequest
 	mtu, err := atoi("mtu", r.PostFormValue("mtu"))
 	req.MTU = &mtu
+	// A new mesh IP only when the form changes it (amendment A41).
+	if ip := strings.TrimSpace(r.PostFormValue("mesh_ip")); ip != "" && ip != cur.Node.MeshIP {
+		req.MeshIP = &ip
+	}
 	if cur.Node.Role == string(proto.RoleServer) {
 		endpoint := strings.TrimSpace(r.PostFormValue("endpoint"))
 		canExit := r.PostFormValue("can_exit") != ""
@@ -398,7 +406,11 @@ func (u *ui) editNode(w http.ResponseWriter, r *http.Request, s auth.Session) {
 		u.renderNode(w, r, s, status, page{Error: msg})
 		return
 	}
-	u.renderNode(w, r, s, http.StatusOK, page{Flash: changed("Saved", ch)})
+	flash := changed("Saved", ch)
+	if len(ch.Notes) > 0 {
+		flash += ". " + strings.Join(ch.Notes, ". ")
+	}
+	u.renderNode(w, r, s, http.StatusOK, page{Flash: flash})
 }
 
 // changed describes what a write did to the computed configs.
@@ -494,7 +506,7 @@ func (u *ui) versionsPage(w http.ResponseWriter, r *http.Request, s auth.Session
 	}
 	d := versionsData{}
 	for _, v := range vs {
-		d.Rows = append(d.Rows, versionRow{Number: v.Version, When: stamp(v.CreatedAt), Actor: v.Actor, Summary: v.Summary,
+		d.Rows = append(d.Rows, versionRow{Number: v.Version, When: u.stamp(v.CreatedAt), Actor: v.Actor, Summary: v.Summary,
 			RolledBackFrom: v.RolledBackFrom})
 	}
 	if len(vs) == versionsPerPage {
@@ -532,7 +544,7 @@ func (u *ui) versionView(r *http.Request, n int64) (versionData, error) {
 		if err != nil {
 			return err
 		}
-		d.Version = versionRow{Number: v.Version, When: stamp(v.CreatedAt), Actor: v.Actor, Summary: v.Summary, RolledBackFrom: v.RolledBackFrom}
+		d.Version = versionRow{Number: v.Version, When: u.stamp(v.CreatedAt), Actor: v.Actor, Summary: v.Summary, RolledBackFrom: v.RolledBackFrom}
 		d.Change, d.Rollback = versions.Compare(prev, snap), versions.Compare(cur, snap)
 		d.Current = d.Rollback.Empty()
 		return nil
@@ -621,7 +633,7 @@ func (u *ui) auditPage(w http.ResponseWriter, r *http.Request, s auth.Session) {
 	}
 	d := auditData{}
 	for _, e := range es {
-		d.Rows = append(d.Rows, auditRow{When: stamp(e.At), Actor: e.Actor, Action: e.Action, Target: e.Target, Detail: e.Detail})
+		d.Rows = append(d.Rows, auditRow{When: u.stamp(e.At), Actor: e.Actor, Action: e.Action, Target: e.Target, Detail: e.Detail})
 	}
 	if len(es) == auditPerPage {
 		d.Older = es[len(es)-1].ID
@@ -806,7 +818,7 @@ func (u *ui) renderUsers(w http.ResponseWriter, r *http.Request, s auth.Session,
 	}
 	var rows []userRow
 	for _, x := range users {
-		rows = append(rows, userRow{Name: x.Username, TOTP: x.TOTPEnrolled, Disabled: x.Disabled, Created: stamp(x.CreatedAt),
+		rows = append(rows, userRow{Name: x.Username, TOTP: x.TOTPEnrolled, Disabled: x.Disabled, Created: u.stamp(x.CreatedAt),
 			Self: x.ID == s.UserID})
 	}
 	p.Data = rows
@@ -917,7 +929,7 @@ func (u *ui) exportYAML(w http.ResponseWriter, r *http.Request, s auth.Session) 
 		return
 	}
 	w.Header().Set("Content-Type", "application/yaml")
-	w.Header().Set("Content-Disposition", `attachment; filename="mesh-`+u.Now().UTC().Format("2006-01-02")+`.yaml"`)
+	w.Header().Set("Content-Disposition", `attachment; filename="mesh-`+u.Now().Format("2006-01-02")+`.yaml"`)
 	_, _ = w.Write(b.Bytes()) // the browser went away; nothing to do
 }
 

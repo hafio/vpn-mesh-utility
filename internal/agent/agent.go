@@ -26,6 +26,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"net/netip"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -929,6 +930,10 @@ func (r *runner) localStatus(context.Context) (proto.LocalStatus, error) {
 	}
 	if r.applied != nil {
 		st.MTU = r.applied.Interface.MTU
+		// The node's address is the config's: it moves (amendment A41).
+		if p, err := netip.ParsePrefix(r.applied.Interface.Address); err == nil {
+			st.MeshIP = p.Addr().String()
+		}
 		if r.applied.DNS != nil {
 			st.Zone = r.applied.DNS.Zone
 		}

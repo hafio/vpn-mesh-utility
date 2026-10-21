@@ -158,7 +158,7 @@ meshctl logs [flags]
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--data` | `/var/lib/meshctl` | agent data directory |
-| `--f` | `false` | keep printing new lines until interrupted |
+| `-f` | `false` | keep printing new lines until interrupted |
 | `--socket` |  | local API socket (default: /run/meshctl/agent.sock for the standard data dir, else &lt;data&gt;/agent.sock; \\.\pipe\meshctl-agent on Windows) |
 
 ## meshctl node add
@@ -301,6 +301,7 @@ meshctl node set <name> [flags]
 | `--json` | `false` | print the server's answer as JSON |
 | `--keepalive` | `0` | PersistentKeepalive seconds (0 turns it off) |
 | `--listen-port` | `0` | servers: WireGuard UDP port |
+| `--mesh-ip` |  | move the node to another mesh IP in the mesh (its peers, DNS name and agent follow) |
 | `--mtu` | `0` | interface MTU |
 
 ## meshctl node show

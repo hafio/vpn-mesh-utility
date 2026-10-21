@@ -29,7 +29,7 @@ Admin socket (`<data>/admin.sock`, mode 0600, so only the server's own user reac
 | `GET /admin/v1/nodes` | list nodes and the mesh plan's warnings |
 | `POST /admin/v1/nodes` | add a node; the answer carries its first join token, shown once (a phone gets none) |
 | `GET /admin/v1/nodes/{name}` | one node, its computed config and its last peer report |
-| `PATCH /admin/v1/nodes/{name}` | change endpoint, listen port, hub, exit capability, exit, keepalive, MTU, and a host-mode node's container network (`containers`) |
+| `PATCH /admin/v1/nodes/{name}` | change endpoint, listen port, hub, exit capability, exit, keepalive, MTU, a host-mode node's container network (`containers`) and the mesh IP (`mesh_ip`, amendment A41; the answer's `notes` say what the move does not reach) |
 | `DELETE /admin/v1/nodes/{name}` | remove a node |
 | `POST /admin/v1/nodes/{name}/disable` | take a node out of every peer list; its stream is closed |
 | `POST /admin/v1/nodes/{name}/enable` | put it back |

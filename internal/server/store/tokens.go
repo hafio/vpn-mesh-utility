@@ -81,8 +81,8 @@ func (t *Tx) ConsumeToken(token string) (int64, error) {
 	case err != nil:
 		return 0, fmt.Errorf("consume join token: %w", err)
 	case used.Valid:
-		return 0, fmt.Errorf("%w at %s", ErrTokenUsed, time.Unix(used.Int64, 0).UTC().Format(time.RFC3339))
+		return 0, fmt.Errorf("%w at %s", ErrTokenUsed, time.Unix(used.Int64, 0).In(t.now.Location()).Format(time.RFC3339))
 	default:
-		return 0, fmt.Errorf("%w at %s", ErrTokenExpired, time.Unix(expires, 0).UTC().Format(time.RFC3339))
+		return 0, fmt.Errorf("%w at %s", ErrTokenExpired, time.Unix(expires, 0).In(t.now.Location()).Format(time.RFC3339))
 	}
 }
