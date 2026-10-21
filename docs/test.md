@@ -98,7 +98,8 @@ one sanctioned exec site) so a checker that matched nothing cannot pass.
 ## `internal/server/auth`
 
 Tests use a fresh store, `testfix.Clock` and cheap argon2 parameters (one test pins the real
-ones).
+ones; `TestHashUsesTheSpecParameters` hashes at the full cost only without `-race`, so `cov` and
+the Windows run do it and the race run checks the parameters alone).
 
 | File | Test | Pins |
 | --- | --- | --- |

@@ -204,14 +204,14 @@
     "semantic_hash": ""
   },
   "scripts/dev.ps1": {
-    "mtime": 1792426615.8995125,
-    "seen": 1792449250.1833866,
+    "mtime": 1792593814.4162488,
+    "seen": 1792593985.5594194,
     "ast_hash": "9e546d5957c2262aa46e8dd0b8f41362",
     "semantic_hash": ""
   },
   "scripts/dev.sh": {
-    "mtime": 1792426615.899282,
-    "seen": 1792449250.1833873,
+    "mtime": 1792593814.4176152,
+    "seen": 1792593985.5594215,
     "ast_hash": "db1f7bd113c5bfcb722e3184dc3e95d8",
     "semantic_hash": ""
   },
@@ -246,8 +246,8 @@
     "semantic_hash": ""
   },
   "docs/developer.md": {
-    "mtime": 1792552146.3385162,
-    "seen": 1792552465.271209,
+    "mtime": 1792593814.4162488,
+    "seen": 1792593985.559838,
     "ast_hash": "e7eafa01aab9d277208414ff676a036d",
     "semantic_hash": ""
   },
@@ -258,9 +258,9 @@
     "semantic_hash": ""
   },
   "docs/test.md": {
-    "mtime": 1792593358.3146956,
-    "seen": 1792593536.017555,
-    "ast_hash": "601d143560ec21f4d69b5fce789d99c5",
+    "mtime": 1792593720.8786967,
+    "seen": 1792593985.559981,
+    "ast_hash": "f766788488f54ea3c615935fa9c346f1",
     "semantic_hash": ""
   },
   "cmd/meshctl/agent.go": {
@@ -660,8 +660,8 @@
     "semantic_hash": ""
   },
   "docs/commands.md": {
-    "mtime": 1792593395.450556,
-    "seen": 1792593536.017417,
+    "mtime": 1792593771.0867636,
+    "seen": 1792593985.5598369,
     "ast_hash": "c15bffe87593bdf407ff52bc6ca5c347",
     "semantic_hash": ""
   },
@@ -750,9 +750,9 @@
     "semantic_hash": ""
   },
   "internal/server/auth/password_test.go": {
-    "mtime": 1791776659.04205,
-    "seen": 1792449250.1833355,
-    "ast_hash": "5a215b6f6fd968770db3699ac697da2d",
+    "mtime": 1792593715.293168,
+    "seen": 1792593985.5572822,
+    "ast_hash": "3fe2fa40d5d4ca84bd01a48d1c5ee01b",
     "semantic_hash": ""
   },
   "internal/server/auth/session.go": {
@@ -1629,6 +1629,18 @@
     "mtime": 1792593358.2911398,
     "seen": 1792593536.0125146,
     "ast_hash": "ae4c7fa7a8e8fe34f3623e41399ecefa",
+    "semantic_hash": ""
+  },
+  "internal/server/auth/norace_test.go": {
+    "mtime": 1792593715.2831385,
+    "seen": 1792593985.557229,
+    "ast_hash": "c986f9ec9c2d502daf10531959204138",
+    "semantic_hash": ""
+  },
+  "internal/server/auth/race_test.go": {
+    "mtime": 1792593715.2821383,
+    "seen": 1792593985.5572839,
+    "ast_hash": "3780648af744234c063395387c9883f4",
     "semantic_hash": ""
   }
 }

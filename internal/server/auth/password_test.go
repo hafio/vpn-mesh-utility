@@ -9,7 +9,17 @@ import (
 // cheap keeps the tests fast; one test checks the real parameters.
 var cheap = Params{Time: 1, MemoryKiB: 64, Threads: 1}
 
+// The race run checks the parameters only: under the race detector one hash
+// at the full cost (64 MiB, three passes) takes seconds, and argon2 is
+// arithmetic with nothing to race. cov and the Windows run (no -race) hash
+// with them too.
 func TestHashUsesTheSpecParameters(t *testing.T) {
+	if got := DefaultParams(); got != (Params{Time: 3, MemoryKiB: 64 << 10, Threads: 4}) {
+		t.Fatalf("DefaultParams = %+v, want t=3 m=64MiB p=4", got)
+	}
+	if raceDetector {
+		t.Skip("a full-cost hash is too slow under -race; cov runs it")
+	}
 	h := HashPassword("correct horse battery", DefaultParams())
 	if !strings.HasPrefix(h, "$argon2id$v=19$m=65536,t=3,p=4$") {
 		t.Fatalf("hash %q does not carry argon2id t=3 m=64MiB p=4", h)
