@@ -1,24 +1,24 @@
 # Graph Report - vpn-mesh-utility  (2026-10-21)
 
 ## Corpus Check
-- 245 files · ~250,277 words
+- 247 files · ~250,937 words
 - Verdict: corpus is large enough that graph structure adds value.
 - Unclassified: 9 file(s) not represented in the graph (top: (none) 5, .css 2, .tmpl 1)
 
 ## Summary
-- 3003 nodes · 12917 edges · 133 communities (105 shown, 28 thin omitted)
-- Extraction: 94% EXTRACTED · 6% INFERRED · 0% AMBIGUOUS · INFERRED: 742 edges (avg confidence: 0.85)
+- 3011 nodes · 12949 edges · 127 communities (100 shown, 27 thin omitted)
+- Extraction: 94% EXTRACTED · 6% INFERRED · 0% AMBIGUOUS · INFERRED: 744 edges (avg confidence: 0.85)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `2012112b`
+- Built from commit: `2bdc9226`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
 ## Community Hubs (Navigation)
 - ui/ui_test.go
 - newRig
-- eventually
+- Run
 - entry
 - htmx.min.js
 - env
@@ -32,25 +32,25 @@
 - github.com/hafio/vpn-mesh-utility
 - newHarness
 - testing.T
-- errorf
+- net/http.Request
 - NodeChange
 - io.Writer
-- NodeConfig
+- Dir
 - nas.go
-- WGKey
+- ServerConfig
 - net/netip.Prefix
 - meshctl/main.go
 - .nodeView
 - LocalStatus
 - lab
-- Snapshot
+- versions/versions.go
 - Session
 - Command reference
 - time.Time
 - Host
 - context.Context
 - newRig
-- .AddRule
+- .Firewall
 - agent/agent_test.go
 - Sealer
 - Test catalogue
@@ -59,32 +59,32 @@
 - Tx
 - store_test.go
 - Agent protocol
-- net/http.ResponseWriter
+- netlinkNet
 - newRig
 - planner_test.go
-- meshDNS
-- ServerConfig
+- dns_test.go
+- CookieValue
 - CLAUDE.md
 - Security
 - otherNet
 - Service
 - Client
 - nrpt.go
-- Container
-- net/http.Request
-- service_test.go
+- TestContainerNamesAreReported
+- net/http.ResponseWriter
+- .Tx
 - Runtime
 - DNS
 - Service
-- Tx
+- errorf
 - Sync
-- .Apply
+- firewall_test.go
 - wgdev
 - UI
 - fakeServer
 - session
 - loadMigrations
-- Deps
+- Hub
 - NewNodes
 - otherPolicy
 - fail
@@ -93,37 +93,33 @@
 - mustAffect
 - net/netip.AddrPort
 - container.go
-- Open
+- Ring
 - 7. Agent
 - nullInt
-- WriteEvent
+- DNSName
 - .show
-- netlinkNet
+- IPNet
 - changed
 - deploy_test.go
-- Net
+- .BeginEnrollment
 - fetchwintun/main_test.go
 - io.Reader
 - 6. Control plane
 - 8. Server
 - .Seen
 - Join
-- PublishNames
+- .names
 - resolved
+- Version
 - Tx
-- Tx
-- Host
 - userspace
 - File
 - meshctl
 - serveRuntime
 - Allocate
-- PhoneConfig
-- Diff
-- Tx
-- Run
+- NodeConfig
+- Deps
 - Registration
-- fakeService
 - NewKernel
 - net/netip.Addr
 - DefaultSocket
@@ -131,8 +127,6 @@
 - commands.go
 - Arg
 - Import
-- .validate
-- ContainerName
 - log/slog.Logger
 - TestMain
 - AdminError
@@ -195,7 +189,7 @@
 - 4-file cycle: `internal/agent/agentfake/agentfake_test.go -> internal/agent/wg/wg_test.go -> internal/agent/wg/userspace_windows.go -> internal/agent/routes/routes_test.go -> internal/agent/agentfake/agentfake_test.go`
 - 4-file cycle: `internal/agent/agentfake/agentfake_test.go -> internal/agent/containers/containers_test.go -> internal/agent/containers/net_linux.go -> internal/agent/routes/routes_test.go -> internal/agent/agentfake/agentfake_test.go`
 
-## Communities (133 total, 28 thin omitted)
+## Communities (127 total, 27 thin omitted)
 
 ### Community 0 - "ui/ui_test.go"
 Cohesion: 0.08
@@ -205,17 +199,17 @@ Nodes (17): linkDNS, DNSRecord, FirewallRule, Node, Exit, Interface, logsData, i
 Cohesion: 0.17
 Nodes (12): capped, golden(), newRig(), TestChangesNeedTheUIsOriginAndCSRF(), TestDashboard(), TestForms(), TestLogsPage(), TestOnlyTheUIsOwnHostIsServed() (+4 more)
 
-### Community 2 - "eventually"
-Cohesion: 0.18
-Nodes (26): eventually(), joinedTo(), startWith(), TestDNSFailureIsReported(), TestDriftCheckPutsBackWhatChanged(), TestLocalUIOffOrUnavailable(), TestLocalUIThroughTheAgent(), TestLogsAreServed() (+18 more)
+### Community 2 - "Run"
+Cohesion: 0.11
+Nodes (19): LoadOrCreateKey(), NewSealer(), TestLoadOrCreateKey(), TestSealerBindsTheSecretToItsUser(), hostOf(), ListenAdmin(), Routes(), Run() (+11 more)
 
 ### Community 4 - "htmx.min.js"
 Cohesion: 0.06
 Nodes (119): 10. Backups, 11. When the server is down, 12. Troubleshooting, 13. Upgrading, 1. Run the server (Dokploy), 2. Enroll the servers, 3. Swarm over the mesh, 4. Spokes and exits (+111 more)
 
 ### Community 5 - "env"
-Cohesion: 0.18
-Nodes (38): joinFlags(), setupAgentInstall(), setupAgentJoin(), setupAgentRun(), setupAgentUninstall(), socketFlags(), defaultAgentData(), newLogger() (+30 more)
+Cohesion: 0.23
+Nodes (29): joinFlags(), setupAgentInstall(), setupAgentJoin(), setupAgentRun(), setupAgentUninstall(), socketFlags(), defaultAgentData(), newLogger() (+21 more)
 
 ### Community 6 - "meshctl — Design Spec"
 Cohesion: 0.11
@@ -238,100 +232,96 @@ Cohesion: 0.27
 Nodes (9): Rule, Violation, Check(), importsOf(), ModuleRoot(), TestCheckerCatchesViolations(), TestModuleBoundaries(), under() (+1 more)
 
 ### Community 11 - "Key"
-Cohesion: 0.12
-Nodes (28): peer(), hexKey(), ParseUAPI(), getAnswer(), hexOf(), pfxs(), TestParseUAPI(), TestParseUAPIRejectsMalformedValues() (+20 more)
+Cohesion: 0.08
+Nodes (36): peer(), pfx(), TestConfigureHasKernelSemantics(), TestNetHasKernelSemantics(), AddrPort(), TestAddrPort(), hexKey(), ParseUAPI() (+28 more)
 
 ### Community 14 - "newHarness"
-Cohesion: 0.07
-Nodes (58): brokenStream, countingDB, ErrorBody, adminCall(), TestAdminAddIssuesAToken(), TestAdminAddRefusesBadInput(), TestAdminClientOverTheSocket(), TestAdminCompose() (+50 more)
+Cohesion: 0.08
+Nodes (54): brokenStream, countingDB, adminCall(), TestAdminAddIssuesAToken(), TestAdminAddRefusesBadInput(), TestAdminClientOverTheSocket(), TestAdminContainerMode(), TestAdminErrorCodes() (+46 more)
 
 ### Community 15 - "testing.T"
-Cohesion: 0.03
-Nodes (93): TestStatusAndAgentHealthcheck(), TestLogsCommand(), TestUICommand(), pfx(), TestConfigureHasKernelSemantics(), TestDNS(), TestNetHasKernelSemantics(), TestPolicyHasKernelSemantics() (+85 more)
+Cohesion: 0.04
+Nodes (85): TestStatusAndAgentHealthcheck(), TestLogsCommand(), TestUICommand(), TestDNS(), TestPolicyHasKernelSemantics(), TestKernelNetWithoutPrivilege(), TestRegistrarNeedsTheInterface(), allowed() (+77 more)
 
-### Community 16 - "errorf"
+### Community 16 - "net/http.Request"
 Cohesion: 0.15
-Nodes (13): apiError, api, decodeJSON(), errorf(), invalid(), readBody(), toAPIError(), writeJSON() (+5 more)
+Nodes (12): Role, cli(), api, api, decodeJSON(), readBody(), writeJSON(), api (+4 more)
 
 ### Community 17 - "NodeChange"
-Cohesion: 0.14
-Nodes (16): NetworkInfo, NodeAddRequest, NodeDetail, NodeList, PhoneProfile, statusDetail, heard(), PeerStatus (+8 more)
+Cohesion: 0.12
+Nodes (18): NetworkInfo, NodeAddRequest, NodeDetail, NodeList, NodeSetRequest, PhoneProfile, statusDetail, heard() (+10 more)
 
 ### Community 18 - "io.Writer"
-Cohesion: 0.17
-Nodes (16): TestBytesize(), TestPrintEnrollmentInTheLocalZone(), TestPrintStatusOfALaptop(), dnsLine(), joinNonEmpty(), nodeState(), printChange(), printEnrollment() (+8 more)
+Cohesion: 0.14
+Nodes (26): TestBytesize(), TestPrintEnrollmentInTheLocalZone(), TestPrintStatusOfALaptop(), dnsLine(), adminFlags(), cleared(), joinNonEmpty(), nodeAction() (+18 more)
 
-### Community 19 - "NodeConfig"
+### Community 19 - "Dir"
 Cohesion: 0.09
-Nodes (11): Dir, Enrollment, syncDir(), TestWriteAtomicReplacesAndLeavesNoTempFiles(), WriteAtomic(), NodeConfig, Role, MeshNode (+3 more)
+Nodes (16): TestJoin(), Dir, Enrollment, Open(), mkdirs(), open(), TestLocalSettings(), TestMeshCache() (+8 more)
 
 ### Community 20 - "nas.go"
-Cohesion: 0.15
-Nodes (18): comment(), nasHeader(), renderNAS(), RenderNASCompose(), nasParams(), TestNASComposeGolden(), TestNASComposeRefusesHostileValues(), nasFile (+10 more)
+Cohesion: 0.18
+Nodes (16): comment(), nasHeader(), renderNAS(), RenderNASCompose(), nasParams(), TestNASComposeGolden(), TestNASComposeRefusesHostileValues(), nasFile (+8 more)
 
-### Community 21 - "WGKey"
-Cohesion: 0.07
-Nodes (43): TestRunNeedsAnEnrollment(), NewHost(), TestLinksAddressesAndFailures(), IsStepError(), New(), meshDNS(), newRig(), TestApplyIsIdempotent() (+35 more)
+### Community 21 - "ServerConfig"
+Cohesion: 0.13
+Nodes (31): rig, TestRunNeedsAnEnrollment(), NewHost(), NewRoutes(), TestRoutesSysctlAndFirewall(), IsStepError(), New(), meshDNS() (+23 more)
 
 ### Community 22 - "net/netip.Prefix"
-Cohesion: 0.09
-Nodes (19): Routes, index(), NewTable(), route(), compare(), Desired(), Table, Sync() (+11 more)
+Cohesion: 0.08
+Nodes (16): Net, Routes, host(), NewTable(), compare(), Desired(), Table, Sync() (+8 more)
 
 ### Community 23 - "meshctl/main.go"
 Cohesion: 0.23
 Nodes (13): agentCommands(), commands(), healthCommands(), find(), isHelp(), main(), printUsage(), run() (+5 more)
 
 ### Community 24 - ".nodeView"
-Cohesion: 0.12
-Nodes (13): TestJudgeHubs(), Health(), phoneHealth(), ago(), bytesize(), TestHelpers(), dashboardData, networkBlock (+5 more)
+Cohesion: 0.17
+Nodes (10): Health(), phoneHealth(), ago(), bytesize(), TestHelpers(), dashboardData, nodeForm, nodeRow (+2 more)
 
 ### Community 25 - "LocalStatus"
-Cohesion: 0.10
-Nodes (21): printExit(), Client, Logs, Handler(), logs(), refusal(), laptop(), PrefsRequest (+13 more)
+Cohesion: 0.09
+Nodes (22): printExit(), Client, Logs, Handler(), logs(), refusal(), laptop(), PrefsRequest (+14 more)
 
 ### Community 26 - "lab"
 Cohesion: 0.13
 Nodes (16): host, stream, lab, TestContainerNetworks(), deleteNamespaces(), eventually(), lab, inNS() (+8 more)
 
-### Community 27 - "Snapshot"
-Cohesion: 0.15
-Nodes (16): SnapNode, Snapshot, snapNode(), Compare(), describeDNS(), describeRules(), fields(), fingerprint() (+8 more)
+### Community 27 - "versions/versions.go"
+Cohesion: 0.09
+Nodes (29): FromSnapshot(), snapshot(), TestExportIsDeterministicAndByName(), TestReadRoundTripsAndRefusesUnknownShapes(), TestToSnapshotRefusesHostileDocuments(), TestToSnapshotRoundTrips(), SnapNode, Snapshot (+21 more)
 
 ### Community 28 - "Session"
-Cohesion: 0.12
-Nodes (11): CheckServerDomains(), TestCheckServerDomains(), Session, atoi(), before(), ui, versionNumber(), ui (+3 more)
+Cohesion: 0.14
+Nodes (9): CheckServerDomains(), TestCheckServerDomains(), Session, atoi(), before(), ui, versionNumber(), message() (+1 more)
 
 ### Community 29 - "Command reference"
 Cohesion: 0.07
 Nodes (30): Command reference, meshctl agent install, meshctl agent join, meshctl agent run, meshctl agent uninstall, meshctl dns, meshctl exit, meshctl export (+22 more)
 
 ### Community 30 - "time.Time"
-Cohesion: 0.07
-Nodes (19): pendingApply, safeApply, syncBuffer, Failover, replayCache, failures, hitWindow, Lockout (+11 more)
+Cohesion: 0.05
+Nodes (25): pendingApply, safeApply, syncBuffer, Failover, hubMove, hubState, replayCache, failures (+17 more)
 
 ### Community 31 - "Host"
-Cohesion: 0.12
-Nodes (7): link, exitHost, rig, Host, Sysctl, Sysctls, Sysctl
+Cohesion: 0.15
+Nodes (5): link, exitHost, Host, TestLinksAddressesAndFailures(), PeerStats
 
 ### Community 32 - "context.Context"
-Cohesion: 0.09
-Nodes (14): Rechecker, runner, kick(), oneLine(), TestOneLine(), Engine, Result, dial() (+6 more)
+Cohesion: 0.06
+Nodes (21): Deps, fakeService, Deps, Rechecker, runner, kick(), oneLine(), Run() (+13 more)
 
 ### Community 33 - "newRig"
 Cohesion: 0.16
 Nodes (25): Store, TestPhonePage(), code(), cookieOf(), newRig(), TestBadSignInsAreRefusedAndThrottled(), TestChangesNeedOriginAndCSRF(), TestContainerModePages() (+17 more)
 
-### Community 34 - ".AddRule"
-Cohesion: 0.18
-Nodes (10): CustomRule, MeshChange, RecordRequest, RuleRequest, ServerFirewall, FirewallView, Nodes, meshChange() (+2 more)
+### Community 34 - ".Firewall"
+Cohesion: 0.33
+Nodes (5): CustomRule, ServerFirewall, FirewallView, firewallData, ruleForm
 
 ### Community 35 - "agent/agent_test.go"
-Cohesion: 0.13
-Nodes (28): rig, enroll(), enrollAs(), freePort(), newDir(), newFakeRuntime(), newFakeServer(), shortTemp() (+20 more)
-
-### Community 36 - "Sealer"
-Cohesion: 0.33
-Nodes (4): Sealer, aad(), NewSealer(), TestSealerBindsTheSecretToItsUser()
+Cohesion: 0.14
+Nodes (45): rig, enroll(), enrollAs(), eventually(), freePort(), joinedTo(), newDir(), shortTemp() (+37 more)
 
 ### Community 37 - "Test catalogue"
 Cohesion: 0.10
@@ -339,43 +329,43 @@ Nodes (20): Agent (`internal/agent/...`), `cmd/meshctl`, Coverage, `deploy`, End
 
 ### Community 38 - "runArgs"
 Cohesion: 0.11
-Nodes (32): TestAgentRunRuntimeSocket(), passwords(), runWith(), shortDir(), startAdmin(), TestAgentInstallIsForWindows(), TestAgentJoinTakesTheTokenFromTheEnvironment(), TestAgentRunNeedsAJoin() (+24 more)
+Nodes (31): TestAgentRunRuntimeSocket(), passwords(), runWith(), shortDir(), startAdmin(), TestAgentInstallIsForWindows(), TestAgentJoinTakesTheTokenFromTheEnvironment(), TestAgentRunNeedsAJoin() (+23 more)
 
 ### Community 39 - "Policy"
 Cohesion: 0.07
 Nodes (22): Family, netlinkPolicy, Policy, mutate(), Desired(), Policy, Route, Rule (+14 more)
 
 ### Community 40 - "Tx"
-Cohesion: 0.17
-Nodes (3): boolInt(), Tx, scanUser()
+Cohesion: 0.18
+Nodes (5): boolInt(), Session, Tx, User, scanUser()
 
 ### Community 41 - "store_test.go"
-Cohesion: 0.17
-Nodes (30): TestReconcilerVersionsOnlyRealChanges(), DecodeSnapshot(), Open(), insertTopology(), node(), openTest(), TestAudit(), TestContainerNames() (+22 more)
+Cohesion: 0.15
+Nodes (33): TestReconcilerVersionsOnlyRealChanges(), TestExportOnceSkipsUnchangedAndKeepsFourteen(), DecodeSnapshot(), Open(), insertTopology(), node(), openTest(), TestAudit() (+25 more)
 
 ### Community 42 - "Agent protocol"
 Cohesion: 0.15
 Nodes (13): Agent protocol, Apply (agent), Config and events, Container names, Errors, Join, Local API, Mesh view (+5 more)
 
-### Community 43 - "net/http.ResponseWriter"
-Cohesion: 0.28
-Nodes (5): decode(), reply(), cli(), api, api
+### Community 43 - "netlinkNet"
+Cohesion: 0.18
+Nodes (7): netlinkNet, Owned(), blackhole(), dump(), prefixOf(), TestKernelShapes(), toRule()
 
 ### Community 44 - "newRig"
-Cohesion: 0.18
-Nodes (15): rig, newRig(), TestAccountChangesEndSessions(), TestAccountManagementValidates(), TestChangePassword(), TestEnrolmentReusesItsSecretAndPeekDoesNotSlide(), TestLoginLocksOutAfterFiveFailures(), TestLoginRefusals() (+7 more)
+Cohesion: 0.19
+Nodes (14): rig, newRig(), TestAccountChangesEndSessions(), TestChangePassword(), TestEnrolmentReusesItsSecretAndPeekDoesNotSlide(), TestLoginLocksOutAfterFiveFailures(), TestLoginRefusals(), TestLoginUpgradesAnOldHash() (+6 more)
 
 ### Community 45 - "planner_test.go"
 Cohesion: 0.08
-Nodes (44): PlanError, Peer, Record, Check(), checkContainers(), Problem, sortedByID(), Compute() (+36 more)
+Nodes (45): PlanError, Peer, Record, Check(), checkContainers(), Problem, sortedByID(), Compute() (+37 more)
 
-### Community 46 - "meshDNS"
-Cohesion: 0.15
-Nodes (23): desired(), same(), answerOf(), ask(), meshDNS(), newRegistrar(), query(), TestNewZoneRejects() (+15 more)
+### Community 46 - "dns_test.go"
+Cohesion: 0.25
+Nodes (19): answerOf(), ask(), meshDNS(), newRegistrar(), query(), TestNewZoneRejects(), TestServiceAnswersAndRegisters(), TestServiceAnswersTheContainers() (+11 more)
 
-### Community 47 - "ServerConfig"
+### Community 47 - "CookieValue"
 Cohesion: 0.21
-Nodes (26): fakeRunner, appliedHost(), encodeCalls(), freshHost(), golden(), newFirewall(), policyInfo(), TestApplyIsIdempotent() (+18 more)
+Nodes (6): CookieValue(), ui, group(), ui, sameOrigin(), handler
 
 ### Community 49 - "CLAUDE.md"
 Cohesion: 0.25
@@ -386,136 +376,132 @@ Cohesion: 0.12
 Nodes (16): Agent service (systemd), Changes a node asks for, Container-mode agent, DNS, Input and commands, Interfaces the agent did not create, Keys and tokens, NAS container (+8 more)
 
 ### Community 52 - "Service"
-Cohesion: 0.10
-Nodes (31): Config, DB, Params, Pending, addUser(), newPassword(), passwdUser(), resetTOTP() (+23 more)
+Cohesion: 0.13
+Nodes (21): Config, DB, Params, Pending, addUser(), newPassword(), passwdUser(), resetTOTP() (+13 more)
 
 ### Community 53 - "Client"
 Cohesion: 0.27
 Nodes (6): apiError(), clip(), Client, StatusResponse, NamesResponse, DroppedName
 
 ### Community 54 - "nrpt.go"
-Cohesion: 0.20
-Nodes (14): nrpt, nrptRule, domainName(), fromRules(), nrptKey(), ownedKey(), parseServers(), rulesFor() (+6 more)
-
-### Community 55 - "Container"
-Cohesion: 0.22
-Nodes (8): fakeRuntime, Container, Of(), TestOf(), TestOfCapsTheNames(), TestOfSwarmWithoutAStack(), ContainerName, NamesRequest
-
-### Community 56 - "net/http.Request"
-Cohesion: 0.17
-Nodes (6): TestCookieAndCSRF(), ClearCookie(), CookieValue(), SetCookie(), ui, group()
-
-### Community 57 - "service_test.go"
 Cohesion: 0.18
-Nodes (12): hostService(), TestUnitPosture(), SystemdUnit(), Runner, exists(), Systemd(), host(), TestAvailable() (+4 more)
+Nodes (16): nrpt, nrptRule, domainName(), same(), TestSameRegistration(), fromRules(), nrptKey(), ownedKey() (+8 more)
+
+### Community 55 - "TestContainerNamesAreReported"
+Cohesion: 0.17
+Nodes (12): fakeRuntime, newFakeRuntime(), TestContainerNamesAreReported(), TestContainerNamesNeedAContainerNetwork(), webContainer(), Container, Of(), TestOf() (+4 more)
+
+### Community 56 - "net/http.ResponseWriter"
+Cohesion: 0.16
+Nodes (7): decode(), reply(), api, readSums(), TestCookieAndCSRF(), ClearCookie(), SetCookie()
+
+### Community 57 - ".Tx"
+Cohesion: 0.30
+Nodes (6): fullExpiry(), load(), session(), hashCookie(), newSecret(), matchStep()
 
 ### Community 58 - "Runtime"
 Cohesion: 0.31
 Nodes (3): clip(), meshFilter(), Runtime
 
 ### Community 59 - "DNS"
-Cohesion: 0.22
-Nodes (4): nameServer, DNS, Want, MeshName
+Cohesion: 0.17
+Nodes (6): nameServer, DNS, desired(), Want, newNameTable(), MeshName
 
 ### Community 60 - "Service"
 Cohesion: 0.17
 Nodes (7): Registrar, Service, New(), NewRegistrar(), NewRegistrar(), NewRegistrar(), exchange()
 
-### Community 61 - "Tx"
-Cohesion: 0.10
-Nodes (26): ComposeFile, ComposeOptions, hubMove, hubState, PhoneRequest, checkName(), containerSubnet(), defaultMTU() (+18 more)
+### Community 61 - "errorf"
+Cohesion: 0.09
+Nodes (31): ComposeFile, ComposeOptions, MeshChange, PhoneRequest, RecordRequest, checkName(), containerSubnet(), defaultMTU() (+23 more)
 
 ### Community 62 - "Sync"
-Cohesion: 0.19
-Nodes (17): network, Sysctls, NewNet(), Gateway(), Guard(), host(), parse(), Sync() (+9 more)
+Cohesion: 0.13
+Nodes (21): network, Sysctls, NewNet(), ensureAddr(), Gateway(), Net, Rule, Guard() (+13 more)
 
-### Community 63 - ".Apply"
-Cohesion: 0.10
-Nodes (16): applied, Firewall, policy, Firewall, atLeast(), check(), normalize(), richRule() (+8 more)
+### Community 63 - "firewall_test.go"
+Cohesion: 0.06
+Nodes (47): hostService(), TestUnitPosture(), SystemdUnit(), applied, fakeRunner, Firewall, policy, Firewall (+39 more)
 
 ### Community 64 - "wgdev"
 Cohesion: 0.17
 Nodes (5): TestUAPISetGolden(), UAPISet(), userspace, NewUserspace(), wgdev
 
 ### Community 65 - "UI"
-Cohesion: 0.13
-Nodes (11): UI, hostOf(), New(), oldest(), loadPages(), UIToken, LocalToken(), TestLocalTokenMasksTheValue() (+3 more)
+Cohesion: 0.20
+Nodes (7): UI, hostOf(), oldest(), validOrNot(), LocalToken(), TestLocalTokenMasksTheValue(), handler
 
 ### Community 66 - "fakeServer"
-Cohesion: 0.22
-Nodes (10): fakeServer, TestMeshNamesReachTheResolver(), TestMeshViewIsCached(), StatusReport, TestStatusReportValidate(), validStatus(), MeshView, TestMeshViewValidate() (+2 more)
+Cohesion: 0.17
+Nodes (13): fakeServer, newFakeServer(), TestMeshNamesReachTheResolver(), TestMeshViewIsCached(), TestMeshViewIsRefreshed(), ErrorBody, StatusReport, TestStatusReportValidate() (+5 more)
 
 ### Community 67 - "session"
-Cohesion: 0.31
-Nodes (6): ago(), bytesize(), UI, prefsFlash(), page, session
+Cohesion: 0.34
+Nodes (5): bytesize(), UI, prefsFlash(), page, session
 
 ### Community 68 - "loadMigrations"
-Cohesion: 0.27
-Nodes (5): Store, Tx, loadMigrations(), TestLoadMigrationsValidatesNames(), migration
+Cohesion: 0.31
+Nodes (4): Store, Tx, loadMigrations(), migration
 
-### Community 69 - "Deps"
-Cohesion: 0.10
-Nodes (15): Deps, Deps, Options, Run(), DNS, Firewall, Join(), New() (+7 more)
+### Community 69 - "Hub"
+Cohesion: 0.24
+Nodes (3): Hub, subscription, ConfigEvent
 
 ### Community 70 - "NewNodes"
-Cohesion: 0.27
-Nodes (7): ErrorMessage(), NewNodes(), harness, meshHarness(), refused(), TestCustomDNSRecords(), TestCustomFirewallRules()
+Cohesion: 0.16
+Nodes (12): apiError, ErrorMessage(), NewNodes(), TestAdminCompose(), toAPIError(), TestPlanErrorListsTheProblems(), TestRollbackIsANewVersion(), harness (+4 more)
 
 ### Community 72 - "fail"
-Cohesion: 0.08
-Nodes (44): NodeSetRequest, TestCleanHostname(), cleanHostname(), validOrNot(), Containers, DNS, Firewall, Interface (+36 more)
+Cohesion: 0.10
+Nodes (34): RuleRequest, check(), Containers, Exit, Firewall, Interface, NodeConfig, validateMeshNames() (+26 more)
 
 ### Community 74 - "Writer"
 Cohesion: 0.29
 Nodes (4): New(), New(), SysctlKeys(), Writer
 
 ### Community 75 - "mustAffect"
-Cohesion: 0.18
-Nodes (5): Tx, mustAffect(), scanNode(), classify(), scanner
+Cohesion: 0.12
+Nodes (8): Tx, mustAffect(), scanNode(), Tx, classify(), PeerStat, scanner, StatusUpdate
 
 ### Community 76 - "net/netip.AddrPort"
-Cohesion: 0.10
-Nodes (21): resolver, bindBoth(), bindPair(), serve(), Listen(), Listen(), listenPipe(), pipeName() (+13 more)
+Cohesion: 0.15
+Nodes (12): resolver, bindBoth(), bindPair(), serve(), Listen(), Listen(), listenSocket(), Listen() (+4 more)
 
 ### Community 77 - "container.go"
-Cohesion: 0.19
-Nodes (20): composeNetwork, containerHeader(), hostSocket(), MeshNetworkSetup(), networkCommands(), renderContainer(), RenderContainerCompose(), resolvers() (+12 more)
-
-### Community 78 - "Open"
-Cohesion: 0.25
-Nodes (8): TestJoin(), Open(), mkdirs(), open(), TestLocalSettings(), TestMeshCache(), TestOpenValidatesThePath(), TestUnusableFilesAreReported()
+Cohesion: 0.17
+Nodes (22): composeNetwork, containerHeader(), hostSocket(), MeshNetworkSetup(), networkCommands(), renderContainer(), RenderContainerCompose(), resolvers() (+14 more)
 
 ### Community 79 - "7. Agent"
 Cohesion: 0.25
 Nodes (8): 7.1 WireGuard backend, 7.2 Routes, 7.3 Exit switching (spokes), 7.4 DNS, 7.5 Firewall rendering, 7.6 Local UI, 7.7 Platform packaging, 7. Agent
 
 ### Community 80 - "nullInt"
-Cohesion: 0.18
-Nodes (5): Tx, Tx, nullInt(), nullStr(), AuditEntry
+Cohesion: 0.12
+Nodes (8): Tx, DNSRecord, Tx, Tx, nullInt(), nullStr(), AuditEntry, FirewallRule
 
-### Community 81 - "WriteEvent"
-Cohesion: 0.27
-Nodes (8): TestEventsDeliversConfigEvents(), TestSSERoundTrip(), TestSSEWriterRefusesFrameInjection(), WriteComment(), WriteEvent(), WriteRetry(), Event, Reader
+### Community 81 - "DNSName"
+Cohesion: 0.33
+Nodes (6): DNS, checkDNS(), DNSName(), Domains(), TestDNSName(), TestDomains()
 
 ### Community 82 - ".show"
-Cohesion: 0.36
-Nodes (3): ui, writeHTML(), page
+Cohesion: 0.19
+Nodes (6): loadPages(), ui, writeHTML(), pages, page, renderer
 
-### Community 83 - "netlinkNet"
-Cohesion: 0.07
-Nodes (16): netlinkNet, Owned(), TestGatewayRules(), blackhole(), dump(), prefixOf(), TestKernelShapes(), toRule() (+8 more)
+### Community 83 - "IPNet"
+Cohesion: 0.09
+Nodes (11): IPNet(), Prefix(), TestPrefixRoundTrip(), TestPrefixUnmapsIPv4(), index(), route(), lookup(), Link (+3 more)
 
 ### Community 84 - "changed"
-Cohesion: 0.25
-Nodes (3): ui, ui, changed()
+Cohesion: 0.15
+Nodes (8): ui, ui, changed(), ui, newQR(), TestQRCode(), phoneData, qrCode
 
 ### Community 85 - "deploy_test.go"
 Cohesion: 0.20
-Nodes (20): parseContainer(), TestContainerComposePosture(), TestContainerRendererHoldsItsStructure(), checkPosture(), keys(), sameSet(), service(), TestDevComposePosture() (+12 more)
+Nodes (20): parseContainer(), TestContainerComposePosture(), checkPosture(), keys(), mustRead(), sameSet(), service(), TestDevComposePosture() (+12 more)
 
-### Community 86 - "Net"
-Cohesion: 0.15
-Nodes (5): Net, ensureAddr(), Net, Rule, syncRules()
+### Community 86 - ".BeginEnrollment"
+Cohesion: 0.53
+Nodes (3): newTOTPKey(), TestMatchStepAllowsOneStepOfSkew(), TestNewTOTPKeyRebuildsAStoredSecret()
 
 ### Community 87 - "fetchwintun/main_test.go"
 Cohesion: 0.13
@@ -530,24 +516,20 @@ Cohesion: 0.40
 Nodes (5): 8.1 Storage, 8.2 Data model, 8.3 Web UI, 8.4 Authentication, 8. Server
 
 ### Community 92 - "Join"
-Cohesion: 0.31
-Nodes (7): installAgent(), hostService(), installAgent(), TestJoinValidatesBeforeCallingTheServer(), JoinOptions, Service, Join()
+Cohesion: 0.24
+Nodes (9): installAgent(), hostService(), installAgent(), TestCleanHostname(), TestJoinValidatesBeforeCallingTheServer(), cleanHostname(), JoinOptions, Service (+1 more)
 
-### Community 93 - "PublishNames"
-Cohesion: 0.16
-Nodes (13): DNSEntry, NameEntry, NameSet, compareAddr(), api, LoadNames(), PublishNames(), TestPublishNames() (+5 more)
+### Community 93 - ".names"
+Cohesion: 0.11
+Nodes (17): DNSEntry, NameEntry, NameSet, compareAddr(), containerAddr(), api, LoadNames(), PublishNames() (+9 more)
 
 ### Community 94 - "resolved"
 Cohesion: 0.31
 Nodes (5): linkDomain, resolved, classify(), foreignNetns(), TestClassifyBusErrors()
 
-### Community 95 - "Tx"
-Cohesion: 0.33
-Nodes (3): Tx, PeerStat, StatusUpdate
-
-### Community 97 - "Host"
-Cohesion: 0.36
-Nodes (3): Host, SyncAddr(), SyncLink()
+### Community 95 - "Version"
+Cohesion: 0.67
+Nodes (3): SemVer(), TestVersionAndSemVer(), Version()
 
 ### Community 98 - "userspace"
 Cohesion: 0.19
@@ -569,29 +551,21 @@ Nodes (12): TestOpenRuntime(), Detect(), New(), Sockets(), inspectOf(), serveRun
 Cohesion: 0.27
 Nodes (11): Allocate(), AllocateContainers(), Block(), CheckMeshCIDR(), RangeFor(), TestAllocateContainers(), TestAllocateLowestFree(), TestBlockMatchesTheSpecAddressPlan() (+3 more)
 
-### Community 103 - "PhoneConfig"
-Cohesion: 0.24
-Nodes (11): Hub(), NewKey(), Render(), aliceKey(), golden(), TestHub(), TestNewKey(), TestProfiles() (+3 more)
-
-### Community 104 - "Diff"
-Cohesion: 0.29
-Nodes (6): Diff, versionData, versionRow, versionsData, FieldChange, NodeDiff
-
-### Community 105 - "Tx"
-Cohesion: 0.28
-Nodes (3): DNSRecord, Tx, FirewallRule
-
-### Community 106 - "Run"
+### Community 103 - "NodeConfig"
 Cohesion: 0.10
-Nodes (25): Deps, Route, AdminRoutes(), describe(), api, New(), NewAdmin(), newAPI() (+17 more)
+Nodes (18): NodeConfig, goldenConfig(), TestHashIgnoresVersionOnly(), TestHashIsPinned(), TestValidateAcceptsFixtures(), withDomains(), Hub(), NewKey() (+10 more)
+
+### Community 106 - "Deps"
+Cohesion: 0.18
+Nodes (15): Deps, Route, AdminRoutes(), describe(), api, New(), NewAdmin(), newAPI() (+7 more)
 
 ### Community 107 - "Registration"
 Cohesion: 0.46
 Nodes (3): Domain, fakeRegistrar, Registration
 
 ### Community 110 - "net/netip.Addr"
-Cohesion: 0.18
-Nodes (10): nameTable, zone, TestIsPublic(), isPublic(), PublicIPv4(), hostAddr(), TestHostAddr(), containerAddr() (+2 more)
+Cohesion: 0.20
+Nodes (8): nameTable, zone, TestIsPublic(), isPublic(), PublicIPv4(), hostAddr(), TestHostAddr(), Record
 
 ### Community 113 - "commands.go"
 Cohesion: 0.20
@@ -606,36 +580,36 @@ Cohesion: 0.24
 Nodes (12): NewHub(), closed(), TestHubLatestWins(), TestHubNudgesEveryStream(), TestHubReplacesKicksAndCloses(), Import(), document(), linuxOnly() (+4 more)
 
 ### Community 121 - "log/slog.Logger"
-Cohesion: 0.07
-Nodes (18): Change, Hub, subscription, NewUserspace(), ConfigEvent, DB, Reconciler, Result (+10 more)
+Cohesion: 0.08
+Nodes (20): Change, TestImportCommand(), TestOpen(), Open(), TestOpenRefusesUnknownBackends(), NewUserspace(), DB, Reconciler (+12 more)
 
 ### Community 129 - "service_windows.go"
 Cohesion: 0.12
 Nodes (9): uninstallAgent(), commandLine(), RunWindowsService(), stop(), TestAvailableNeedsElevation(), TestCommandLineQuotesThePaths(), Windows(), handler (+1 more)
 
 ### Community 134 - "IdentityKey"
-Cohesion: 0.11
-Nodes (23): newClient(), TestConfigHonoursTheETag(), TestErrorsCarryTheCode(), TestEventsRefusesAnythingButAStream(), TestMeshIsCheckedBeforeUse(), TestNamesRoundTrip(), TestPrefsRoundTrip(), TestStatusRoundTrip() (+15 more)
+Cohesion: 0.06
+Nodes (44): Options, Join(), New(), newClient(), TestConfigHonoursTheETag(), TestErrorsCarryTheCode(), TestEventsDeliversConfigEvents(), TestEventsRefusesAnythingButAStream() (+36 more)
 
 ## Knowledge Gaps
 - **165 isolated node(s):** `github.com/hafio/vpn-mesh-utility`, `linkDNS`, `logsData`, `listed`, `inspected` (+160 more)
-  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 386 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
-- **28 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 388 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
+- **27 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `Dir` connect `NodeConfig` to `context.Context`, `ui/ui_test.go`, `eventually`, `agent/agent_test.go`, `Open`, `LocalStatus`?**
-  _High betweenness centrality (0.016) - this node is a cross-community bridge._
-- **Why does `Net` connect `Net` to `ui/ui_test.go`, `Sync`, `net/netip.Prefix`, `time.Time`?**
+- **Why does `Dir` connect `Dir` to `context.Context`, `ui/ui_test.go`, `agent/agent_test.go`, `LocalStatus`?**
+  _High betweenness centrality (0.015) - this node is a cross-community bridge._
+- **Why does `Service` connect `Service` to `ui/ui_test.go`, `net/netip.AddrPort`, `net/netip.Addr`, `dns_test.go`, `log/slog.Logger`, `DNS`, `time.Time`?**
+  _High betweenness centrality (0.014) - this node is a cross-community bridge._
+- **Why does `fakeServer` connect `fakeServer` to `agent/agent_test.go`, `Hub`, `NodeConfig`, `testing.T`, `TestContainerNamesAreReported`, `net/http.ResponseWriter`, `LocalStatus`, `time.Time`?**
   _High betweenness centrality (0.013) - this node is a cross-community bridge._
-- **Why does `Name()` connect `fail` to `ui/ui_test.go`, `.AddRule`, `session`, `env`, `container.go`, `planner_test.go`, `Arg`, `nas.go`, `.validate`, `Tx`?**
-  _High betweenness centrality (0.012) - this node is a cross-community bridge._
 - **What connects `github.com/hafio/vpn-mesh-utility`, `linkDNS`, `logsData` to the rest of the system?**
   _165 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `ui/ui_test.go` be split into smaller, more focused modules?**
-  _Cohesion score 0.0813466787989081 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.08006831424552943 - nodes in this community are weakly interconnected._
+- **Should `Run` be split into smaller, more focused modules?**
+  _Cohesion score 0.10952380952380952 - nodes in this community are weakly interconnected._
 - **Should `htmx.min.js` be split into smaller, more focused modules?**
   _Cohesion score 0.06358543417366946 - nodes in this community are weakly interconnected._
-- **Should `meshctl — Design Spec` be split into smaller, more focused modules?**
-  _Cohesion score 0.1111111111111111 - nodes in this community are weakly interconnected._

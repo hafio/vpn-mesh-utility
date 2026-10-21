@@ -258,9 +258,9 @@
     "semantic_hash": ""
   },
   "docs/test.md": {
-    "mtime": 1792587981.0106936,
-    "seen": 1792592936.3466706,
-    "ast_hash": "af259983e2e4199daebede964831ac4a",
+    "mtime": 1792593358.3146956,
+    "seen": 1792593536.017555,
+    "ast_hash": "601d143560ec21f4d69b5fce789d99c5",
     "semantic_hash": ""
   },
   "cmd/meshctl/agent.go": {
@@ -660,8 +660,8 @@
     "semantic_hash": ""
   },
   "docs/commands.md": {
-    "mtime": 1792592794.446824,
-    "seen": 1792592936.346599,
+    "mtime": 1792593395.450556,
+    "seen": 1792593536.017417,
     "ast_hash": "c15bffe87593bdf407ff52bc6ca5c347",
     "semantic_hash": ""
   },
@@ -696,15 +696,15 @@
     "semantic_hash": ""
   },
   "internal/fsutil/fsutil.go": {
-    "mtime": 1791776310.3547838,
-    "seen": 1792449250.1832917,
-    "ast_hash": "1e6b5de2c09fcba8e6a52654e89a3dd7",
+    "mtime": 1792593373.0377982,
+    "seen": 1792593536.0125086,
+    "ast_hash": "37081225adf17dab3a88917b52ca01c5",
     "semantic_hash": ""
   },
   "internal/fsutil/fsutil_test.go": {
-    "mtime": 1791776303.7860706,
-    "seen": 1792449250.1832926,
-    "ast_hash": "9c315a4a32392cdb6f0eab73b85404a0",
+    "mtime": 1792593358.305022,
+    "seen": 1792593536.0125113,
+    "ast_hash": "dc684d48ac143c6f8a73a58e511ab940",
     "semantic_hash": ""
   },
   "internal/server/auth/auth.go": {
@@ -1617,6 +1617,18 @@
     "mtime": 1792507481.8652203,
     "seen": 1792540148.173557,
     "ast_hash": "2e8bb6f4456db3445555a88ba2f1e14f",
+    "semantic_hash": ""
+  },
+  "internal/fsutil/rename_other.go": {
+    "mtime": 1792593358.2921398,
+    "seen": 1792593536.012513,
+    "ast_hash": "045989832bec3e5c95a5004fb24f5731",
+    "semantic_hash": ""
+  },
+  "internal/fsutil/rename_windows.go": {
+    "mtime": 1792593358.2911398,
+    "seen": 1792593536.0125146,
+    "ast_hash": "ae4c7fa7a8e8fe34f3623e41399ecefa",
     "semantic_hash": ""
   }
 }

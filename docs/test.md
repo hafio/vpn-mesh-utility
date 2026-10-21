@@ -402,6 +402,9 @@ in `planner_test.go` from the testfix reference topology.
 ## `internal/fsutil`
 
 `TestWriteAtomicReplacesAndLeavesNoTempFiles`: the atomic write both sides use.
+`TestWriteAtomicReplacesAFileThatIsOpen`, `TestRenameRetrying`, `TestTransientRename`: on Windows
+a reader holding the target open (every `os.Open` shares no delete access) makes the rename fail;
+it is retried for up to 2 s, any other failure returns at once.
 
 ## Coverage
 

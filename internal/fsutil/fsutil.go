@@ -8,7 +8,14 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 )
+
+// renameBudget is how long a rename over a file someone else has open is
+// retried. On Windows every os.Open shares neither delete nor rename, so the
+// rename fails until that reader closes the file -- a moment for a reader,
+// longer for a virus scanner.
+const renameBudget = 2 * time.Second
 
 // WriteAtomic replaces dir/name with data: a temp file in the same directory,
 // fsync, rename over the target, fsync of the directory. A crash leaves the
@@ -39,11 +46,24 @@ func WriteAtomic(dir, name string, data []byte, perm fs.FileMode) error {
 	if werr != nil {
 		return fmt.Errorf("write %s: %w", target, werr)
 	}
-	if err := os.Rename(tmp, target); err != nil {
+	if err := renameRetrying(tmp, target, renameBudget, transientRename); err != nil {
 		return fmt.Errorf("write %s: %w", target, err)
 	}
 	done = true
 	return syncDir(dir)
+}
+
+// renameRetrying renames tmp over target, trying again while transient
+// says the failure is a reader in the way, until budget has passed.
+func renameRetrying(tmp, target string, budget time.Duration, transient func(error) bool) error {
+	deadline := time.Now().Add(budget)
+	for wait := time.Millisecond; ; wait = min(2*wait, 100*time.Millisecond) {
+		err := os.Rename(tmp, target)
+		if err == nil || !transient(err) || time.Now().Add(wait).After(deadline) {
+			return err
+		}
+		time.Sleep(wait)
+	}
 }
 
 // syncDir makes the rename durable. Windows cannot fsync a directory; NTFS
