@@ -24,8 +24,7 @@
 //   - Every server and spoke serves the whole mesh zone: one record per
 //     active node plus the custom records. It forwards other names only in
 //     exit mode or, on a server, for the phones that use it as their
-//     resolver (amendment A12). Servers open 53 to the mesh and the custom
-//     firewall rules in their mesh zone.
+//     resolver (amendment A12).
 //   - A node whose containers are on the mesh has a /24 of it; every peer
 //     routes that subnet wherever it routes the node's /32, and the node's
 //     resolver forwards for it. In container mode the node's WireGuard is
@@ -33,6 +32,10 @@
 //     routing in its own namespace, no firewall section, never an exit); in
 //     host mode the host routes the subnet on its bridge, which a server's
 //     firewall forwards to (amendment A37).
+//   - Every server gets the same compiled segmentation policy, the mesh
+//     firewall, and its mesh zone lets the whole mesh through: the policy,
+//     not the zone, decides what crosses. Spokes enforce nothing, since
+//     every packet between two nodes crosses a server (amendment A43).
 package planner
 
 import (
@@ -62,10 +65,11 @@ type Input struct {
 	// Domains are the extra DNS domains every node resolves (amendment
 	// A39).
 	Domains []string
-	// Records are the custom DNS records, Rules the custom firewall
-	// openings.
+	// Records are the custom DNS records.
 	Records []Record
-	Rules   []Rule
+	// Segmentation is the mesh firewall (amendment A43); empty, the
+	// servers let through only the system rules.
+	Segmentation Segmentation
 }
 
 // Record is a custom name in the mesh zone: an alias of a node (Node, which
@@ -74,17 +78,6 @@ type Record struct {
 	Name string
 	Node int64
 	IP   netip.Addr
-}
-
-// Rule opens a port in the mesh zone of one server (Node) or of every server
-// (Node 0), from Source only.
-type Rule struct {
-	ID     int64
-	Node   int64
-	Proto  string
-	Port   int
-	Source netip.Prefix
-	Note   string
 }
 
 // Node is the planner's view of one node.
@@ -156,6 +149,7 @@ func Compute(in Input) (map[int64]proto.NodeConfig, []Problem, error) {
 	}
 
 	p := newPlan(in)
+	p.policy = CompilePolicy(in)
 	out := map[int64]proto.NodeConfig{}
 	for _, n := range p.nodes {
 		if !n.active() {
@@ -186,6 +180,8 @@ type plan struct {
 	others  []Node         // active spokes and phones, by id
 	exits   []string       // names of planned exit-capable servers, sorted
 	records []proto.Record // the mesh zone, by name
+	// policy is what every server enforces.
+	policy *proto.Policy
 }
 
 func newPlan(in Input) *plan {
@@ -332,6 +328,7 @@ func (p *plan) server(n Node) proto.NodeConfig {
 	c.Sysctl = p.sysctl(n, relay || n.CanExit, false)
 	c.DNS = p.dns(n, false)
 	c.Containers = p.containers(n)
+	c.Policy = p.policy
 	if n.inContainer() {
 		c.Containers.Relay = relay
 		return c
@@ -346,35 +343,11 @@ func (p *plan) server(n Node) proto.NodeConfig {
 	if n.Containers.IsValid() {
 		fw.Bridge, fw.Relay = proto.ContainerBridge, true
 	}
-	// Swarm ports only from the other servers (spec S7.5): a compromised spoke
-	// reaches the mesh but never the Swarm control or data plane.
-	for _, s := range p.servers {
-		if s.ID == n.ID {
-			continue
-		}
-		src := s.prefix()
-		fw.Rules = append(fw.Rules,
-			proto.FWRule{Zone: proto.ZoneMesh, Proto: "tcp", Port: 2377, Source: src, Note: "swarm manager: " + s.Name},
-			proto.FWRule{Zone: proto.ZoneMesh, Proto: "tcp", Port: 7946, Source: src, Note: "swarm gossip: " + s.Name},
-			proto.FWRule{Zone: proto.ZoneMesh, Proto: "udp", Port: 7946, Source: src, Note: "swarm gossip: " + s.Name},
-			proto.FWRule{Zone: proto.ZoneMesh, Proto: "udp", Port: 4789, Source: src, Note: "swarm overlay: " + s.Name},
-		)
-	}
-	// The resolver answers the whole mesh (spec S7.5), and so does ping:
-	// the mesh zone's DROP target drops ICMP too. The custom rules are the
-	// operator's.
-	mesh := p.in.MeshCIDR.String()
-	fw.Rules = append(fw.Rules,
-		proto.FWRule{Zone: proto.ZoneMesh, Proto: "udp", Port: 53, Source: mesh, Note: "dns"},
-		proto.FWRule{Zone: proto.ZoneMesh, Proto: "tcp", Port: 53, Source: mesh, Note: "dns"},
-		proto.FWRule{Zone: proto.ZoneMesh, Proto: proto.ProtoICMP, Source: mesh, Note: "ping"},
-	)
-	for _, r := range p.in.Rules {
-		if r.Node == 0 || r.Node == n.ID {
-			fw.Rules = append(fw.Rules, proto.FWRule{Zone: proto.ZoneMesh, Proto: r.Proto, Port: r.Port, Source: r.Source.String(),
-				Note: ruleNote(r)})
-		}
-	}
+	// The policy decides what crosses the mesh zone: the zone lets the
+	// whole mesh through to it, and the policy's table drops what it does
+	// not allow (amendment A43). Swarm, DNS and ping are its system rules.
+	fw.Rules = append(fw.Rules, proto.FWRule{Zone: proto.ZoneMesh, Proto: proto.ProtoAll, Source: p.in.MeshCIDR.String(),
+		Note: "segmentation: the policy decides"})
 	sortRules(fw.Rules)
 	c.Firewall = fw
 	return c
@@ -439,14 +412,6 @@ func (p *plan) sysctl(n Node, forward, exitMode bool) []proto.Sysctl {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
 	return out
-}
-
-// ruleNote says where a custom rule comes from, for the firewall page.
-func ruleNote(r Rule) string {
-	if r.Note == "" {
-		return fmt.Sprintf("custom rule %d", r.ID)
-	}
-	return "custom: " + r.Note
 }
 
 // ZoneName is the zone the mesh serves: Zone, or the default.

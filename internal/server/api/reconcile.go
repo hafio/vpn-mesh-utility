@@ -241,15 +241,34 @@ func LoadInput(tx *store.Tx) (planner.Input, []store.Node, error) {
 		}
 		in.Records = append(in.Records, pr)
 	}
-	rules, err := tx.FirewallRules()
+	seg, err := tx.Segmentation()
 	if err != nil {
 		return planner.Input{}, nil, err
 	}
-	for _, r := range rules {
-		src, _ := netip.ParsePrefix(r.SourceCIDR)
-		in.Rules = append(in.Rules, planner.Rule{ID: r.ID, Node: r.NodeID, Proto: r.Proto, Port: r.Port, Source: src, Note: r.Note})
-	}
+	in.Segmentation = plannerSegmentation(seg)
 	return in, nodes, nil
+}
+
+// plannerSegmentation is the stored segmentation as the planner takes it.
+func plannerSegmentation(s store.Segmentation) planner.Segmentation {
+	ps := planner.Segmentation{Groups: map[string][]string{}, Addresses: map[string][]string{}, Services: map[string][]string{}}
+	for _, g := range s.Groups {
+		ps.Groups[g.Name] = g.Nodes
+	}
+	for _, o := range s.Addresses {
+		ps.Addresses[o.Name] = o.Entries
+	}
+	for _, o := range s.Services {
+		ps.Services[o.Name] = o.Entries
+	}
+	for _, z := range s.Zones {
+		ps.Zones = append(ps.Zones, planner.SegZone{Name: z.Name, Intra: z.Intra, Members: z.Members})
+	}
+	for _, p := range s.Policies {
+		ps.Policies = append(ps.Policies, planner.SegPolicy{Name: p.Name, Disabled: p.Disabled, From: p.From, To: p.To,
+			Services: p.Services, Action: p.Action})
+	}
+	return ps
 }
 
 func plannerNode(n store.Node) planner.Node {

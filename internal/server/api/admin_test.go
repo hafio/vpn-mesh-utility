@@ -520,7 +520,8 @@ func TestMoveMeshIP(t *testing.T) {
 	h.seed(t, storeNode(testfix.VPS1, true), storeNode(testfix.VPS2, true), storeNode(testfix.VPS3, true), nas,
 		storeNode(testfix.Laptop, true), storeNode(testfix.Phone, true))
 	if err := h.st.Tx(context.Background(), func(tx *store.Tx) error {
-		return tx.InsertFirewallRule(&store.FirewallRule{NodeID: testfix.VPS1.ID, Proto: "tcp", Port: 5432, SourceCIDR: testfix.Laptop.MeshIP + "/32"})
+		return tx.SetSegmentation(store.LegacySegmentation([]store.FirewallRule{
+			{ID: 1, NodeID: testfix.VPS1.ID, Proto: "tcp", Port: 5432, SourceCIDR: testfix.Laptop.MeshIP + "/32"}}, map[int64]string{testfix.VPS1.ID: "vps-1"}))
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -536,7 +537,7 @@ func TestMoveMeshIP(t *testing.T) {
 		t.Fatalf("move the laptop: %d %+v %+v", code, ch, eb)
 	}
 	notes := strings.Join(ch.Notes, "\n")
-	if !strings.Contains(notes, "laptop moves from 10.77.2.1 to 10.77.2.9") || !strings.Contains(notes, "custom firewall rule 1 opens 5432/tcp from 10.77.2.1/32") {
+	if !strings.Contains(notes, "laptop moves from 10.77.2.1 to 10.77.2.9") || !strings.Contains(notes, `policy "firewall-1" names 10.77.2.1/32 by address`) {
 		t.Errorf("notes:\n%s", notes)
 	}
 	vps1 := h.config(t, "vps-1")

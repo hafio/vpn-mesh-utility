@@ -1,0 +1,84 @@
+# meshctl server as a Docker Swarm stack (spec S12): `docker stack deploy`, or a
+# Dokploy "Stack" app. Traefik, on the external dokploy-network, routes the
+# server's domain to port 8080; nothing is published on the host. Set:
+#   MESHCTL_VERSION  the release to run, e.g. 1.0.0
+#   MESHCTL_URL      the public origin, e.g. https://mesh.example.com
+#   MESHCTL_TRUSTED_PROXIES  optional: Traefik's network CIDR, so the server
+#                    believes X-Forwarded-For from it (sign-in lockout and join
+#                    limits are per client); empty trusts nobody
+#   TZ               optional: the time zone the web UI's times are shown in,
+#                    e.g. Asia/Singapore (default UTC)
+#
+#   docker node update --label-add meshctl.server=true <node>   # once
+#   docker stack config -c stack.server.yml                      # checks it
+#   docker stack deploy -c stack.server.yml meshctl
+#
+# What Swarm changes against compose.server.yml:
+#   - exactly one task, stopped before a new one starts: SQLite has one writer
+#     and the server holds a lock on /data
+#   - pinned by a node label, not just to a manager: the data volume is local
+#     to one node, and another node would start the server on an empty one
+#   - no privileged, security_opt or pids limit, which a stack cannot set: the
+#     server runs as 65532 with every capability dropped in a distroless image
+#     with no setuid binaries, so there is nothing to escalate through
+#   - no container_name: the task's container is <stack>_meshctl.1.<id>
+# Without Dokploy, route the domain with Traefik's labels under deploy.labels:
+#   traefik.enable=true
+#   traefik.http.routers.meshctl.rule=Host(`mesh.example.com`)
+#   traefik.http.services.meshctl.loadbalancer.server.port=8080
+# Posture: non-root, no capabilities, read-only root file system;
+# deploy_test.go forbids every widening token.
+services:
+  meshctl:
+    image: ghcr.io/hafio/vpn-mesh-utility:${MESHCTL_VERSION:?set MESHCTL_VERSION to a release such as 1.0.0}
+    command:
+      - server
+      - --data
+      - /data
+      - --listen
+      - ":8080"
+      - --url
+      - ${MESHCTL_URL:?set MESHCTL_URL to the public https origin}
+      - --trusted-proxies
+      - ${MESHCTL_TRUSTED_PROXIES:-}
+    environment: ["TZ=${TZ:-UTC}"]
+    user: "65532:65532"
+    cap_drop: [ALL]
+    read_only: true
+    volumes:
+      - meshctl-data:/data
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 16777216
+    networks: [dokploy-network]
+    stop_grace_period: 15s
+    healthcheck:
+      test: ["CMD", "/app/meshctl", "healthcheck", "server"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints: [node.labels.meshctl.server == true]
+      update_config:
+        parallelism: 1
+        order: stop-first
+        failure_action: rollback
+      rollback_config:
+        parallelism: 1
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s
+      resources:
+        limits:
+          memory: 256M
+volumes:
+  meshctl-data: {}
+networks:
+  dokploy-network:
+    external: true

@@ -89,6 +89,11 @@ func TestValidateAcceptsFixtures(t *testing.T) {
 	hosting.Containers = testfix.Containers(proto.ModeHost)
 	hosting.Firewall.Bridge, hosting.Firewall.Relay = proto.ContainerBridge, true
 	hosting.Sysctl = []proto.Sysctl{{Key: proto.SysctlIPForward, Value: "1"}}
+	// A server with the mesh firewall: its mesh zone accepts the mesh, the
+	// policy decides (amendment A43).
+	firewalled := testfix.ServerConfig()
+	firewalled.Firewall.Rules[0] = proto.FWRule{Zone: proto.ZoneMesh, Proto: proto.ProtoAll, Source: testfix.MeshCIDR, Note: "the policy decides"}
+	firewalled.Policy = testfix.Policy()
 	for name, c := range map[string]proto.NodeConfig{
 		"golden":                     goldenConfig(),
 		"testfix server":             testfix.ServerConfig(),
@@ -97,6 +102,7 @@ func TestValidateAcceptsFixtures(t *testing.T) {
 		"container-mode spoke":       testfix.ContainerSpokeConfig(),
 		"server with containers":     hosting,
 		"extra domains":              withDomains(testfix.SpokeConfig(""), "example.lan", "home.arpa"),
+		"server with a policy":       firewalled,
 	} {
 		c := c
 		if err := c.Validate(); err != nil {
@@ -144,6 +150,22 @@ func TestValidateRejects(t *testing.T) {
 		{"ping rule with a port", func(c *proto.NodeConfig) {
 			c.Firewall.Rules[0] = proto.FWRule{Zone: proto.ZoneMesh, Proto: proto.ProtoICMP, Port: 22, Source: testfix.MeshCIDR}
 		}, "a ping rule has no port"},
+		{"accept-all with a port", func(c *proto.NodeConfig) {
+			c.Firewall.Rules[0] = proto.FWRule{Zone: proto.ZoneMesh, Proto: proto.ProtoAll, Port: 22, Source: testfix.MeshCIDR}
+		}, "an accept-all rule"},
+		{"accept-all in the public zone", func(c *proto.NodeConfig) {
+			c.Firewall.Rules[0] = proto.FWRule{Zone: proto.ZonePublic, Proto: proto.ProtoAll, Source: testfix.MeshCIDR}
+		}, "an accept-all rule"},
+		{"accept-all from anywhere", func(c *proto.NodeConfig) {
+			c.Firewall.Rules[0] = proto.FWRule{Zone: proto.ZoneMesh, Proto: proto.ProtoAll}
+		}, "an accept-all rule"},
+		{"policy on a spoke", func(c *proto.NodeConfig) {
+			c.Node.Role, c.Policy = proto.RoleSpoke, testfix.Policy()
+		}, "only a server enforces"},
+		{"policy action", func(c *proto.NodeConfig) {
+			c.Policy = testfix.Policy()
+			c.Policy.Rules[3].Action = "maybe"
+		}, "policy.rules[3].action"},
 		{"dns zone", func(c *proto.NodeConfig) { c.DNS = &proto.DNS{Zone: "corp.local"} }, "dns.zone"},
 		{"dns record ip", func(c *proto.NodeConfig) {
 			c.DNS = &proto.DNS{Zone: proto.DefaultZone, Records: []proto.Record{{Name: "nas", IP: "nas.local"}}}

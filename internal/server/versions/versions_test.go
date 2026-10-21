@@ -24,10 +24,29 @@ func TestCompareEqualSnapshotsIsEmpty(t *testing.T) {
 	}
 }
 
+// A snapshot from before the mesh firewall compares by what its custom
+// rules became: unchanged rules are no change.
+func TestCompareSeesThroughTheMigration(t *testing.T) {
+	old := snap(server(testfix.VPS1))
+	old.Segmentation = nil
+	old.Firewall = []store.FirewallRule{{ID: 3, NodeID: testfix.VPS1.ID, Proto: "tcp", Port: 22, SourceCIDR: "10.77.2.0/24"}}
+	now := snap(server(testfix.VPS1))
+	migrated := old.EffectiveSegmentation()
+	now.Segmentation = &migrated
+	if d := Compare(old, now); !d.Empty() {
+		t.Fatalf("the migration reads as a change: %+v", d)
+	}
+	now.Segmentation.Policies[0].Disabled = true
+	if d := Compare(old, now); len(d.Firewall) != 2 || d.Firewall[0] != "+ policy 1 firewall-3: allow 10.77.2.0/24 -> node:vps-1 tcp/22 (disabled)" {
+		t.Fatalf("a disabled policy = %q", d.Firewall)
+	}
+}
+
 func TestCompareListsEveryKindOfChange(t *testing.T) {
 	from := snap(server(testfix.VPS1), server(testfix.VPS2), server(testfix.VPS3))
 	from.DNS = []store.DNSRecord{{Name: "files", NodeID: testfix.VPS2.ID}, {Name: "old", IP: "10.77.0.9"}}
-	from.Firewall = []store.FirewallRule{{Proto: "tcp", Port: 9000, SourceCIDR: "10.77.1.0/24", Note: "backup"}}
+	from.Segmentation = &store.Segmentation{Policies: []store.SegPolicy{{Name: "backup", From: []string{"10.77.1.0/24"},
+		To: []string{"role:server"}, Services: []string{"tcp/9000"}, Action: store.SegAllow}, store.DefaultPolicy()}}
 
 	moved := server(testfix.VPS2)
 	moved.Endpoint, moved.MTU, moved.WGPubKey = "198.51.100.4:51820", 1380, testfix.WGKey(9)
@@ -35,7 +54,9 @@ func TestCompareListsEveryKindOfChange(t *testing.T) {
 	to := snap(server(testfix.VPS1), moved, nas)
 	to.Settings[store.SettingDefaultMTU] = "1400"
 	to.DNS = []store.DNSRecord{{Name: "files", NodeID: testfix.VPS2.ID}}
-	to.Firewall = []store.FirewallRule{{NodeID: testfix.VPS1.ID, Proto: "tcp", Port: 9000, SourceCIDR: "10.77.1.0/24", Note: "backup"}}
+	to.Segmentation = &store.Segmentation{Groups: []store.SegGroup{{Name: "storage", Nodes: []string{"nas"}}},
+		Policies: []store.SegPolicy{{Name: "backup", From: []string{"group:storage"}, To: []string{"node:vps-1"}, Services: []string{"tcp/9000"},
+			Action: store.SegAllow}, store.DefaultPolicy()}}
 
 	d := Compare(from, to)
 	want := Diff{
@@ -48,7 +69,8 @@ func TestCompareListsEveryKindOfChange(t *testing.T) {
 		}}},
 		Settings: []FieldChange{{Field: store.SettingDefaultMTU, From: "1420", To: "1400"}},
 		DNS:      []string{"- old -> 10.77.0.9"},
-		Firewall: []string{"+ tcp/9000 from 10.77.1.0/24 on vps-1 (backup)", "- tcp/9000 from 10.77.1.0/24 on every server (backup)"},
+		Firewall: []string{"+ group storage: nas", "+ policy 1 backup: allow group:storage -> node:vps-1 tcp/9000",
+			"- policy 1 backup: allow 10.77.1.0/24 -> role:server tcp/9000"},
 	}
 	if !reflect.DeepEqual(d, want) {
 		t.Fatalf("Compare =\n%+v\nwant\n%+v", d, want)

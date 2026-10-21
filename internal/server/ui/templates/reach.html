@@ -1,0 +1,38 @@
+{{define "content"}}
+{{- with .Data}}
+{{template "fwtabs" .}}
+{{- with .View}}
+<h2>Check a flow</h2>
+<form method="get" action="/firewall/reach" class="grid">
+<label>From <input name="from" value="{{.From}}" list="fw-nodes" placeholder="node or IPv4" required></label>
+<label>To <input name="to" value="{{.To}}" list="fw-nodes" placeholder="node or IPv4" required></label>
+<label>Service <input name="service" value="{{.Service}}" placeholder="tcp/22, udp/53 or icmp" required></label>
+<button type="submit">Check</button>
+</form>
+<datalist id="fw-nodes">
+{{- range .Nodes}}
+<option value="{{.}}">
+{{- end}}
+</datalist>
+{{- $n := .RuleN}}
+{{- with .Result}}
+<p class="{{if .Allowed}}flash{{else}}error{{end}}">{{.From}} to {{.To}} on {{.Service}}: <strong>{{if .Allowed}}allowed{{else}}dropped{{end}}</strong> -- {{if $n}}rule {{$n}}: {{end}}{{.Rule}}.</p>
+{{- end}}
+
+<h2>Zone to zone</h2>
+{{- if .Zones}}
+<p class="hint">Each cell is how the row's zone reaches the column's: allow (everything), deny (nothing) or partial (some services or addresses), with the numbers of the rules that decide it (the Policies tab lists them). Check one flow above for the exact answer.</p>
+<table>
+<thead><tr><th>From \ To</th>{{range .Zones}}<th>{{.}}</th>{{end}}</tr></thead>
+<tbody>
+{{- range .Rows}}
+<tr><th>{{.Zone}}</th>{{range .Cells}}<td><span class="state {{.Class}}">{{.Verdict}}</span>{{if .Rules}} <span class="hint">{{.Rules}}</span>{{end}}</td>{{end}}</tr>
+{{- end}}
+</tbody>
+</table>
+{{- else}}
+<p>No zones yet: add some on the Zones tab to see how they reach each other.</p>
+{{- end}}
+{{- end}}
+{{- end}}
+{{end}}

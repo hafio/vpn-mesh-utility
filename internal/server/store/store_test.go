@@ -77,8 +77,8 @@ func TestOpenAppliesMigrations(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if v != 5 {
-			t.Errorf("schema version = %d, want 5", v)
+		if v != 6 {
+			t.Errorf("schema version = %d, want 6", v)
 		}
 		cidr, err := t2.Setting(SettingMeshCIDR)
 		if err != nil {
@@ -159,8 +159,8 @@ func TestOpenIsIdempotent(t *testing.T) {
 	defer s2.Close()
 	tx(t, s2, func(t2 *Tx) error {
 		v, err := t2.SchemaVersion()
-		if v != 5 {
-			t.Errorf("schema version after reopen = %d, want 5", v)
+		if v != 6 {
+			t.Errorf("schema version after reopen = %d, want 6", v)
 		}
 		return err
 	})
@@ -287,7 +287,7 @@ func TestDeleteNodeCascades(t *testing.T) {
 		if err := t2.InsertDNSRecord(&DNSRecord{Name: "swarm", NodeID: vps1.ID}); err != nil {
 			return err
 		}
-		if err := t2.InsertFirewallRule(&FirewallRule{NodeID: vps1.ID, Proto: "tcp", Port: 9000, SourceCIDR: "10.77.0.0/16"}); err != nil {
+		if err := t2.SetNodeGroups(vps1.ID, []string{"swarm"}); err != nil {
 			return err
 		}
 		if _, err := t2.exec(`INSERT INTO peer_status (node_id, peer_id, updated_at) VALUES (?, ?, 0), (?, ?, 0)`,
@@ -311,7 +311,7 @@ func TestDeleteNodeCascades(t *testing.T) {
 		for _, q := range []string{
 			`SELECT COUNT(*) FROM join_tokens`,
 			`SELECT COUNT(*) FROM dns_records`,
-			`SELECT COUNT(*) FROM firewall_rules`,
+			`SELECT COUNT(*) FROM node_groups`,
 			`SELECT COUNT(*) FROM peer_status`,
 			`SELECT COUNT(*) FROM container_names`,
 		} {
@@ -495,7 +495,7 @@ func TestSnapshotRestoreRoundTrip(t *testing.T) {
 		if err := t2.InsertDNSRecord(&DNSRecord{Name: "printer", IP: "10.77.1.50"}); err != nil {
 			return err
 		}
-		if err := t2.InsertFirewallRule(&FirewallRule{Proto: "tcp", Port: 9100, SourceCIDR: "10.77.0.0/16", Note: "node exporter"}); err != nil {
+		if err := t2.SetSegmentation(testSegmentation()); err != nil {
 			return err
 		}
 		box := Node{Name: "box", Role: "spoke", MeshIP: "10.77.2.9", Mode: proto.ModeContainer, ContainerSubnet: "10.77.129.0/24"}
@@ -511,7 +511,7 @@ func TestSnapshotRestoreRoundTrip(t *testing.T) {
 	})
 
 	// Drift: remove two nodes (one with its record, one in container
-	// mode), add one, edit one, change a setting and the custom rules.
+	// mode), add one, edit one, change a setting and the mesh firewall.
 	tx(t, s, func(t2 *Tx) error {
 		if err := t2.DeleteNode(nodes["laptop"].ID); err != nil {
 			return err
@@ -535,7 +535,7 @@ func TestSnapshotRestoreRoundTrip(t *testing.T) {
 		if err := t2.UpdateNode(nas); err != nil {
 			return err
 		}
-		if _, err := t2.exec(`DELETE FROM firewall_rules`); err != nil {
+		if err := t2.SetSegmentation(Segmentation{Policies: []SegPolicy{DefaultPolicy()}}); err != nil {
 			return err
 		}
 		return t2.SetSetting(SettingDefaultMTU, "1380")

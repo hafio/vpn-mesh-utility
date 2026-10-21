@@ -110,6 +110,46 @@ meshctl export [flags]
 | `--data` | `/data` | the server's data directory |
 | `--out` |  | write to this file (mode 0600) instead of stdout |
 
+## meshctl firewall apply
+
+Replace the mesh firewall with a YAML file, as `firewall show --yaml` writes it.
+
+```
+meshctl firewall apply <file> [flags]
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--data` | `/data` | the server's data directory (holds admin.sock) |
+| `--json` | `false` | print the server's answer as JSON |
+
+## meshctl firewall check
+
+Say what the mesh firewall does with one flow (from and to: nodes or IPv4 addresses; service: tcp/PORT, udp/PORT or icmp).
+
+```
+meshctl firewall check <from> <to> <service> [flags]
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--data` | `/data` | the server's data directory (holds admin.sock) |
+| `--json` | `false` | print the server's answer as JSON |
+
+## meshctl firewall show
+
+Print the mesh firewall: policies, zones and the rules every server enforces.
+
+```
+meshctl firewall show [flags]
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--data` | `/data` | the server's data directory (holds admin.sock) |
+| `--json` | `false` | print the server's answer as JSON |
+| `--yaml` | `false` | print the document as YAML, to edit and give to `firewall apply` |
+
 ## meshctl healthcheck agent
 
 Exit 0 when the local agent answers on its socket.
@@ -176,6 +216,7 @@ meshctl node add <name> [flags]
 | `--containers` | `false` | host mode: put the node's containers on the mesh too (container mode always does) |
 | `--data` | `/data` | the server's data directory (holds admin.sock) |
 | `--endpoint` |  | servers: public IPv4:port (default: what the agent detects at join) |
+| `--groups` |  | comma-separated firewall groups to put the node in (a new name makes a new group) |
 | `--hub` |  | spokes and phones: the server that relays for it (default: the default hub) |
 | `--ip` |  | fixed mesh IP (default: the lowest free one in the role's block) |
 | `--json` | `false` | print the server's answer as JSON |
@@ -284,7 +325,7 @@ meshctl node rm <name> [flags]
 
 ## meshctl node set
 
-Change a node's endpoint, hub, exit, keepalive, MTU or container network.
+Change a node's endpoint, hub, exit, keepalive, MTU, container network, mesh IP or groups.
 
 ```
 meshctl node set <name> [flags]
@@ -297,6 +338,7 @@ meshctl node set <name> [flags]
 | `--data` | `/data` | the server's data directory (holds admin.sock) |
 | `--endpoint` |  | servers: public IPv4:port, or none to clear it |
 | `--exit` |  | spokes: exit server, or off |
+| `--groups` |  | the node's firewall groups, comma separated, replacing the ones it is in ("" takes it out of all) |
 | `--hub` |  | spokes and phones: relay server, or default for the default hub |
 | `--json` | `false` | print the server's answer as JSON |
 | `--keepalive` | `0` | PersistentKeepalive seconds (0 turns it off) |

@@ -32,6 +32,7 @@
 <option value="container"{{if eq .Mode "container"}} selected{{end}}>container: only its containers are on the mesh</option>
 </select></label>
 <label><input type="checkbox" name="containers"{{if .Containers}} checked{{end}}> Its containers on the mesh too (host mode)</label>
+<label>Groups (firewall) <input name="groups" value="{{.Groups}}" placeholder="laptops, office"></label>
 {{- end}}
 <label>Hub (spokes, phones) <select name="hub">
 <option value="">default</option>

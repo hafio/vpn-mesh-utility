@@ -10,6 +10,9 @@
 {{- if .Node.ContainerSubnet}}
 <tr><th>Containers</th><td>{{.Node.ContainerSubnet}}</td></tr>
 {{- end}}
+{{- if .Node.Groups}}
+<tr><th>Groups</th><td>{{range $i, $g := .Node.Groups}}{{if $i}}, {{end}}{{$g}}{{end}} (<a href="/firewall/objects">firewall</a>)</td></tr>
+{{- end}}
 {{- if .IsServer}}
 <tr><th>Endpoint</th><td>{{if .Node.Endpoint}}{{.Node.Endpoint}}{{else}}not known yet{{end}}</td></tr>
 {{- end}}
@@ -79,6 +82,7 @@
 {{- if not (or .IsPhone .InContainer)}}
 <label><input type="checkbox" name="containers"{{if .Node.ContainerSubnet}} checked{{end}}> Its containers on the mesh too</label>
 {{- end}}
+<label>Groups (firewall) <input name="groups" value="{{range $i, $g := .Node.Groups}}{{if $i}}, {{end}}{{$g}}{{end}}" placeholder="none"></label>
 <button type="submit">Save</button>
 </form>
 {{- if .IsPhone}}

@@ -33,7 +33,9 @@ type Diff struct {
 	RemovedNodes []string      `json:"removed_nodes,omitempty"`
 	ChangedNodes []NodeDiff    `json:"changed_nodes,omitempty"`
 	Settings     []FieldChange `json:"settings,omitempty"`
-	// DNS and Firewall list added ("+ ...") and removed ("- ...") entries.
+	// DNS and Firewall list added ("+ ...") and removed ("- ...") entries;
+	// Firewall is the segmentation (amendment A43), one entry per group,
+	// object, zone and policy, a policy with its place in the order.
 	DNS      []string `json:"dns,omitempty"`
 	Firewall []string `json:"firewall,omitempty"`
 }
@@ -126,7 +128,7 @@ func Compare(from, to store.Snapshot) Diff {
 		}
 	}
 	d.DNS = setDiff(describeDNS(from, fromNames), describeDNS(to, toNames))
-	d.Firewall = setDiff(describeRules(from, fromNames), describeRules(to, toNames))
+	d.Firewall = setDiff(describeSegmentation(from.EffectiveSegmentation()), describeSegmentation(to.EffectiveSegmentation()))
 	return d
 }
 
@@ -159,16 +161,30 @@ func describeDNS(s store.Snapshot, names map[int64]string) []string {
 	return out
 }
 
-func describeRules(s store.Snapshot, names map[int64]string) []string {
-	var out []string
-	for _, r := range s.Firewall {
-		where := "every server"
-		if r.NodeID != 0 {
-			where = names[r.NodeID]
+func describeSegmentation(s store.Segmentation) []string {
+	list := func(vs []string) string {
+		if len(vs) == 0 {
+			return "any"
 		}
-		line := fmt.Sprintf("%s/%d from %s on %s", r.Proto, r.Port, r.SourceCIDR, where)
-		if r.Note != "" {
-			line += " (" + r.Note + ")"
+		return strings.Join(vs, ",")
+	}
+	var out []string
+	for _, g := range s.Groups {
+		out = append(out, fmt.Sprintf("group %s: %s", g.Name, strings.Join(g.Nodes, ",")))
+	}
+	for _, o := range s.Addresses {
+		out = append(out, fmt.Sprintf("address %s: %s", o.Name, strings.Join(o.Entries, ",")))
+	}
+	for _, o := range s.Services {
+		out = append(out, fmt.Sprintf("service %s: %s", o.Name, strings.Join(o.Entries, ",")))
+	}
+	for _, z := range s.Zones {
+		out = append(out, fmt.Sprintf("zone %s (within: %s): %s", z.Name, z.Intra, strings.Join(z.Members, ",")))
+	}
+	for i, p := range s.Policies {
+		line := fmt.Sprintf("policy %d %s: %s %s -> %s %s", i+1, p.Name, p.Action, list(p.From), list(p.To), list(p.Services))
+		if p.Disabled {
+			line += " (disabled)"
 		}
 		out = append(out, line)
 	}

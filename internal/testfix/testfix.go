@@ -124,6 +124,26 @@ func ServerConfig() proto.NodeConfig {
 	}
 }
 
+// Policy is a server's mesh firewall as the planner compiles it for this
+// mesh (amendment A43): the system rules, the laptop allowed SMB to the
+// NAS and denied every other server port, a zone of the spokes allowed
+// within it. The rest is dropped.
+func Policy() *proto.Policy {
+	servers := []string{VPS1.MeshIP + "-" + VPS3.MeshIP}
+	spokes := []string{NAS.MeshIP, Laptop.MeshIP}
+	svc := func(name string, ports ...string) proto.Service { return proto.Service{Proto: name, Ports: ports} }
+	return &proto.Policy{Mesh: MeshCIDR, Rules: []proto.PolicyRule{
+		{Name: "system: ping", Services: []proto.Service{svc("icmp")}, Action: proto.PolicyAllow},
+		{Name: "system: dns", To: servers, Services: []proto.Service{svc("tcp", "53"), svc("udp", "53")}, Action: proto.PolicyAllow},
+		{Name: "system: swarm", From: servers, To: servers, Services: []proto.Service{svc("tcp", "2377", "7946"), svc("udp", "4789", "7946")},
+			Action: proto.PolicyAllow},
+		{Name: "policy: laptop-smb", From: []string{Laptop.MeshIP}, To: []string{NAS.MeshIP}, Services: []proto.Service{svc("tcp", "445")},
+			Action: proto.PolicyAllow},
+		{Name: "policy: laptop-servers", From: []string{Laptop.MeshIP}, To: servers, Action: proto.PolicyDeny},
+		{Name: "zone: spokes", From: spokes, To: spokes, Action: proto.PolicyAllow},
+	}}
+}
+
 // PhoneConfig is the phone's computed config: a static profile whose hub,
 // vps-1, carries the whole mesh, with vps-2 and vps-3 exit-capable.
 func PhoneConfig() proto.NodeConfig {

@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -37,9 +38,8 @@ func node(f testfix.Node) Node {
 //	servers   vps-1..3 only
 //	full      + vps-2 exit-capable, nas (hub vps-1), laptop (hub vps-2, exit
 //	          via vps-2), phone (hub vps-1); custom records "files" (nas),
-//	          "printer.office" (a fixed IP) and "work" (laptop); custom rules
-//	          9100/tcp from the mesh on every server and 5432/tcp from the nas
-//	          on vps-1
+//	          "printer.office" (a fixed IP) and "work" (laptop); the mesh
+//	          firewall of meshFirewall
 //	degraded  full with the laptop disabled and vps-3 missing its endpoint
 //	containers full with the containers of the nas and vps-2 on the mesh
 //	          (host mode, 10.77.128.0/24, 10.77.131.0/24), vps-3 and the
@@ -58,10 +58,7 @@ func topology(name string) Input {
 		{Name: "printer.office", IP: netip.MustParseAddr("10.77.1.200")},
 		{Name: "work", Node: testfix.Laptop.ID},
 	}
-	in.Rules = []Rule{
-		{ID: 1, Proto: "tcp", Port: 9100, Source: in.MeshCIDR, Note: "node exporter"},
-		{ID: 2, Node: testfix.VPS1.ID, Proto: "tcp", Port: 5432, Source: netip.MustParsePrefix(testfix.NAS.MeshIP + "/32")},
-	}
+	in.Segmentation = meshFirewall()
 	vps2.CanExit = true
 	nas, laptop, phone := node(testfix.NAS), node(testfix.Laptop), node(testfix.Phone)
 	nas.PrimaryHub = vps1.ID
@@ -632,11 +629,6 @@ func TestCheckRejects(t *testing.T) {
 		{"record without an ip", func(in *Input) { in.Records[1].IP = netip.Addr{} }, "", "no IPv4 address"},
 		{"record with both targets", func(in *Input) { in.Records[1].Node = testfix.NAS.ID }, "", "both a node and an IP"},
 		{"record of a missing node", func(in *Input) { in.Records[0].Node = 99 }, "", "does not exist"},
-		{"rule on a spoke", func(in *Input) { in.Rules[1].Node = testfix.NAS.ID }, "", "not a server"},
-		{"rule protocol", func(in *Input) { in.Rules[0].Proto = "icmp" }, "", "tcp or udp"},
-		{"rule port", func(in *Input) { in.Rules[0].Port = 0 }, "", "outside 1-65535"},
-		{"rule source", func(in *Input) { in.Rules[0].Source = netip.MustParsePrefix("10.77.1.1/16") }, "", "IPv4 network"},
-		{"rule note", func(in *Input) { in.Rules[0].Note = "a\nb" }, "", "control characters"},
 		{"upstream in the mesh", func(in *Input) { in.Upstream = []netip.Addr{netip.MustParseAddr("10.77.0.1")} }, "", "would loop"},
 		{"upstream not ipv4", func(in *Input) { in.Upstream = []netip.Addr{netip.MustParseAddr("2001:db8::1")} }, "", "not an IPv4"},
 		{"zone", func(in *Input) { in.Zone = "office.local" }, "", "dns zone"},
@@ -650,9 +642,6 @@ func TestCheckRejects(t *testing.T) {
 		{"container-mode spoke with an exit", func(in *Input) {
 			in.Nodes[4].Mode, in.Nodes[4].Containers = proto.ModeContainer, netip.MustParsePrefix("10.77.131.0/24")
 		}, "laptop", "cannot use an exit"},
-		{"rule on a container-mode server", func(in *Input) {
-			in.Nodes[0].Mode, in.Nodes[0].Containers = proto.ModeContainer, netip.MustParsePrefix("10.77.131.0/24")
-		}, "", "a container-mode server"},
 		{"container subnet not a /24", func(in *Input) { in.Nodes[3].Containers = netip.MustParsePrefix("10.77.128.0/23") }, "nas", "IPv4 /24"},
 		{"container subnet outside the mesh", func(in *Input) { in.Nodes[3].Containers = netip.MustParsePrefix("10.88.0.0/24") }, "nas", "outside the mesh"},
 		{"container subnet twice", func(in *Input) {
@@ -753,39 +742,34 @@ func TestDNS(t *testing.T) {
 	}
 }
 
-// Every server opens the resolver to the mesh; a custom rule lands on the
-// servers it names, with where it came from.
+// Every server's mesh zone lets the mesh through and carries the one
+// compiled policy (amendment A43); no other node gets a policy.
 func TestFirewallRules(t *testing.T) {
 	out := mustCompute(t, topology("full"))
-	has := func(c proto.NodeConfig, want proto.FWRule) bool {
-		return slices.Contains(c.Firewall.Rules, want)
+	want := []proto.FWRule{
+		{Zone: proto.ZoneMesh, Proto: proto.ProtoAll, Source: testfix.MeshCIDR, Note: "segmentation: the policy decides"},
+		{Zone: proto.ZonePublic, Proto: "udp", Port: proto.DefaultListenPort, Note: "wireguard"},
 	}
-	for _, s := range []testfix.Node{testfix.VPS1, testfix.VPS2, testfix.VPS3} {
-		c := out[s.ID]
-		for _, p := range []string{"udp", "tcp"} {
-			if !has(c, proto.FWRule{Zone: proto.ZoneMesh, Proto: p, Port: 53, Source: testfix.MeshCIDR, Note: "dns"}) {
-				t.Errorf("%s does not open 53/%s to the mesh", s.Name, p)
+	pol := CompilePolicy(topology("full"))
+	for _, n := range topology("full").Nodes {
+		c := out[n.ID]
+		if n.Role != proto.RoleServer {
+			if c.Policy != nil {
+				t.Errorf("%s (a %s) has a policy", n.Name, n.Role)
 			}
+			continue
 		}
-		// The mesh zone's DROP target drops ICMP too: ping from the mesh.
-		if !has(c, proto.FWRule{Zone: proto.ZoneMesh, Proto: proto.ProtoICMP, Source: testfix.MeshCIDR, Note: "ping"}) {
-			t.Errorf("%s does not answer ping from the mesh", s.Name)
+		if !slices.Equal(c.Firewall.Rules, want) {
+			t.Errorf("%s's firewall rules = %+v, want %+v", n.Name, c.Firewall.Rules, want)
 		}
-		if !has(c, proto.FWRule{Zone: proto.ZoneMesh, Proto: "tcp", Port: 9100, Source: testfix.MeshCIDR, Note: "custom: node exporter"}) {
-			t.Errorf("%s misses the rule for every server", s.Name)
-		}
-		pg := proto.FWRule{Zone: proto.ZoneMesh, Proto: "tcp", Port: 5432, Source: testfix.NAS.MeshIP + "/32", Note: "custom rule 2"}
-		if has(c, pg) != (s.ID == testfix.VPS1.ID) {
-			t.Errorf("%s: the rule for vps-1 only: present=%v", s.Name, has(c, pg))
+		if !reflect.DeepEqual(c.Policy, pol) {
+			t.Errorf("%s's policy is not the mesh's", n.Name)
 		}
 	}
-	// Two rules that differ only in their note keep one order.
-	in := topology("full")
-	in.Rules = append(in.Rules, Rule{ID: 3, Proto: "tcp", Port: 9100, Source: in.MeshCIDR, Note: "another exporter"})
-	want := encode(t, mustCompute(t, in))
-	in.Rules[0], in.Rules[2] = in.Rules[2], in.Rules[0]
-	if got := encode(t, mustCompute(t, in)); string(got) != string(want) {
-		t.Fatal("rule order depends on input order")
+	// A container-mode server has no firewalld, but enforces the policy.
+	k := mustCompute(t, topology("containers"))[testfix.VPS3.ID]
+	if k.Firewall != nil || !reflect.DeepEqual(k.Policy, CompilePolicy(topology("containers"))) {
+		t.Errorf("container-mode vps-3: firewall %+v, policy %v", k.Firewall, k.Policy != nil)
 	}
 }
 

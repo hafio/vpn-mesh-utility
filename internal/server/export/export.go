@@ -34,7 +34,12 @@ type Document struct {
 	Settings map[string]string `yaml:"settings"`
 	Nodes    []Node            `yaml:"nodes"`
 	DNS      []DNSRecord       `yaml:"dns_records"`
-	Firewall []FirewallRule    `yaml:"firewall_rules"`
+	// Firewall is in exports made before segmentation only: their custom
+	// firewall rules, which import as policies (store.LegacySegmentation).
+	Firewall []FirewallRule `yaml:"firewall_rules,omitempty"`
+	// Segmentation is the mesh firewall (amendment A43): groups (nodes by
+	// name), objects, zones and policies, in order.
+	Segmentation *store.Segmentation `yaml:"segmentation,omitempty"`
 }
 
 // Node is one node's desired state.
@@ -73,7 +78,8 @@ type DNSRecord struct {
 	IP   string `yaml:"ip,omitempty"`
 }
 
-// FirewallRule opens a mesh-zone port on one server (by name) or on all.
+// FirewallRule is a custom rule of an export made before segmentation: a
+// mesh-zone port on one server (by name) or on all.
 type FirewallRule struct {
 	Node   string `yaml:"node,omitempty"`
 	Proto  string `yaml:"proto"`
@@ -88,7 +94,8 @@ func FromSnapshot(s store.Snapshot) Document {
 	for _, n := range s.Nodes {
 		names[n.ID] = n.Name
 	}
-	d := Document{Format: Format, Settings: s.Settings, Nodes: []Node{}, DNS: []DNSRecord{}, Firewall: []FirewallRule{}}
+	seg := s.EffectiveSegmentation()
+	d := Document{Format: Format, Settings: s.Settings, Nodes: []Node{}, DNS: []DNSRecord{}, Segmentation: &seg}
 	for _, n := range s.Nodes {
 		d.Nodes = append(d.Nodes, Node{
 			ID: n.ID, Name: n.Name, Role: n.Role, MeshIP: n.MeshIP, Endpoint: n.Endpoint, ListenPort: n.ListenPort,
@@ -101,9 +108,6 @@ func FromSnapshot(s store.Snapshot) Document {
 	sort.Slice(d.Nodes, func(i, j int) bool { return d.Nodes[i].ID < d.Nodes[j].ID })
 	for _, r := range s.DNS {
 		d.DNS = append(d.DNS, DNSRecord{Name: r.Name, Node: names[r.NodeID], IP: r.IP})
-	}
-	for _, r := range s.Firewall {
-		d.Firewall = append(d.Firewall, FirewallRule{Node: names[r.NodeID], Proto: r.Proto, Port: r.Port, Source: r.SourceCIDR, Note: r.Note})
 	}
 	return d
 }
@@ -154,7 +158,7 @@ func ToSnapshot(d Document) (store.Snapshot, error) {
 		}
 	}
 	s := store.Snapshot{Format: store.SnapshotFormat, Settings: map[string]string{}, Nodes: []store.SnapNode{},
-		DNS: []store.DNSRecord{}, Firewall: []store.FirewallRule{}}
+		DNS: []store.DNSRecord{}}
 	ids := map[string]int64{}
 	seen := map[int64]bool{}
 	for i, n := range d.Nodes {
@@ -303,11 +307,65 @@ func ToSnapshot(d Document) (store.Snapshot, error) {
 		bad(err)
 		_, err = validate.Text(f+".note", r.Note, 200)
 		bad(err)
-		s.Firewall = append(s.Firewall, store.FirewallRule{NodeID: ref(f+".node", r.Node), Proto: r.Proto, Port: r.Port,
-			SourceCIDR: r.Source, Note: r.Note})
+		s.Firewall = append(s.Firewall, store.FirewallRule{ID: int64(i + 1), NodeID: ref(f+".node", r.Node), Proto: r.Proto,
+			Port: r.Port, SourceCIDR: r.Source, Note: r.Note})
+	}
+	if seg := d.Segmentation; seg != nil {
+		if len(d.Firewall) > 0 {
+			bad(errors.New("firewall_rules: an export made before segmentation has them, a newer one a segmentation section; keep one"))
+		}
+		if err := seg.Validate(); err != nil {
+			bad(fmt.Errorf("segmentation: %w", err))
+		}
+		for _, g := range seg.Groups {
+			for _, n := range g.Nodes {
+				ref(fmt.Sprintf("segmentation.groups[%s].nodes", g.Name), n)
+			}
+		}
+		s.Segmentation = seg
 	}
 	if err := errors.Join(errs...); err != nil {
 		return store.Snapshot{}, fmt.Errorf("the export is not valid, nothing was imported:\n%w", err)
 	}
 	return s, nil
+}
+
+// segDoc is the file `meshctl firewall show --yaml` writes and `meshctl
+// firewall apply` reads: the segmentation section on its own.
+type segDoc struct {
+	Segmentation store.Segmentation `yaml:"segmentation"`
+}
+
+// WriteSegmentation encodes the mesh firewall's document as YAML.
+func WriteSegmentation(w io.Writer, s store.Segmentation) error {
+	var b bytes.Buffer
+	b.WriteString("# meshctl mesh firewall: groups, objects, zones and policies (first match wins).\n" +
+		"# Edit it and give it back to `meshctl firewall apply <file>`.\n")
+	enc := yaml.NewEncoder(&b)
+	enc.SetIndent(2)
+	if err := enc.Encode(segDoc{Segmentation: s}); err != nil {
+		return fmt.Errorf("encode the firewall: %w", err)
+	}
+	if err := enc.Close(); err != nil {
+		return fmt.Errorf("encode the firewall: %w", err)
+	}
+	if _, err := w.Write(b.Bytes()); err != nil {
+		return fmt.Errorf("write the firewall: %w", err)
+	}
+	return nil
+}
+
+// ReadSegmentation parses what WriteSegmentation wrote, refusing unknown
+// fields, and checks it against its grammar.
+func ReadSegmentation(r io.Reader) (store.Segmentation, error) {
+	var d segDoc
+	dec := yaml.NewDecoder(r)
+	dec.KnownFields(true)
+	if err := dec.Decode(&d); err != nil {
+		return store.Segmentation{}, fmt.Errorf("read the firewall file: %w", err)
+	}
+	if err := d.Segmentation.Validate(); err != nil {
+		return store.Segmentation{}, fmt.Errorf("the firewall file is not valid, nothing was changed:\n%w", err)
+	}
+	return d.Segmentation, nil
 }

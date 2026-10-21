@@ -203,11 +203,10 @@ without the mesh.
 
 ## The host firewall
 
-On servers the agent creates firewalld's `mesh` zone (target DROP) bound to `wg0`, opens the
-Swarm ports in it only from the other servers' /32s, DNS (53/udp, 53/tcp) and ping (ICMP echo
-requests, which DROP would drop too) from the mesh CIDR, and udp/51820 in the public zone. Custom rules from the web UI's Firewall page open one port in the
-mesh zone from the source network an operator gives (validated as an IPv4 network; its note is
-display-only and never reaches firewall-cmd). It records what it added in `firewall.applied.json`
+On servers the agent creates firewalld's `mesh` zone (target DROP) bound to `wg0`, with one rule
+that accepts everything from the mesh CIDR, and udp/51820 in the public zone; what crosses the mesh
+is the mesh firewall's to decide (below). A rule's note is display-only and never reaches
+firewall-cmd. It records what it added in `firewall.applied.json`
 and only ever removes its own rules. Every 5 minutes, and at every start, it asks firewalld again
 (the zone's interface at runtime too, and each recorded rule) and puts back what was changed
 underneath it. `--no-firewall` turns this off for hosts whose firewall is managed elsewhere.
@@ -219,6 +218,27 @@ DROP target still applies to every other path, so a spoke reaches another spoke 
 relay and the internet only through a server an operator allowed with `--can-exit`. A policy
 changed by hand is put back as a whole; one the plan no longer asks for is deleted. Their argv is
 built from constants only (`TestForwardingPolicies` pins it).
+
+## The mesh firewall
+
+Zones and policies (amendment A43) decide which mesh addresses reach which. Every packet between
+two nodes crosses a server -- spokes and phones peer only with servers -- so every server enforces
+the same compiled policy on what it relays, receives and sends, and a spoke needs no firewall of
+meshctl's to be segmented; its own still guards its host. The policy starts with system rules no
+policy changes (ping across the mesh, DNS to the servers, Swarm only between servers), then the
+operator's policies in order (first match wins), then an allow within each zone that does not deny,
+then drops the rest. A mesh starts with the policy `allow-all` last, so nothing is cut off until an
+operator narrows it; deleting it makes the mesh deny by default. An address is an identity because
+WireGuard drops a packet whose source is not in the AllowedIPs of the peer it came from: a spoke
+cannot send as another, and a container network is its node's /24. Same-node traffic (a node and
+its own containers, two of its containers) does not cross a server and is not filtered.
+
+Every value of the document passes `internal/validate` on the way in (names, addresses, services,
+`kind:name` references); the planner refuses a change that would leave a reference to nothing, and
+the agent checks the compiled policy against the same grammar, so no operator string reaches the
+kernel: the agent's rules carry addresses, ports and verdicts only. Literal addresses are clipped to
+the mesh, since the firewall only sees mesh traffic: traffic to or from outside the mesh (an exit's
+internet traffic) is not filtered by it.
 
 ## DNS
 

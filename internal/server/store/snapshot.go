@@ -20,7 +20,25 @@ type Snapshot struct {
 	Settings map[string]string `json:"settings"`
 	Nodes    []SnapNode        `json:"nodes"`
 	DNS      []DNSRecord       `json:"dns_records"`
-	Firewall []FirewallRule    `json:"firewall_rules"`
+	// Firewall is in snapshots made before segmentation only: their custom
+	// firewall rules, which restore as policies (LegacySegmentation).
+	Firewall []FirewallRule `json:"firewall_rules,omitempty"`
+	// Segmentation is the mesh firewall (amendment A43); nil only in a
+	// snapshot made before it existed.
+	Segmentation *Segmentation `json:"segmentation"`
+}
+
+// EffectiveSegmentation is the segmentation s restores: its own, or, in a
+// snapshot made before segmentation, its custom rules as policies.
+func (s Snapshot) EffectiveSegmentation() Segmentation {
+	if s.Segmentation != nil {
+		return *s.Segmentation
+	}
+	names := map[int64]string{}
+	for _, n := range s.Nodes {
+		names[n.ID] = n.Name
+	}
+	return LegacySegmentation(s.Firewall, names)
 }
 
 // SnapNode is the desired-state subset of a node.
@@ -67,7 +85,7 @@ func snapNode(n Node) SnapNode {
 
 // Snapshot reads the current desired state.
 func (t *Tx) Snapshot() (Snapshot, error) {
-	s := Snapshot{Format: SnapshotFormat, Settings: map[string]string{}, Nodes: []SnapNode{}, DNS: []DNSRecord{}, Firewall: []FirewallRule{}}
+	s := Snapshot{Format: SnapshotFormat, Settings: map[string]string{}, Nodes: []SnapNode{}, DNS: []DNSRecord{}}
 	all, err := t.Settings()
 	if err != nil {
 		return Snapshot{}, err
@@ -87,14 +105,13 @@ func (t *Tx) Snapshot() (Snapshot, error) {
 	if s.DNS, err = t.DNSRecords(); err != nil {
 		return Snapshot{}, err
 	}
-	if s.Firewall, err = t.FirewallRules(); err != nil {
+	seg, err := t.Segmentation()
+	if err != nil {
 		return Snapshot{}, err
 	}
+	s.Segmentation = &seg
 	if s.DNS == nil {
 		s.DNS = []DNSRecord{}
-	}
-	if s.Firewall == nil {
-		s.Firewall = []FirewallRule{}
 	}
 	return s, nil
 }
@@ -126,7 +143,7 @@ func DecodeSnapshot(b []byte) (Snapshot, error) {
 
 // Restore replaces the desired state with s: nodes absent from s are
 // deleted, nodes in s are re-created or updated (keeping their ids, so
-// references stay valid), and custom DNS records, firewall rules and desired
+// references stay valid), and custom DNS records, segmentation and desired
 // settings are replaced. Heartbeat and reconciler fields of surviving nodes
 // are left alone; the caller recomputes configs afterwards.
 func (t *Tx) Restore(s Snapshot) error {
@@ -195,13 +212,8 @@ func (t *Tx) Restore(s Snapshot) error {
 			return fmt.Errorf("restore: %w", err)
 		}
 	}
-	if _, err := t.exec(`DELETE FROM firewall_rules`); err != nil {
-		return fmt.Errorf("restore firewall rules: %w", err)
-	}
-	for _, r := range s.Firewall {
-		if err := t.InsertFirewallRule(&r); err != nil {
-			return fmt.Errorf("restore: %w", err)
-		}
+	if err := t.SetSegmentation(s.EffectiveSegmentation()); err != nil {
+		return fmt.Errorf("restore: %w", err)
 	}
 	for _, k := range DesiredSettings {
 		v, ok := s.Settings[k]
@@ -212,8 +224,8 @@ func (t *Tx) Restore(s Snapshot) error {
 				continue
 			}
 			if v == "" {
-				if _, err := t.exec(`DELETE FROM settings WHERE key = ?`, k); err != nil {
-					return fmt.Errorf("restore setting %q: %w", k, err)
+				if err := t.DeleteSetting(k); err != nil {
+					return fmt.Errorf("restore: %w", err)
 				}
 				continue
 			}

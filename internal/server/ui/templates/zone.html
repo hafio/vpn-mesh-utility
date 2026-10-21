@@ -1,0 +1,38 @@
+{{define "content"}}
+{{- with .Data}}
+{{template "fwtabs" .}}
+{{- with .View}}
+<p>Addresses: {{if .Addresses}}{{.Addresses}}{{else}}none{{end}}. Saving a new name renames it, and the policies that name it follow.</p>
+<form method="post" action="/firewall/zones/{{.Form.Old}}" class="grid">
+<input type="hidden" name="csrf" value="{{$.CSRF}}">
+{{- template "fwzonefields" .Form}}
+<button type="submit">Save</button>
+</form>
+<form method="post" action="/firewall/zones/{{.Form.Old}}/remove" class="inline">
+<input type="hidden" name="csrf" value="{{$.CSRF}}">
+<button type="submit" class="danger">Remove this zone</button>
+</form>
+{{- template "fwrefs"}}
+
+<h2>Inbound</h2>
+<p class="hint">The rules, in order, whose To reaches this zone: what may come in from the rest of the mesh.</p>
+<ol>
+{{- range .Inbound}}
+<li value="{{.N}}">{{if .System}}<span class="hint">{{.Text}}</span>{{else}}<code>{{.Text}}</code>{{end}}</li>
+{{- else}}
+<li>none: nothing comes in</li>
+{{- end}}
+</ol>
+
+<h2>Outbound</h2>
+<p class="hint">The rules, in order, whose From covers this zone: what it may reach in the rest of the mesh.</p>
+<ol>
+{{- range .Outbound}}
+<li value="{{.N}}">{{if .System}}<span class="hint">{{.Text}}</span>{{else}}<code>{{.Text}}</code>{{end}}</li>
+{{- else}}
+<li>none: nothing goes out</li>
+{{- end}}
+</ol>
+{{- end}}
+{{- end}}
+{{end}}

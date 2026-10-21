@@ -60,6 +60,6 @@ func Import(ctx context.Context, c ImportConfig) (api.Result, error) {
 	defer st.Close()
 	rec := api.NewReconciler(st, api.NewHub(), c.Log)
 	return rec.Apply(ctx, api.Change{Actor: "cli", Action: "mesh.import", Summary: "import",
-		Detail: map[string]any{"nodes": len(snap.Nodes), "dns_records": len(snap.DNS), "firewall_rules": len(snap.Firewall)}},
+		Detail: map[string]any{"nodes": len(snap.Nodes), "dns_records": len(snap.DNS), "policies": len(snap.EffectiveSegmentation().Policies)}},
 		func(tx *store.Tx, _ *api.Change) error { return tx.Restore(snap) })
 }

@@ -1,0 +1,18 @@
+{{define "content"}}
+{{- with .Data}}
+{{template "fwtabs" .}}
+{{- with .View}}
+<p>Policy {{.Form.Position}} of {{.Count}}. Saving a new name renames it; its place in the order is Position.</p>
+<form method="post" action="/firewall/policies/{{.Form.Old}}" class="grid">
+<input type="hidden" name="csrf" value="{{$.CSRF}}">
+{{- template "fwpolicyfields" .Form}}
+<button type="submit">Save</button>
+</form>
+<form method="post" action="/firewall/policies/{{.Form.Old}}/remove" class="inline">
+<input type="hidden" name="csrf" value="{{$.CSRF}}">
+<button type="submit" class="danger">Remove this policy</button>
+</form>
+{{- template "fwrefs"}}
+{{- end}}
+{{- end}}
+{{end}}

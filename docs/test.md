@@ -18,6 +18,7 @@ assert that bad input is rejected **and** that the downstream call is not made.
 | `SpokeConfig(exit)` | a valid config for the laptop (hub vps-1 relaying to the NAS, vps-2/vps-3 exit-capable); a non-empty exit puts 0.0.0.0/0 on that peer and turns exit mode on |
 | `PhoneConfig()` | the phone's computed config: hub vps-1's peer carries the mesh CIDR, vps-2/vps-3 exit-capable |
 | `MeshView()` | the server's mesh view of the reference topology: servers in sync, the NAS applying, the laptop (exit vps-2) silent, the phone idle |
+| `Policy()` | a server's compiled mesh firewall (amendment A43): the system rules, the laptop allowed SMB to the NAS and denied the servers, a zone of the spokes allowed within it |
 
 `testfix` imports only `internal/proto`, so tests on both sides of the server/agent boundary use
 it; `TestModuleBoundaries` forbids production code from importing it.
@@ -38,6 +39,14 @@ it; `TestModuleBoundaries` forbids production code from importing it.
 | `TestArg` | the shell-layer charset accepts firewall-cmd options and rich rules and refuses metacharacters |
 | `FuzzArg`, `FuzzName` | nothing accepted contains a byte outside the documented charset |
 
+`segment_test.go` (the mesh firewall's grammar, amendment A43)
+
+| Test | Pins |
+| --- | --- |
+| `TestAddrEntry`, `TestAddrRangePrefix` | an address, a network (host bits refused) or a range first-last (in order) in canonical form: a range that is a network reads as one, a single address bare; IPv6, lists, references and newlines refused |
+| `TestServiceEntry` | tcp or udp with no port, one or a range, and icmp without ports; port 0, 65536, leading zeros or signs, reversed ranges, upper case and lists refused |
+| `TestRef` | `kind:name` with a kind the field takes and a Name; a string without a colon is a literal; another kind, an empty or malformed name refused |
+
 ## `internal/proto`
 
 | File | Test | Pins |
@@ -49,13 +58,16 @@ it; `TestModuleBoundaries` forbids production code from importing it.
 | | `TestVerifyRejectsMissingKey`, `TestParseSignedRejectsMalformedHeaders` | missing/malformed headers are `ErrUnsigned`; no key is `ErrBadSignature` |
 | `config_test.go` | `TestHashIsPinned` | the canonical encoding and its sha256 (changing either re-applies every deployed config) |
 | | `TestHashIgnoresVersionOnly` | `Version` is excluded from the hash; desired-state changes are not |
-| | `TestValidateAcceptsFixtures`, `TestValidateRejects`, `TestValidateReportsEveryProblem` | the agent-side config gate, which every fixture passes (server, spoke, spoke with an exit, a container-mode spoke, a server with containers): version, addresses, MTU, fwmark, peer names, duplicate peers/keys/prefixes, endpoints, keepalive, exit and its choices, sysctl allowlist, firewall fields (nftables: mesh-side rules only), DNS records, upstreams, forward_for and extra domains (lower case, sorted, not around the zone), and the container network's shape (amendment A37) |
+| | `TestValidateAcceptsFixtures`, `TestValidateRejects`, `TestValidateReportsEveryProblem` | the agent-side config gate, which every fixture passes (server, spoke, spoke with an exit, a container-mode spoke, a server with containers): version, addresses, MTU, fwmark, peer names, duplicate peers/keys/prefixes, endpoints, keepalive, exit and its choices, sysctl allowlist, firewall fields (nftables: mesh-side rules only), DNS records, upstreams, forward_for and extra domains (lower case, sorted, not around the zone), the container network's shape (amendment A37), the accept-all mesh-zone rule (mesh zone, a source, no port) and a policy (servers only, its grammar; amendment A43) |
 | `api_test.go` | `TestJoinRequestValidateNormalises`, `TestJoinRequestValidateRejects`, `TestJoinRequestErrorNeverEchoesTheToken` | join payload validation (including `public_ip`) and token masking |
 | | `TestETagQuotesTheHash` | the config entity tag |
 | | `TestStatusReportValidate` | heartbeat limits (peers, errors), counters, degraded-step allowlist, the DNS states |
 | | `TestPrefsRequestValidate` | a prefs request: exit name grammar (metacharacters refused), keepalive and MTU ranges, an empty request refused |
 | `mesh_test.go` | `TestMeshViewValidate` | the mesh view the agent caches and shows: names, roles, IPv4 mesh IPs, hub and exit grammar, the health colours, a state without control characters and at most 200 bytes, no negative time or version, at most 65536 nodes; the containers' names (name, node and IPv4 grammar, at most 65536) |
 | `names_test.go` | `TestNamesRequestNormalises`, `TestNamesRequestRejects` | a container names report (amendment A38): names folded to lower case without a trailing dot, an empty list allowed; a newline, an underscore, an empty name, an unknown kind, a non-IPv4 address, a name listed twice for one address and more than 512 entries refused |
+| `policy_test.go` | `TestPolicyDecide` | first match wins and the rest is dropped (`RuleDefault`); traffic with an end outside the mesh is `RuleNotMesh` |
+| | `TestPolicyMatcherRefusesBadValues` | the agent-side gate of a policy: mesh, action, name, addresses (inside the mesh), protocols, ports, icmp without ports, at most 512 rules and 1024 entries |
+| | `TestPolicyRuleString` | one line per rule, as `meshctl firewall show` and the web UI print it |
 | `sse_test.go` | `TestSSERoundTrip` | exact wire format of retry, comment and event frames, and the reader |
 | | `TestSSEReaderJoinsDataLinesAndDefaultsName`, `TestSSEReaderReportsTruncatedEvent`, `TestSSEReaderBoundsLineLength` | reader edge cases |
 | | `TestSSEWriterRefusesFrameInjection` | names or data with newlines/colons are refused and nothing is written |
@@ -80,19 +92,24 @@ one sanctioned exec site) so a checker that matched nothing cannot pass.
 | `TestOpenRejectsDSNInjection` | a path carrying `?` cannot rewrite the driver DSN |
 | `TestLoadMigrationsValidatesNames` | gaps, zero and malformed migration names fail at startup |
 | `TestNodeCRUD`, `TestNodeUniquenessIsAConflict`, `TestNotFound` | node accessors; uniqueness violations map to `ErrConflict` |
-| `TestDeleteNodeCascades` | deleting a node removes its tokens, bound records and rules, peer status, container names, and clears spokes' hub references |
+| `TestDeleteNodeCascades` | deleting a node removes its tokens, bound records, group memberships, peer status, container names, and clears spokes' hub references |
 | `TestContainerNames` | a node's container names are replaced by each report, which says whether anything changed (a new kind counts); listed by name, node and address; an empty report clears one node's only |
 | `TestTokenLifecycle` | single use, unknown, expired, reissue revokes the previous token, tokens stored only as hashes |
 | `TestTokenConcurrentConsume` | eight concurrent joins with one token: exactly one succeeds |
 | `TestVersions`, `TestAudit` | version numbering, listing and lookup; audit rows carry the transaction clock |
 | `TestHubState` | relay failover's state (amendment A40) survives an update of the node's desired fields, stays out of the snapshot, and a missing node is `ErrNotFound` |
 | `TestRestoreOfAnOlderSnapshot`, `TestSplitDomains` | a snapshot from before a setting existed puts its default back (the zone to mesh, no extra domains); the extra domains read from their comma-separated setting |
-| `TestSnapshotRestoreRoundTrip` | restore after drift (node removed, added, edited; setting and rules changed) reproduces the snapshot exactly, keeping ids |
+| `TestSnapshotRestoreRoundTrip` | restore after drift (node removed, added, edited; setting and mesh firewall changed) reproduces the snapshot exactly, keeping ids |
 | `TestNodeContainerColumns` | a node's mode and container subnet (amendment A37): host and none by default, kept by insert and update, one node per subnet (`ErrConflict`), and a snapshot naming only a container-mode node's mode |
 | `TestDecodeSnapshotRefusesUnknownShapes` | unknown fields and formats are refused |
 | `TestRecordStatus` | a heartbeat updates the node and replaces (not merges) its peer rows |
 | `TestPhoneState` | `LastHandshakeWith` is the latest handshake any node reported with a peer (0 for none); `SetApplied` records a phone's profile without counting as a heartbeat |
 | `TestOpenReadOnly` | `export`'s read-only open reads, refuses writes, a missing file (pointing at `--data`) and a schema other than the binary's |
+| `TestSegmentationRoundTrip`, `TestSetSegmentationRefusesAStranger` (`segments_test.go`) | the mesh firewall's document (amendment A43): a new mesh holds `allow-all` only; written and read back exactly (groups with their nodes, objects and zones by name, policies in order); a group naming a node that does not exist is `ErrNotFound` and nothing stays |
+| `TestSetNodeGroups` | a node's groups replaced, a new group made on the way, a group's nodes listed by name; out of every group, the groups stay |
+| `TestSegmentationValidate` | every value's grammar and limit: names once per kind, a group's nodes, entries, references by field (no zone in a zone, no svc: in from), actions, descriptions without control characters, at most 32 references and 256 policies |
+| `TestMigrationTurnsRulesIntoPolicies` | migration 0006 on a v5 database turns each custom firewall rule into the same policies `LegacySegmentation` makes (to its server, or `role:server`), `allow-all` last, and drops the table |
+| `TestRestoreOfASnapshotWithFirewallRules` | a snapshot from before the mesh firewall restores its rules as policies |
 | `TestUsers`, `TestSessions` | account and session accessors; `UseTOTPStep` refuses a step at or before the last one (replay), and a new secret starts the counter over |
 
 ## `internal/server/auth`
@@ -126,14 +143,16 @@ in through the UI itself (password, then TOTP enrolment).
 | `TestChangesNeedOriginAndCSRF` | missing or wrong CSRF token, another origin, no Origin: refused, and nothing written |
 | `TestNodeLifecycle` | add (token shown once, form kept on errors), edit, disable, enable, new token, remove with confirmation, audited as `user:admin` |
 | `TestEditSpoke` | a spoke's hub, exit and keepalive edit; the hub and exit choices offered; refused edits (400/404) change nothing; a new mesh IP from the form with its note, a taken one refused; no token for a disabled node; the computed config on a server's page |
-| `TestDNSAndFirewallPages` | the zone with automatic names and the upstreams; a custom record added and removed; a record named like a node (409) and a refusal without CSRF (403) changing nothing; each server's rules with their source; a custom rule added and removed; a bad port (400) and a missing rule (404) coming back on the page with the form kept |
+| `TestDNSPage` | the zone with automatic names and the upstreams; a custom record added and removed; a record named like a node (409) and a refusal without CSRF (403) changing nothing |
+| `TestFirewallPages` (`firewall_test.go`) | the mesh firewall built one item at a time (amendment A43): a group, a service and an address object, a zone, a policy at position 1, moved, renamed; the zone's outbound rules and addresses; a reachability check and the zone matrix; refusals that keep the form -- an item still named elsewhere (409), a bad action, position or address (400), a dangling member (409), an unknown kind, a missing policy or zone (404), a service checked without a port -- and a removal without CSRF (403); then everything removed in order |
+| `TestNodeGroupsOnPages` | a node's groups from the add form and on its page; changed by the edit form; a bad group name refused (400) |
 | `TestContainerModePages` | a container-mode node from the add form: its page names the mode and subnet, offers the compose file per runtime and no exit; a host-mode node's edit form puts its containers on the mesh and takes them off; a container-mode phone is refused; the DNS page lists no names, then box's reported names with how one resolves (`web.mesh`, `web.box.mesh`) and why another is not published |
 | `TestSpokeComposeDownload` | a spoke's page offers its compose file (a server's does not); the download carries the form's backend and directory as `compose.yml`; a server (409) and a hostile directory (400) come back on the page; no download without a session |
 | `TestStoreFailuresAreLoggedNotShown` | with the mesh store failing (`faultyDB`), every page and change answers 500 without the cause, the cause reaches the log, and nothing is written |
 | `TestRollbackThatAddsNodesNeedsConfirmation` | the version diff, the confirmation for a membership change, the new version, an unknown version (404), a rollback to the current version changing nothing |
 | `TestSettings`, `TestUsersAndAccount`, `TestDashboardFragmentAndExport` | validation of every setting (CIDR only while empty), user management (not on yourself), password change ending the session, the refresh fragment, the export download; the DNS zone shown, refused when it ends in local, and a new one renaming the DNS page's names; extra domains saved sorted and shown on the DNS page, a bad one and the server's own domain refused (400), one inside the zone refused by the plan (409), kept by a form without the field and cleared by an empty one |
 | `TestHTMXIsPinned`, `TestTemplatesHaveNoInlineScriptOrStyle` | the vendored htmx's sha256; no inline script, style or event handler in any template; no static directory listing or path escape |
-| `TestPageGoldens` | `testdata/{login,dashboard,node,version}.golden.html` for fixed data, the node's DNS state included (`./scripts/dev.sh regen` creates and updates them) |
+| `TestPageGoldens` | `testdata/{login,dashboard,node,version,firewall}.golden.html` for fixed data, the node's DNS state included (`./scripts/dev.sh regen` creates and updates them) |
 | `TestEveryPageRenders`, `TestHelpers` | every template renders; ages (never, a clock ahead of the report shows 0s), byte sizes, the origin check, and times in the server's time zone (UTC, SGT) (the dashboard colours are `api`'s `TestDashboardHealth`) |
 | `TestPhonePage`, `TestQRCode` (`phone_test.go`) | a phone added from the nodes page (no token, no compose, no peers table, no exit setting); its via-exit profile shown once as an inline SVG QR code and text, `no-store`, the private key never in the log; a server that is no exit (409) refused on the page; a hub change marks the profile out of date; audited `phone.profile` as `user:admin`. The QR path draws exactly the library's dark modules with a 4-module quiet zone, and a too-long profile's error does not quote it |
 
@@ -141,7 +160,9 @@ in through the UI itself (password, then TOTP enrolment).
 
 `TestCompareEqualSnapshotsIsEmpty`, `TestCompareListsEveryKindOfChange`,
 `TestARenameIsAChangeNotAReplacement`: added, removed and changed nodes by field (keys as
-fingerprints), settings, DNS records and firewall rules; nodes are matched by id.
+fingerprints), settings, DNS records and the mesh firewall (each group, object, zone and policy,
+a policy with its place); nodes are matched by id. `TestCompareSeesThroughTheMigration`: a
+snapshot from before the mesh firewall compares by the policies its rules became.
 
 ## `internal/server/api`
 
@@ -170,10 +191,15 @@ and counts transactions, so a refusal can be shown to happen before any database
 | | `TestAdminSetDisableEnableRemove`, `TestAdminTokenAndShow` | each write; disable closes the node's stream and drops it from peers |
 | | `TestAdminClientOverTheSocket` | `AdminClient` against the handler on a real Unix socket, including error codes |
 | | `TestContainerNetworksNeedRoom`, `TestAdminContainerMode` | container networks over the admin API: the lowest free /24 for a container-mode node and for a host-mode one on request, the refusals (no endpoint, an exit, a phone, an unknown mode, turning container mode's off), the compose file per runtime and backend, a hub's published port, a hub without an endpoint (409), and deploy's network names equal proto's |
-| | `TestMoveMeshIP` | a new mesh IP (amendment A41): every peer and the DNS name follow in a new version; the notes name a custom rule holding the old address, a server's Swarm advertise address, a phone's profile; the same address changes nothing; a taken, outside, broadcast or malformed address is 400, one inside a container subnet 409, and nothing moves |
+| | `TestMoveMeshIP` | a new mesh IP (amendment A41): every peer and the DNS name follow in a new version; the notes name a firewall policy holding the old address, a server's Swarm advertise address, a phone's profile; the same address changes nothing; a taken, outside, broadcast or malformed address is 400, one inside a container subnet 409, and nothing moves |
 | | `TestAdminCompose` | a spoke's compose file with the server's release and origin, both backends and a chosen directory; a server (409), an unknown node (404), a bad name, backend or directory (400) and a development build refused |
 | | `TestCustomDNSRecords` (`records_test.go`) | an alias and a fixed record reach every config; an alias of a node not on the mesh changes no config but shows as not live; the DNS page's rows; bad names, both or neither target, a bad IP: 400 before any transaction; a duplicate, a node's name, an IP outside the mesh (409) and an unknown node (404) write nothing; removal; audited `dns.add`/`dns.rm`; a name given with the zone is refused (409) |
-| | `TestCustomFirewallRules` (`records_test.go`) | a rule for every server and one for vps-1 rendered with their notes; every bad field at once (400, no transaction); a spoke (400) and an unknown server (404) refused; removal; audited `firewall.add`/`firewall.rm` |
+| `segment_test.go` | `TestSegmentView` | the mesh firewall of a new mesh (`allow-all` and the system rules), then each zone's addresses and its inbound and outbound rules |
+| | `TestSetSegment` | the document replaced whole: a new version, audited, every server's policy (a spoke has none); a bad value refused before the database (400), a dangling reference refused by the plan (409), a group of strangers (400), none written; the same document again changes no config |
+| | `TestEditSegment` | the web UI's edits: groups, objects, a zone and a policy at position 1; renames that follow into every reference; moves and bad positions; a zone still named refused (409), then everything removed in order; unknown kinds (400) and missing items (404); audited |
+| | `TestReach`, `TestMatrix` | one flow's verdict by node or address, with the deciding rule (system, policy, none, not mesh traffic); a service without one port and an unknown node refused before the database; the zone matrix's allow and partial cells |
+| | `TestNodeGroups`, `TestMoveMeshIPNotesTheFirewall` | groups at add and set, sorted, in the node list; bad names and duplicates refused before the database; a node a zone names cannot be removed until it is out of the zone; a mesh IP move names the zone that held the old address |
+| | `TestSegmentAdminRoutes` | `GET`, `PUT` and `/check` of `/admin/v1/segmentation` over the admin handler; a bad document is 400 `bad_request` |
 | | `TestAdminErrorCodes`, `TestAdminSetClearsReferences` | every refusal of every admin write (404, 400, 409) leaves state untouched, a phone's profile included (a server, a bad, unknown or non-exit exit, an unknown field); clearing an endpoint warns |
 | `phone_test.go` | `TestPhoneProfile` | a phone added without a token; a mesh-only profile whose private key matches the public key all three servers peer with, the hub's resolver as DNS; a via-exit profile replaces the key and adds `0.0.0.0/0, ::/0` to the exit's peer; no audit row carries a private key; a hub change marks the profile out of date; the servers' reported handshake in `node list` and `node show` |
 | | `TestPhoneProfileNeedsAServer` | without a joined server with an endpoint: 409, the phone keeps no key and nothing is audited |
@@ -201,7 +227,10 @@ only), `TestRunRefusesBadConfig`,
 (0600 files, no file for an unchanged night, the newest 14 kept), `TestExporterRunStopsWithItsContext`.
 `export_test.go`: `TestExportIsDeterministicAndByName` (same state, same bytes; references by name;
 no secrets), `TestReadRoundTripsAndRefusesUnknownShapes`, `TestToSnapshotRoundTrips`,
-`TestToSnapshotRefusesHostileDocuments` (every field validated before an import may restore it, the extra domains included).
+`TestToSnapshotRefusesHostileDocuments` (every field validated before an import may restore it, the extra domains and the
+mesh firewall included), `TestToSnapshotReadsAnOlderExport` (custom rules become policies above `allow-all`),
+`TestSegmentationFile` (`meshctl firewall show --yaml` and `apply`: round trip, unknown fields and bad values refused).
+`TestImportRestoresAnExport` imports an export made before the mesh firewall: its custom rule becomes a policy.
 
 ## `deploy`
 
@@ -211,6 +240,8 @@ no secrets), `TestReadRoundTripsAndRefusesUnknownShapes`, `TestToSnapshotRoundTr
 | `TestInstallGolden`, `TestInstallChangesOnlyTheMarkers`, `TestInstallParses` | `testdata/install.golden.sh`; rendering changes only the four quoted markers; `sh -n` accepts it |
 | `TestInstallRefusesHostileValues` | quotes, paths, `$(...)`, newlines, bad checksums are refused before rendering |
 | `TestServerComposePosture`, `TestDevComposePosture` | the exact service keys, user, no privileges, no capabilities, read-only root, named volumes only, no widening token anywhere in the file; the server's environment is `TZ` only |
+| `TestServerStackPosture` (`reference_test.go`) | the Swarm stack's exact service keys, user, no capabilities, read-only root, the named volume and a tmpfs only, one replicated task on the labelled node stopped before the next, the external network, the compose file's command and healthcheck; no widening token |
+| `TestComposeDoc` (`reference_test.go`) | docs/compose.md equals every compose and stack file as the renderers make them for example nodes (`./scripts/dev.sh regen` rewrites it) |
 | `TestNASComposeGolden` | `testdata/compose.nas-{userspace,kernel}.golden.yml`; empty backend and directory are the userspace variant in `/volume1/docker/meshctl`, and 1.2.3 is the same image as v1.2.3 |
 | `TestNASComposePosture` | both variants' exact service keys and values: uid 0, host network, NET_ADMIN and NET_BIND_SERVICE only, the tun device in userspace only, one bind mount; no other widening token |
 | `TestContainerComposeGolden` | `testdata/compose.container-{hub-docker,podman,swarm}.golden.yml` (amendment A37; swarm without names); the defaults are docker, auto and the named volume |
@@ -317,6 +348,7 @@ and `Policy.Fail`/`FailOn` inject a failure into one method, also while an agent
 | `TestPrintEnrollmentInTheLocalZone` (`commands_test.go`) | a join token's expiry in the local time zone; no enrollment, nothing printed |
 | `TestUserCommands` | passwords only from a terminal (a fake in tests), twice and matching, never echoed; add, passwd, reset-totp |
 | `TestImportCommand` | import then export round trip; a file with unknown fields refused (Linux only) |
+| `TestFirewallCommands` (`firewall_test.go`) | `node add --groups`; `firewall show` (policies, the rules every server enforces), `--yaml` and `--json`; `firewall apply` of a file; `firewall check` by node and address with the deciding rule, not mesh traffic, a service without one port; a bad file, a missing one and a dangling reference change nothing; `node show` lists the groups and `node set --groups` replaces them, a bad group refused |
 
 ## End to end -- `test/e2e`
 
@@ -378,7 +410,7 @@ the namespaces from the test process (`inNS`).
 
 Goldens: `testdata/{servers,full,degraded}.golden.json`, derived by hand from the rules in
 `planner.go` (see [developer.md](developer.md#goldens)); the full topology carries custom records
-and firewall rules. The fixtures are built by `topology()`
+and the mesh firewall of `meshFirewall()` (`segment_test.go`). The fixtures are built by `topology()`
 in `planner_test.go` from the testfix reference topology.
 
 | Test | Pins |
@@ -389,13 +421,17 @@ in `planner_test.go` from the testfix reference topology.
 | `TestServerPeersForSpokesAreExactly32` | on a server, a spoke or phone owns only its /32 and has no endpoint or keepalive |
 | `TestEveryPairCanTalk` | packet simulation with WireGuard's longest-prefix cryptokey routing: every pair of planned nodes reaches each other both ways (amendment A3) |
 | `TestContainersTalkToEveryNode` | the same simulation for a container behind each node with a container network: it reaches every other node and is reached from it (amendment A37) |
-| `TestContainerNetworks` | each peer routes a container subnet with the node's /32 and nothing more; forward_for (every container network on every resolver), the `containers` section, the sysctls of host and container mode, the gateway's nftables firewall, no exit in container mode |
+| `TestContainerNetworks` | each peer routes a container subnet with the node's /32 and nothing more; forward_for (every container network on every resolver), the `containers` section, the sysctls of host and container mode, no firewall section in container mode (the gateway isolates by policy routing), no exit in container mode |
 | `TestSpokesWithDifferentHubsShareOneRelay`, `TestExitRouting`, `TestRelayAndExitServersForward` | relay choice, exit routing, ip_forward and firewall policy flags |
 | `TestUnreachableHubFallsBack`, `TestEndpointlessServerWarns` | fallbacks and their actionable warnings |
-| `TestDNS`, `TestFirewallRules` | the zone (every active node and custom record, an alias of a disabled node dropped), upstreams in order, split off only in exit mode, `forward_for` only on the phone's hub; 53 and ping from the mesh on every server, custom rules on the servers they name with their source, one order for rules that differ only in their note; the default zone in every config, another set for the mesh in every config; the extra domains in every resolver's section, sorted, and none without them |
+| `TestDNS` | the zone (every active node and custom record, an alias of a disabled node dropped), upstreams in order, split off only in exit mode, `forward_for` only on the phone's hub; the default zone in every config, another set for the mesh in every config; the extra domains in every resolver's section, sorted, and none without them |
+| `TestFirewallRules` | every server's mesh zone holds the accept-all rule from the mesh and udp/51820 in the public zone, and the one compiled policy, a container-mode server too; no spoke or phone has a policy (amendment A43) |
+| `TestPolicyCompiles`, `TestPolicyMerges` (`segment_test.go`) | the compiled policy, derived by hand: system rules (ping, DNS to the servers, Swarm between them), the enabled policies in order with references resolved (0.0.0.0/0 clipped to the mesh, a group, a role, a zone, a service object), allow-all, each allowing zone; it passes the agent's check; a mesh without a firewall keeps the system rules and is warned; addresses and ports merged (touching ranges joined, a network read as one, every port winning) |
+| `TestCheckSegmentation`, `TestSegmentationWarnings` | a reference to no node, group, zone or object, a bad role, a group of strangers, bad literals, services, object entries, intra and actions -- a disabled policy's references too -- block the plan; a container network a node does not have, an address outside the mesh, an empty zone and a policy that matches nothing are warnings, and the empty ones are left out of the policy |
+| `TestSummarize`, `TestOverlaps` | the zone matrix's verdicts (allow, partial, deny) with the rules that decide them, without allow-all too; whether a rule side reaches a zone (any reaches every non-empty zone) |
 | `TestServerIPs` | a Swarm service's resolvers: the mesh IPs of the servers in peer lists, by id (a server without an endpoint is in none) |
 | `TestRelayFailover` | with any one server down, in the full and the containers topologies, every pair still gets through and no pair of spokes relays through the down server; the choice is symmetric; a down hub without a phone on it stops relaying and is warned about; the default hub before the lowest-id server; all down moves nothing |
-| `TestCheckRejects`, `TestProblemString` | every blocking constraint (custom records, rules and upstreams included), and that a plan with errors yields no configs; an invalid zone and a record name ending in the zone; an extra domain inside the zone, and two that overlap |
+| `TestCheckRejects`, `TestProblemString` | every blocking constraint (custom records and upstreams included), and that a plan with errors yields no configs; an invalid zone and a record name ending in the zone; an extra domain inside the zone, and two that overlap |
 
 `alloc_test.go`: `TestRangeFor`, `TestBlockMatchesTheSpecAddressPlan`, `TestAllocateLowestFree`, `TestAllocateContainers`,
 `TestCheckRequested`, `TestCheckMeshCIDR` -- the S4 address plan and its limits.

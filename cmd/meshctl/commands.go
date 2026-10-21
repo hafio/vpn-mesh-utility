@@ -37,6 +37,7 @@ func commands() []command {
 		{name: "dns", args: "[on|off]", summary: "show or switch this node's split DNS for the mesh zone's names (stays on the node)", setup: setupDNS},
 		{name: "exit", args: "[<server>|off]", summary: "show or switch this spoke's internet exit (through the local agent)", setup: setupExit},
 		{name: "export", summary: "write the mesh's desired state as YAML (reads the database directly)", setup: setupExport},
+		{name: "firewall", summary: "show, check and replace the mesh firewall (policies and zones) on the running server", sub: firewallCommands()},
 		{name: "healthcheck", summary: "exit 0 when the local server or agent answers", sub: healthCommands()},
 		{name: "import", args: "<file>", summary: "replace the desired state with an export (only while the server is stopped)", setup: setupImport},
 		{name: "logs", summary: "print this node's recent agent log; -f keeps following it", setup: setupLogs},

@@ -128,6 +128,7 @@ type nodeForm struct {
 	Name, Role, IP, Endpoint string
 	ListenPort, Hub          string
 	Keepalive, MTU, Mode     string
+	Groups                   string
 	CanExit, AlwaysOn        bool
 	Containers               bool
 }
@@ -179,10 +180,10 @@ func (u *ui) addNode(w http.ResponseWriter, r *http.Request, s auth.Session) {
 		Endpoint: strings.TrimSpace(r.PostFormValue("endpoint")), ListenPort: r.PostFormValue("listen_port"), Hub: r.PostFormValue("hub"),
 		Keepalive: r.PostFormValue("keepalive"), MTU: r.PostFormValue("mtu"), Mode: r.PostFormValue("mode"),
 		CanExit: r.PostFormValue("can_exit") != "", AlwaysOn: r.PostFormValue("always_on") != "",
-		Containers: r.PostFormValue("containers") != "",
+		Containers: r.PostFormValue("containers") != "", Groups: strings.TrimSpace(r.PostFormValue("groups")),
 	}
 	req := api.NodeAddRequest{Name: f.Name, Role: f.Role, IP: f.IP, Endpoint: f.Endpoint, Hub: f.Hub, CanExit: f.CanExit, AlwaysOn: f.AlwaysOn,
-		Mode: f.Mode, Containers: f.Containers}
+		Mode: f.Mode, Containers: f.Containers, Groups: listOf(f.Groups)}
 	var err error
 	if req.ListenPort, err = atoi("listen_port", f.ListenPort); err == nil {
 		if req.Keepalive, err = atoi("keepalive", f.Keepalive); err == nil {
@@ -396,6 +397,10 @@ func (u *ui) editNode(w http.ResponseWriter, r *http.Request, s auth.Session) {
 	if cur.Node.Role != string(proto.RolePhone) && cur.Node.Mode != proto.ModeContainer {
 		containers := r.PostFormValue("containers") != ""
 		req.Containers = &containers
+	}
+	if _, ok := r.PostForm["groups"]; ok {
+		groups := listOf(r.PostFormValue("groups"))
+		req.Groups = &groups
 	}
 	var ch api.NodeChange
 	if err == nil {

@@ -2,6 +2,7 @@ package export
 
 import (
 	"bytes"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -19,14 +20,27 @@ func snapshot() store.Snapshot {
 			{ID: 1, Name: "vps-1", Role: "server", MeshIP: testfix.VPS1.MeshIP, Endpoint: testfix.VPS1.Endpoint, ListenPort: 51820,
 				CanExit: true, Keepalive: 25, MTU: 1420, Enrolled: true, WGPubKey: testfix.WGKey(1), IdentityPubKey: testfix.IdentityKeyB64(1)},
 		},
-		DNS:      []store.DNSRecord{{ID: 1, Name: "files", NodeID: 4}},
-		Firewall: []store.FirewallRule{{ID: 1, NodeID: 1, Proto: "tcp", Port: 9000, SourceCIDR: "10.77.1.0/24", Note: "nas backup"}},
+		DNS: []store.DNSRecord{{ID: 1, Name: "files", NodeID: 4}},
+		Segmentation: &store.Segmentation{
+			Groups: []store.SegGroup{{Name: "storage", Nodes: []string{"nas"}}},
+			Zones:  []store.SegZone{{Name: "home", Intra: store.SegAllow, Members: []string{"group:storage"}}},
+			Policies: []store.SegPolicy{{Name: "backup", Description: "nas backup", From: []string{"zone:home"}, To: []string{"node:vps-1"},
+				Services: []string{"tcp/9000"}, Action: store.SegAllow}, store.DefaultPolicy()},
+		},
 	}
+}
+
+// legacy is an export made before the mesh firewall: custom rules instead.
+func legacy() Document {
+	d := FromSnapshot(snapshot())
+	d.Segmentation = nil
+	d.Firewall = []FirewallRule{{Node: "vps-1", Proto: "tcp", Port: 9000, Source: "10.77.1.0/24", Note: "nas backup"}, {Proto: "udp", Port: 161, Source: "0.0.0.0/0"}}
+	return d
 }
 
 func TestExportIsDeterministicAndByName(t *testing.T) {
 	d := FromSnapshot(snapshot())
-	if d.Nodes[0].Name != "vps-1" || d.Nodes[1].Hub != "vps-1" || d.DNS[0].Node != "nas" || d.Firewall[0].Node != "vps-1" {
+	if d.Nodes[0].Name != "vps-1" || d.Nodes[1].Hub != "vps-1" || d.DNS[0].Node != "nas" || d.Segmentation.Groups[0].Nodes[0] != "nas" {
 		t.Fatalf("document %+v", d)
 	}
 	var a, b bytes.Buffer
@@ -40,11 +54,14 @@ func TestExportIsDeterministicAndByName(t *testing.T) {
 		t.Fatal("two exports of the same state differ")
 	}
 	out := a.String()
-	for _, want := range []string{"format: meshctl-export/1", "hub: vps-1", "can_exit: true", "source_cidr: 10.77.1.0/24",
-		"mode: container", "container_subnet: " + testfix.ContainerSubnet} {
+	for _, want := range []string{"format: meshctl-export/1", "hub: vps-1", "can_exit: true", "segmentation:", "- group:storage",
+		"- tcp/9000", "name: allow-all", "mode: container", "container_subnet: " + testfix.ContainerSubnet} {
 		if !strings.Contains(out, want) {
 			t.Errorf("export lacks %q:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "firewall_rules") {
+		t.Errorf("a new export carries the old custom rules:\n%s", out)
 	}
 	_, body, _ := strings.Cut(out, "\nformat:") // past the header comment, which names what is left out
 	for _, never := range []string{"token", "private", "password", "totp"} {
@@ -80,7 +97,7 @@ func TestToSnapshotRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Nodes) != 2 || got.Nodes[1].PrimaryHubID != 1 || got.DNS[0].NodeID != 4 || got.Firewall[0].NodeID != 1 ||
+	if len(got.Nodes) != 2 || got.Nodes[1].PrimaryHubID != 1 || got.DNS[0].NodeID != 4 || !reflect.DeepEqual(got.Segmentation, in.Segmentation) ||
 		got.Settings[store.SettingMeshCIDR] != testfix.MeshCIDR || got.Nodes[1].Mode != "container" ||
 		got.Settings[store.SettingDNSExtraDomains] != "example.lan,home.arpa" ||
 		got.Nodes[1].ContainerSubnet != testfix.ContainerSubnet || got.Nodes[0].Mode != "" {
@@ -111,8 +128,12 @@ func TestToSnapshotRefusesHostileDocuments(t *testing.T) {
 		"bad extra domain":        func(d *Document) { d.Settings[store.SettingDNSExtraDomains] = "lan,10.in-addr.arpa" },
 		"record with both":        func(d *Document) { d.DNS[0].IP = "10.77.0.9" },
 		"record name injection":   func(d *Document) { d.DNS[0].Name = "a;b" },
-		"rule with bad source":    func(d *Document) { d.Firewall[0].Source = `10.0.0.0/8" accept` },
-		"rule note with newline":  func(d *Document) { d.Firewall[0].Note = "a\nb" },
+		"rule with bad source":    func(d *Document) { *d = legacy(); d.Firewall[0].Source = `10.0.0.0/8" accept` },
+		"rule note with newline":  func(d *Document) { *d = legacy(); d.Firewall[0].Note = "a\nb" },
+		"rule and segmentation":   func(d *Document) { d.Firewall = legacy().Firewall },
+		"policy action":           func(d *Document) { d.Segmentation.Policies[0].Action = "accept" },
+		"group of a stranger":     func(d *Document) { d.Segmentation.Groups[0].Nodes = []string{"ghost"} },
+		"zone member injection":   func(d *Document) { d.Segmentation.Zones[0].Members = []string{"10.77.1.0/24\nrole: server"} },
 	}
 	for name, edit := range cases {
 		d := FromSnapshot(snapshot())
@@ -120,5 +141,51 @@ func TestToSnapshotRefusesHostileDocuments(t *testing.T) {
 		if _, err := ToSnapshot(d); err == nil || !strings.Contains(err.Error(), "nothing was imported") {
 			t.Errorf("%s: ToSnapshot = %v", name, err)
 		}
+	}
+}
+
+// An export made before the mesh firewall imports its custom rules as
+// policies, in their order, above allow-all.
+func TestToSnapshotReadsAnOlderExport(t *testing.T) {
+	got, err := ToSnapshot(legacy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Segmentation != nil || len(got.Firewall) != 2 || got.Firewall[0].NodeID != 1 || got.Firewall[1].ID != 2 {
+		t.Fatalf("ToSnapshot = %+v", got)
+	}
+	seg := got.EffectiveSegmentation()
+	if len(seg.Policies) != 3 || seg.Policies[0].Name != "firewall-1" || seg.Policies[0].To[0] != "node:vps-1" ||
+		seg.Policies[1].To[0] != "role:server" || seg.Policies[2].Name != "allow-all" {
+		t.Fatalf("restored as %+v", seg.Policies)
+	}
+}
+
+// `meshctl firewall show --yaml` and `apply`: the document on its own.
+func TestSegmentationFile(t *testing.T) {
+	want := *snapshot().Segmentation
+	var b bytes.Buffer
+	if err := WriteSegmentation(&b, want); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(b.String(), "# meshctl mesh firewall") || !strings.Contains(b.String(), "segmentation:\n  groups:") {
+		t.Fatalf("file:\n%s", b.String())
+	}
+	got, err := ReadSegmentation(&b)
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("read back %+v, %v", got, err)
+	}
+	for name, in := range map[string]string{
+		"unknown field": "segmentation:\n  rules: []\n",
+		"bad action":    "segmentation:\n  policies:\n    - name: x\n      action: accept\n",
+		"not yaml":      "segmentation: [\n",
+	} {
+		if _, err := ReadSegmentation(strings.NewReader(in)); err == nil {
+			t.Errorf("%s: ReadSegmentation accepted it", name)
+		}
+	}
+	if _, err := ReadSegmentation(strings.NewReader("segmentation:\n  policies:\n    - name: x\n      action: accept\n")); err == nil ||
+		!strings.Contains(err.Error(), "nothing was changed") {
+		t.Errorf("a bad file's error = %v", err)
 	}
 }

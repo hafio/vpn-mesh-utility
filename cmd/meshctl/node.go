@@ -8,6 +8,7 @@ import (
 	"io"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -32,7 +33,7 @@ func nodeCommands() []command {
 		{name: "network", args: "<name>", summary: "print the commands that put a node's containers on the mesh (its mesh network, then a service)", setup: setupNodeNetwork},
 		{name: "phone", args: "<name>", summary: "print a new WireGuard profile for a phone (a new key: its previous profile stops working)", setup: setupNodePhone},
 		{name: "rm", args: "<name>", summary: "remove a node; every peer drops it on the next apply", setup: nodeAction("rm")},
-		{name: "set", args: "<name>", summary: "change a node's endpoint, hub, exit, keepalive, MTU or container network", setup: setupNodeSet},
+		{name: "set", args: "<name>", summary: "change a node's endpoint, hub, exit, keepalive, MTU, container network, mesh IP or groups", setup: setupNodeSet},
 		{name: "show", args: "<name>", summary: "show a node, its computed config and its peers", setup: setupNodeShow},
 		{name: "token", args: "<name>", summary: "issue a new join token (revokes unused ones; re-keys an enrolled node)", setup: nodeAction("token")},
 	}
@@ -77,6 +78,7 @@ func setupNodeAdd(fs *flag.FlagSet, e *env) action {
 	mtu := fs.Int("mtu", 0, "interface MTU (default: the mesh default, 1420)")
 	mode := fs.String("mode", "host", "host (WireGuard on the host) or container (in the agent's container: only its containers are on the mesh)")
 	containers := fs.Bool("containers", false, "host mode: put the node's containers on the mesh too (container mode always does)")
+	groups := fs.String("groups", "", "comma-separated firewall groups to put the node in (a new name makes a new group)")
 	return func(ctx context.Context, args []string) error {
 		name, err := nodeName(args)
 		if err != nil {
@@ -88,6 +90,7 @@ func setupNodeAdd(fs *flag.FlagSet, e *env) action {
 		ch, err := client().Add(ctx, api.NodeAddRequest{
 			Name: name, Role: *role, IP: *ip, Endpoint: *endpoint, ListenPort: *listenPort, Hub: *hub,
 			CanExit: *canExit, AlwaysOn: *alwaysOn, Keepalive: *keepalive, MTU: *mtu, Mode: *mode, Containers: *containers,
+			Groups: splitComma(*groups),
 		})
 		if err != nil {
 			return err
@@ -307,6 +310,7 @@ func setupNodeShow(fs *flag.FlagSet, e *env) action {
 			row("mode", "container: only its containers are on the mesh")
 		}
 		row("containers", n.ContainerSubnet)
+		row("groups", strings.Join(n.Groups, ", "))
 		row("endpoint", n.Endpoint)
 		if n.Role == "server" {
 			row("listen port", strconv.Itoa(n.ListenPort))
@@ -386,6 +390,7 @@ func setupNodeSet(fs *flag.FlagSet, e *env) action {
 	mtu := fs.Int("mtu", 0, "interface MTU")
 	containers := fs.Bool("containers", false, "host mode: put the node's containers on the mesh (--containers=false takes them off)")
 	meshIP := fs.String("mesh-ip", "", "move the node to another mesh IP in the mesh (its peers, DNS name and agent follow)")
+	groups := fs.String("groups", "", "the node's firewall groups, comma separated, replacing the ones it is in (\"\" takes it out of all)")
 	return func(ctx context.Context, args []string) error {
 		name, err := nodeName(args)
 		if err != nil {
@@ -415,6 +420,9 @@ func setupNodeSet(fs *flag.FlagSet, e *env) action {
 				req.Containers = containers
 			case "mesh-ip":
 				req.MeshIP = meshIP
+			case "groups":
+				g := splitComma(*groups)
+				req.Groups = &g
 			default:
 				set-- // --data, --json
 			}
@@ -472,4 +480,15 @@ func printChange(w io.Writer, loc *time.Location, asJSON bool, done string, call
 	printWarnings(w, ch.Notes)
 	printWarnings(w, ch.Warnings)
 	return nil
+}
+
+// splitComma is a comma-separated flag's values, blanks dropped.
+func splitComma(s string) []string {
+	out := []string{}
+	for _, v := range strings.Split(s, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }

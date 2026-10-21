@@ -1,0 +1,33 @@
+{{define "fwtabs"}}
+<p class="tabs">{{range .Tabs}}<a href="{{.Path}}"{{if eq .Tab $.Tab}} class="active"{{end}}>{{.Label}}</a>{{end}}</p>
+{{- range .Warnings}}
+<p class="warning">{{.}}</p>
+{{- end}}
+{{end}}
+
+{{define "fwrefs"}}
+<p class="hint">From, To and members take references -- <code>zone:NAME</code> (policies only), <code>node:NAME</code>, <code>containers:NAME</code> (a node's container network), <code>group:NAME</code>, <code>role:server</code>, <code>role:spoke</code>, <code>role:phone</code>, <code>addr:NAME</code> -- and addresses: <code>10.77.1.5</code>, <code>10.77.1.0/24</code>, <code>10.77.1.5-10.77.1.20</code>. Services take <code>svc:NAME</code>, <code>tcp/22</code>, <code>udp/1000-2000</code>, <code>tcp</code> (every port) and <code>icmp</code> (ping). Separate entries with commas; empty is any.</p>
+{{end}}
+{{define "fwpolicyfields"}}
+<label>Name <input name="name" value="{{.Name}}" required maxlength="32"></label>
+<label>Action <select name="action">
+<option value="allow"{{if eq .Action "allow"}} selected{{end}}>allow</option>
+<option value="deny"{{if eq .Action "deny"}} selected{{end}}>deny</option>
+</select></label>
+<label>From <input name="from" value="{{.From}}" placeholder="any"></label>
+<label>To <input name="to" value="{{.To}}" placeholder="any"></label>
+<label>Services <input name="services" value="{{.Services}}" placeholder="any"></label>
+<label>Position <input name="position" value="{{.Position}}" placeholder="last"></label>
+<label>Description <input name="description" value="{{.Description}}" maxlength="200"></label>
+<label><input type="checkbox" name="disabled"{{if .Disabled}} checked{{end}}> Disabled (kept, not enforced)</label>
+{{end}}
+
+{{define "fwzonefields"}}
+<label>Name <input name="name" value="{{.Name}}" required maxlength="32"></label>
+<label>Within the zone <select name="intra">
+<option value="allow"{{if eq .Intra "allow"}} selected{{end}}>allow</option>
+<option value="deny"{{if eq .Intra "deny"}} selected{{end}}>deny</option>
+</select></label>
+<label>Members <input name="members" value="{{.Members}}" placeholder="group:laptops, node:nas"></label>
+<label>Description <input name="description" value="{{.Description}}" maxlength="200"></label>
+{{end}}

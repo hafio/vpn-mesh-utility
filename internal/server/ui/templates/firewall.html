@@ -1,55 +1,39 @@
 {{define "content"}}
-<p>meshctl manages firewalld on servers only. Their <code>mesh</code> zone, on wg0, drops what is not listed here. Spokes keep their own firewall: on the NAS, allow your apps' ports from {{.Data.View.MeshCIDR}} in its firewall settings.</p>
-{{- range .Data.View.Servers}}
-<h2>{{.Name}}</h2>
-{{- with .Firewall}}
+{{- with .Data}}
+{{template "fwtabs" .}}
+<p>Every server enforces these policies on mesh traffic -- what it relays between nodes, what reaches it and what it sends. The first policy that matches a packet decides; what none matches is dropped. Replies always pass. Internet traffic through an exit is not mesh traffic, and spokes keep their own firewall.</p>
+{{- with .View}}
 <table>
-<thead><tr><th>Zone</th><th>Port</th><th>From</th><th>Why</th></tr></thead>
+<thead><tr><th>#</th><th>Name</th><th>Action</th><th>From</th><th>To</th><th>Services</th><th></th></tr></thead>
 <tbody>
-{{- range .Rules}}
-<tr><td>{{.Zone}}</td><td>{{if eq .Proto "icmp"}}ping{{else}}{{.Port}}/{{.Proto}}{{end}}</td><td>{{if .Source}}{{.Source}}{{else}}anywhere{{end}}</td><td>{{.Note}}</td></tr>
+{{- range .Policies}}
+<tr><td>{{.Pos}}</td><td><a href="/firewall/policies/{{.Name}}">{{.Name}}</a>{{if .Disabled}} (disabled){{end}}{{if .Description}}<br><span class="hint">{{.Description}}</span>{{end}}</td><td><span class="state {{if eq .Action "allow"}}ok{{else}}bad{{end}}">{{.Action}}</span></td><td>{{.From}}</td><td>{{.To}}</td><td>{{.Services}}</td><td class="actions">
+{{- if not .First}}<form method="post" action="/firewall/policies/{{.Name}}/move" class="inline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="position" value="{{.Up}}"><button type="submit" class="link">Up</button></form>{{end}}
+{{- if not .Last}}<form method="post" action="/firewall/policies/{{.Name}}/move" class="inline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="position" value="{{.Down}}"><button type="submit" class="link">Down</button></form>{{end}}
+<form method="post" action="/firewall/policies/{{.Name}}/remove" class="inline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit" class="link">Remove</button></form></td></tr>
+{{- else}}
+<tr><td colspan="7">No policies: between nodes only ping, DNS to the servers and Swarm between them cross the mesh.</td></tr>
 {{- end}}
 </tbody>
 </table>
-{{- if .Relay}}
-<p>Forwards between mesh peers (policy <code>meshctl-relay</code>): it relays traffic between spokes.</p>
-{{- end}}
-{{- if .ExitGateway}}
-<p>Forwards mesh traffic to the internet, masqueraded (policy <code>meshctl-exit</code>): it is an exit.</p>
-{{- end}}
-{{- else}}
-<p>No config yet: the server has not joined, or is disabled.</p>
-{{- end}}
-{{- end}}
 
-<h2>Custom rules</h2>
-<table>
-<thead><tr><th>Server</th><th>Port</th><th>From</th><th>Note</th><th></th></tr></thead>
-<tbody>
-{{- range .Data.View.Custom}}
-<tr><td>{{if .Node}}{{.Node}}{{else}}every server{{end}}</td><td>{{.Port}}/{{.Proto}}</td><td>{{.Source}}</td><td>{{.Note}}</td><td><form method="post" action="/firewall/{{.ID}}/remove" class="inline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit" class="link">Remove</button></form></td></tr>
-{{- else}}
-<tr><td colspan="5">None yet.</td></tr>
-{{- end}}
-</tbody>
-</table>
-<form method="post" action="/firewall" class="grid">
-<input type="hidden" name="csrf" value="{{.CSRF}}">
-{{- with .Data.Form}}
-<label>Server <select name="node">
-<option value="">every server</option>
-{{- range $.Data.Servers}}
-<option value="{{.}}"{{if eq . $.Data.Form.Node}} selected{{end}}>{{.}}</option>
-{{- end}}
-</select></label>
-<label>Protocol <select name="proto">
-<option value="tcp"{{if eq .Proto "tcp"}} selected{{end}}>tcp</option>
-<option value="udp"{{if eq .Proto "udp"}} selected{{end}}>udp</option>
-</select></label>
-<label>Port <input name="port" value="{{.Port}}" required></label>
-<label>From <input name="source" value="{{.Source}}" required placeholder="10.77.0.0/16"></label>
-<label>Note <input name="note" value="{{.Note}}" maxlength="120"></label>
-{{- end}}
-<button type="submit">Add rule</button>
+<h2>Add a policy</h2>
+<form method="post" action="/firewall/policies" class="grid">
+<input type="hidden" name="csrf" value="{{$.CSRF}}">
+{{- template "fwpolicyfields" .Form}}
+<button type="submit">Add policy</button>
 </form>
+{{- template "fwrefs"}}
+
+<h2>What every server enforces</h2>
+<p class="hint">The system rules keep the mesh working and no policy changes them; after the policies, each zone allows traffic within it unless it says deny; then the rest is dropped.</p>
+<ol>
+{{- range .Rules}}
+<li>{{if .System}}<span class="hint">{{.Text}}</span>{{else}}<code>{{.Text}}</code>{{end}}</li>
+{{- end}}
+<li><span class="hint">drop everything else</span></li>
+</ol>
+{{- end}}
+{{- end}}
 {{end}}
+

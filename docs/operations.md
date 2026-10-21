@@ -9,7 +9,11 @@ place, WireGuard there is not yet. Every command and flag is in
 ## 1. Run the server (Dokploy)
 
 The server is one container behind Dokploy's Traefik. Create a compose app from
-[`deploy/compose.server.yml`](../deploy/compose.server.yml) and set its environment:
+[`deploy/compose.server.yml`](../deploy/compose.server.yml) -- or, on Docker Swarm, a stack app
+from [`deploy/stack.server.yml`](../deploy/stack.server.yml), after labelling its node
+(`docker node update --label-add meshctl.server=true <node>`) -- and set its environment.
+[compose.md](compose.md) has every compose and stack file in one place: the server's, and an
+agent's for each kind of node.
 
 | Variable | Value |
 | --- | --- |
@@ -238,8 +242,8 @@ and no mesh peer reaches the host. `meshctl status` shows `degraded: containers`
 not on the mesh network -- create it with the header's command and recreate the agent's
 container.
 
-A container-mode node is never an exit and uses none, and the custom firewall rules do not apply
-to it (its containers are reached directly). A Windows laptop is in host mode only.
+A container-mode node is never an exit and uses none; the mesh firewall reaches its containers
+by `containers:<node>` (its host is not on the mesh). A Windows laptop is in host mode only.
 
 **Rootful Podman next to Docker.** Docker loads `br_netfilter` and sets the kernel's FORWARD
 policy to DROP, which drops traffic between containers on a Podman bridge. On such a host, let
@@ -305,7 +309,8 @@ node ...`. Each change is versioned, audited and pushed to the affected agents a
 | re-install a node from scratch | `node token vps-3`, then the install command again |
 | a phone's new profile (a new key) | `node phone <name>`, `--exit vps-2` for all its traffic |
 | remove a node | `node rm vps-3` |
-| move a node to another mesh IP | `node set laptop --mesh-ip 10.77.2.9`, or Mesh IP on its page: peers, its DNS name and its agent follow; the answer lists what does not (a server's Swarm advertise address, a phone's profile, a custom firewall rule naming the old address) |
+| move a node to another mesh IP | `node set laptop --mesh-ip 10.77.2.9`, or Mesh IP on its page: peers, its DNS name and its agent follow; the answer lists what does not (a server's Swarm advertise address, a phone's profile, a firewall zone, object or policy naming the old address) |
+| put a node in firewall groups | `node add laptop --role spoke --groups laptops,office`, `node set laptop --groups laptops`, or Groups on its page |
 
 **Relay failover** (amendment A40). Two spokes with different hubs talk through one of them (the
 lower-id spoke's hub). When that hub goes down, the server moves the pair to the other spoke's hub,
@@ -409,7 +414,7 @@ docker exec -it <container> /app/meshctl user add admin
 | Dashboard | every node with its state (green in sync, amber applying / degraded / late, red silent or rolled back, grey disabled or not joined; a phone green while its tunnel is on, amber when its profile is out of date, grey idle), applied and current version, agent, last heartbeat (a phone's last handshake), handshake age per peer and exit; refreshes every 10 s |
 | Nodes | add a node (the join command is shown once), open one to see its computed config, peers and DNS state, edit it, disable / enable, issue a new token, make a phone's profile (a QR code, shown once), remove it |
 | DNS | the mesh zone: one name per node and the custom records (add, remove); the upstream resolvers |
-| Firewall | each server's rules with where each comes from; add and remove custom rules |
+| Firewall | the mesh firewall (below): policies in order (add, edit, move, remove), zones with their inbound and outbound rules, objects (groups, addresses, services), and Reachability: check one flow, see how every zone reaches every other |
 | Versions | every config version with what it changed; roll back to one (a new version; a rollback that adds or removes nodes asks for confirmation) |
 | Audit | who changed what, newest first |
 | Settings | default MTU, default hub, upstream DNS; the mesh CIDR only while the mesh is empty; download the export |
@@ -419,6 +424,36 @@ docker exec -it <container> /app/meshctl user add admin
 Changes made in the UI go through the same path as `meshctl node`: versioned, audited under
 your user, pushed to the agents at once. The dashboard's 10 s refresh does not keep a session
 alive; 12 hours without using the UI signs you out, and 7 days always do.
+
+### The mesh firewall
+
+Every server enforces the mesh firewall (amendment A43) on the mesh traffic it relays, receives and
+sends -- and every packet between two nodes crosses a server, so the policies segment the whole
+mesh. A mesh starts with one policy, `allow-all`; narrow it from there:
+
+1. Put nodes in **groups**: `node add ... --groups laptops`, `node set nas --groups storage`, or the
+   node's page.
+2. Make **zones** (Firewall, Zones): their members are `node:nas`, `containers:nas` (its container
+   network), `group:laptops`, `role:server|spoke|phone`, `addr:<object>` and addresses
+   (`10.77.1.5`, `10.77.1.0/24`, `10.77.1.5-10.77.1.20`). Within a zone traffic is allowed unless
+   the zone says deny.
+3. Write **policies** (Firewall, Policies), first match wins: `allow from zone:laptops to node:nas
+   services tcp/445`, then `deny from zone:laptops to zone:servers`, ... Services are `tcp/22`,
+   `udp/1000-2000`, `tcp`, `icmp` or `svc:<object>`; empty is any.
+4. Change or remove `allow-all` (last) when the policies above it say everything that should pass:
+   what no rule allows is dropped.
+
+Ping across the mesh, DNS to the servers and Swarm between them always pass (system rules). Check
+before and after: Firewall, Reachability (one flow, or the zone matrix), or
+
+```
+docker exec <container> /app/meshctl firewall check laptop nas tcp/445
+docker exec <container> /app/meshctl firewall show
+docker exec <container> /app/meshctl firewall show --yaml > firewall.yaml   # edit, then
+docker exec -i <container> /app/meshctl firewall apply /dev/stdin < firewall.yaml
+```
+
+A change applies to new connections at once; the servers re-check existing mesh connections too.
 
 ### Each node's local UI
 
@@ -464,7 +499,8 @@ docker exec <container> /app/meshctl export > mesh.yaml
 ```
 
 An export is the desired state as YAML -- nodes with their public keys, settings, custom DNS
-records and firewall rules; never tokens, private keys or users. It reads the database directly
+records and the mesh firewall; never tokens, private keys or users. An export made before the
+mesh firewall imports its custom firewall rules as policies. It reads the database directly
 and works while the server runs. Commit it to git: an unchanged mesh exports byte-for-byte the
 same file.
 

@@ -1,0 +1,26 @@
+{{define "content"}}
+{{- with .Data}}
+{{template "fwtabs" .}}
+<p>A zone is a segment of the mesh: nodes, groups, a node's containers, address objects or addresses. Policies name zones in From and To; a node may be in several. Traffic between two members of a zone is allowed after the policies, unless the zone says deny.</p>
+{{- with .View}}
+<table>
+<thead><tr><th>Zone</th><th>Within</th><th>Members</th><th>Addresses</th><th>Rules in / out</th></tr></thead>
+<tbody>
+{{- range .Zones}}
+<tr><td><a href="/firewall/zones/{{.Name}}">{{.Name}}</a>{{if .Description}}<br><span class="hint">{{.Description}}</span>{{end}}</td><td><span class="state {{if eq .Intra "allow"}}ok{{else}}bad{{end}}">{{.Intra}}</span></td><td>{{.Members}}</td><td>{{if .Addresses}}{{.Addresses}}{{else}}none{{end}}</td><td>{{.Inbound}} / {{.Outbound}}</td></tr>
+{{- else}}
+<tr><td colspan="5">No zones yet.</td></tr>
+{{- end}}
+</tbody>
+</table>
+
+<h2>Add a zone</h2>
+<form method="post" action="/firewall/zones" class="grid">
+<input type="hidden" name="csrf" value="{{$.CSRF}}">
+{{- template "fwzonefields" .Form}}
+<button type="submit">Add zone</button>
+</form>
+{{- template "fwrefs"}}
+{{- end}}
+{{- end}}
+{{end}}

@@ -50,6 +50,8 @@ type NodeInfo struct {
 	// DownSince is when relay failover judged this server down (amendment
 	// A40); 0 while it is up.
 	DownSince int64 `json:"down_since,omitempty"`
+	// Groups are the segmentation groups the node is in (amendment A43).
+	Groups []string `json:"groups,omitempty"`
 }
 
 // NodeList is GET /admin/v1/nodes.
@@ -79,6 +81,9 @@ type NodeAddRequest struct {
 	// when Containers is set (amendment A37).
 	Mode       string `json:"mode,omitempty"`
 	Containers bool   `json:"containers,omitempty"`
+	// Groups puts the node in these segmentation groups, creating one that
+	// does not exist yet (amendment A43).
+	Groups []string `json:"groups,omitempty"`
 }
 
 // NodeSetRequest is PATCH /admin/v1/nodes/{name}: only non-nil fields
@@ -97,6 +102,9 @@ type NodeSetRequest struct {
 	// MeshIP moves the node to another mesh IP (amendment A41): inside the
 	// mesh and not taken. Its peers, its DNS name and its agent follow.
 	MeshIP *string `json:"mesh_ip,omitempty"`
+	// Groups replaces the node's segmentation groups; empty takes it out
+	// of every group (amendment A43).
+	Groups *[]string `json:"groups,omitempty"`
 }
 
 // Enrollment is a freshly issued join token and the commands that use it.

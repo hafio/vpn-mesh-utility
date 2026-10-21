@@ -56,86 +56,77 @@
       "rules": [
         {
           "zone": "mesh",
-          "proto": "icmp",
+          "proto": "all",
           "port": 0,
           "source": "10.77.0.0/16",
-          "note": "ping"
-        },
-        {
-          "zone": "mesh",
-          "proto": "tcp",
-          "port": 53,
-          "source": "10.77.0.0/16",
-          "note": "dns"
-        },
-        {
-          "zone": "mesh",
-          "proto": "udp",
-          "port": 53,
-          "source": "10.77.0.0/16",
-          "note": "dns"
-        },
-        {
-          "zone": "mesh",
-          "proto": "tcp",
-          "port": 2377,
-          "source": "10.77.0.2/32",
-          "note": "swarm manager: vps-2"
-        },
-        {
-          "zone": "mesh",
-          "proto": "tcp",
-          "port": 2377,
-          "source": "10.77.0.3/32",
-          "note": "swarm manager: vps-3"
-        },
-        {
-          "zone": "mesh",
-          "proto": "udp",
-          "port": 4789,
-          "source": "10.77.0.2/32",
-          "note": "swarm overlay: vps-2"
-        },
-        {
-          "zone": "mesh",
-          "proto": "udp",
-          "port": 4789,
-          "source": "10.77.0.3/32",
-          "note": "swarm overlay: vps-3"
-        },
-        {
-          "zone": "mesh",
-          "proto": "tcp",
-          "port": 7946,
-          "source": "10.77.0.2/32",
-          "note": "swarm gossip: vps-2"
-        },
-        {
-          "zone": "mesh",
-          "proto": "tcp",
-          "port": 7946,
-          "source": "10.77.0.3/32",
-          "note": "swarm gossip: vps-3"
-        },
-        {
-          "zone": "mesh",
-          "proto": "udp",
-          "port": 7946,
-          "source": "10.77.0.2/32",
-          "note": "swarm gossip: vps-2"
-        },
-        {
-          "zone": "mesh",
-          "proto": "udp",
-          "port": 7946,
-          "source": "10.77.0.3/32",
-          "note": "swarm gossip: vps-3"
+          "note": "segmentation: the policy decides"
         },
         {
           "zone": "public",
           "proto": "udp",
           "port": 51820,
           "note": "wireguard"
+        }
+      ]
+    },
+    "policy": {
+      "mesh": "10.77.0.0/16",
+      "rules": [
+        {
+          "name": "system: ping",
+          "services": [
+            {
+              "proto": "icmp"
+            }
+          ],
+          "action": "allow"
+        },
+        {
+          "name": "system: dns",
+          "to": [
+            "10.77.0.1-10.77.0.3"
+          ],
+          "services": [
+            {
+              "proto": "tcp",
+              "ports": [
+                "53"
+              ]
+            },
+            {
+              "proto": "udp",
+              "ports": [
+                "53"
+              ]
+            }
+          ],
+          "action": "allow"
+        },
+        {
+          "name": "system: swarm",
+          "from": [
+            "10.77.0.1-10.77.0.3"
+          ],
+          "to": [
+            "10.77.0.1-10.77.0.3"
+          ],
+          "services": [
+            {
+              "proto": "tcp",
+              "ports": [
+                "2377",
+                "7946"
+              ]
+            },
+            {
+              "proto": "udp",
+              "ports": [
+                "4789",
+                "7946"
+              ]
+            }
+          ],
+          "action": "allow"
         }
       ]
     }
@@ -197,86 +188,77 @@
       "rules": [
         {
           "zone": "mesh",
-          "proto": "icmp",
+          "proto": "all",
           "port": 0,
           "source": "10.77.0.0/16",
-          "note": "ping"
-        },
-        {
-          "zone": "mesh",
-          "proto": "tcp",
-          "port": 53,
-          "source": "10.77.0.0/16",
-          "note": "dns"
-        },
-        {
-          "zone": "mesh",
-          "proto": "udp",
-          "port": 53,
-          "source": "10.77.0.0/16",
-          "note": "dns"
-        },
-        {
-          "zone": "mesh",
-          "proto": "tcp",
-          "port": 2377,
-          "source": "10.77.0.1/32",
-          "note": "swarm manager: vps-1"
-        },
-        {
-          "zone": "mesh",
-          "proto": "tcp",
-          "port": 2377,
-          "source": "10.77.0.3/32",
-          "note": "swarm manager: vps-3"
-        },
-        {
-          "zone": "mesh",
-          "proto": "udp",
-          "port": 4789,
-          "source": "10.77.0.1/32",
-          "note": "swarm overlay: vps-1"
-        },
-        {
-          "zone": "mesh",
-          "proto": "udp",
-          "port": 4789,
-          "source": "10.77.0.3/32",
-          "note": "swarm overlay: vps-3"
-        },
-        {
-          "zone": "mesh",
-          "proto": "tcp",
-          "port": 7946,
-          "source": "10.77.0.1/32",
-          "note": "swarm gossip: vps-1"
-        },
-        {
-          "zone": "mesh",
-          "proto": "tcp",
-          "port": 7946,
-          "source": "10.77.0.3/32",
-          "note": "swarm gossip: vps-3"
-        },
-        {
-          "zone": "mesh",
-          "proto": "udp",
-          "port": 7946,
-          "source": "10.77.0.1/32",
-          "note": "swarm gossip: vps-1"
-        },
-        {
-          "zone": "mesh",
-          "proto": "udp",
-          "port": 7946,
-          "source": "10.77.0.3/32",
-          "note": "swarm gossip: vps-3"
+          "note": "segmentation: the policy decides"
         },
         {
           "zone": "public",
           "proto": "udp",
           "port": 51820,
           "note": "wireguard"
+        }
+      ]
+    },
+    "policy": {
+      "mesh": "10.77.0.0/16",
+      "rules": [
+        {
+          "name": "system: ping",
+          "services": [
+            {
+              "proto": "icmp"
+            }
+          ],
+          "action": "allow"
+        },
+        {
+          "name": "system: dns",
+          "to": [
+            "10.77.0.1-10.77.0.3"
+          ],
+          "services": [
+            {
+              "proto": "tcp",
+              "ports": [
+                "53"
+              ]
+            },
+            {
+              "proto": "udp",
+              "ports": [
+                "53"
+              ]
+            }
+          ],
+          "action": "allow"
+        },
+        {
+          "name": "system: swarm",
+          "from": [
+            "10.77.0.1-10.77.0.3"
+          ],
+          "to": [
+            "10.77.0.1-10.77.0.3"
+          ],
+          "services": [
+            {
+              "proto": "tcp",
+              "ports": [
+                "2377",
+                "7946"
+              ]
+            },
+            {
+              "proto": "udp",
+              "ports": [
+                "4789",
+                "7946"
+              ]
+            }
+          ],
+          "action": "allow"
         }
       ]
     }
@@ -338,86 +320,77 @@
       "rules": [
         {
           "zone": "mesh",
-          "proto": "icmp",
+          "proto": "all",
           "port": 0,
           "source": "10.77.0.0/16",
-          "note": "ping"
-        },
-        {
-          "zone": "mesh",
-          "proto": "tcp",
-          "port": 53,
-          "source": "10.77.0.0/16",
-          "note": "dns"
-        },
-        {
-          "zone": "mesh",
-          "proto": "udp",
-          "port": 53,
-          "source": "10.77.0.0/16",
-          "note": "dns"
-        },
-        {
-          "zone": "mesh",
-          "proto": "tcp",
-          "port": 2377,
-          "source": "10.77.0.1/32",
-          "note": "swarm manager: vps-1"
-        },
-        {
-          "zone": "mesh",
-          "proto": "tcp",
-          "port": 2377,
-          "source": "10.77.0.2/32",
-          "note": "swarm manager: vps-2"
-        },
-        {
-          "zone": "mesh",
-          "proto": "udp",
-          "port": 4789,
-          "source": "10.77.0.1/32",
-          "note": "swarm overlay: vps-1"
-        },
-        {
-          "zone": "mesh",
-          "proto": "udp",
-          "port": 4789,
-          "source": "10.77.0.2/32",
-          "note": "swarm overlay: vps-2"
-        },
-        {
-          "zone": "mesh",
-          "proto": "tcp",
-          "port": 7946,
-          "source": "10.77.0.1/32",
-          "note": "swarm gossip: vps-1"
-        },
-        {
-          "zone": "mesh",
-          "proto": "tcp",
-          "port": 7946,
-          "source": "10.77.0.2/32",
-          "note": "swarm gossip: vps-2"
-        },
-        {
-          "zone": "mesh",
-          "proto": "udp",
-          "port": 7946,
-          "source": "10.77.0.1/32",
-          "note": "swarm gossip: vps-1"
-        },
-        {
-          "zone": "mesh",
-          "proto": "udp",
-          "port": 7946,
-          "source": "10.77.0.2/32",
-          "note": "swarm gossip: vps-2"
+          "note": "segmentation: the policy decides"
         },
         {
           "zone": "public",
           "proto": "udp",
           "port": 51820,
           "note": "wireguard"
+        }
+      ]
+    },
+    "policy": {
+      "mesh": "10.77.0.0/16",
+      "rules": [
+        {
+          "name": "system: ping",
+          "services": [
+            {
+              "proto": "icmp"
+            }
+          ],
+          "action": "allow"
+        },
+        {
+          "name": "system: dns",
+          "to": [
+            "10.77.0.1-10.77.0.3"
+          ],
+          "services": [
+            {
+              "proto": "tcp",
+              "ports": [
+                "53"
+              ]
+            },
+            {
+              "proto": "udp",
+              "ports": [
+                "53"
+              ]
+            }
+          ],
+          "action": "allow"
+        },
+        {
+          "name": "system: swarm",
+          "from": [
+            "10.77.0.1-10.77.0.3"
+          ],
+          "to": [
+            "10.77.0.1-10.77.0.3"
+          ],
+          "services": [
+            {
+              "proto": "tcp",
+              "ports": [
+                "2377",
+                "7946"
+              ]
+            },
+            {
+              "proto": "udp",
+              "ports": [
+                "4789",
+                "7946"
+              ]
+            }
+          ],
+          "action": "allow"
         }
       ]
     }

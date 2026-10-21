@@ -15,7 +15,7 @@ zone) and M2 (the web UI with password + TOTP sign-in, versions and rollback, au
 import/export) are implemented. M3 has Linux spokes, relaying, `meshctl exit`, safe apply, the
 userspace WireGuard backend and the NAS container (`meshctl node compose`). M4 so far has the
 `.mesh` resolver on every node with split DNS through systemd-resolved (`meshctl dns`), custom
-DNS records and firewall rules in the web UI, the agent's drift check, and phones, with a profile
+DNS records in the web UI, the agent's drift check, and phones, with a profile
 for the WireGuard app as a QR code (mesh only or via an exit), each node's cached view of the
 mesh and `meshctl logs`, and each node's local UI (`meshctl ui`). Windows (M5) is written: the
 agent installs as a Windows service with its local API on a named pipe, runs WireGuard on the
@@ -28,12 +28,16 @@ service, container name, aliases or hostname (`web.mesh` round robin across node
 one node's), which the agent reads from the runtime's socket (`node compose --no-names` leaves it
 out), and extra DNS domains of your own (Settings) resolve the containers' `hostname.domainname`
 across the mesh. When a hub goes down, the server moves the pairs it relays to another hub and
-back once it returns (relay failover); the live tests and the v1.0.0 release are next.
+back once it returns (relay failover). The mesh firewall (M7, in progress) segments the mesh:
+groups (`meshctl node add --groups`), zones, address and service objects and ordered policies,
+enforced by every server, edited on the web UI's Firewall page or with `meshctl firewall`; a mesh
+starts with one `allow-all` policy. The live tests and the v1.0.0 release follow.
 
 ## Quick start
 
 ```
-# on the Docker host running the server (deploy/compose.server.yml)
+# on the Docker host running the server (deploy/compose.server.yml, or deploy/stack.server.yml
+# on Swarm; docs/compose.md has every compose and stack file)
 docker exec <container> /app/meshctl node add vps-1 --role server
 # on vps-1, as root: the command node add printed
 curl -fsSL https://mesh.example.com/install.sh | sudo sh -s -- --token <token>
@@ -44,7 +48,7 @@ curl -fsSL https://mesh.example.com/install.sh | sudo sh -s -- --token <token>
 ## How it fits together
 
 - `meshctl server` runs in a container on one VPS behind your reverse proxy. It stores the mesh
-  in SQLite, computes every node's peers, AllowedIPs and firewall rules, and pushes changes to
+  in SQLite, computes every node's peers, AllowedIPs and the servers' mesh firewall, and pushes changes to
   agents over server-sent events.
 - `meshctl agent` runs on every node, including the server VPS. It generates its keys locally
   (private keys never leave the node), applies the config it is given idempotently, caches it

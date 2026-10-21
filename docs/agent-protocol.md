@@ -29,7 +29,7 @@ Admin socket (`<data>/admin.sock`, mode 0600, so only the server's own user reac
 | `GET /admin/v1/nodes` | list nodes and the mesh plan's warnings |
 | `POST /admin/v1/nodes` | add a node; the answer carries its first join token, shown once (a phone gets none) |
 | `GET /admin/v1/nodes/{name}` | one node, its computed config and its last peer report |
-| `PATCH /admin/v1/nodes/{name}` | change endpoint, listen port, hub, exit capability, exit, keepalive, MTU, a host-mode node's container network (`containers`) and the mesh IP (`mesh_ip`, amendment A41; the answer's `notes` say what the move does not reach) |
+| `PATCH /admin/v1/nodes/{name}` | change endpoint, listen port, hub, exit capability, exit, keepalive, MTU, a host-mode node's container network (`containers`), the mesh IP (`mesh_ip`, amendment A41; the answer's `notes` say what the move does not reach) and the segmentation groups (`groups`, amendment A43) |
 | `DELETE /admin/v1/nodes/{name}` | remove a node |
 | `POST /admin/v1/nodes/{name}/disable` | take a node out of every peer list; its stream is closed |
 | `POST /admin/v1/nodes/{name}/enable` | put it back |
@@ -37,6 +37,9 @@ Admin socket (`<data>/admin.sock`, mode 0600, so only the server's own user reac
 | `GET /admin/v1/nodes/{name}/compose` | the compose file that runs a node's agent in a container: a container-mode node's (`?runtime=docker\|podman\|swarm&backend=auto\|kernel\|userspace&data=<host dir>&names=off`; `names=off` leaves out the runtime's socket) or a host-mode spoke's on the host network (`?backend=userspace\|kernel&data=<host dir>`), all optional (`meshctl node compose`) |
 | `GET /admin/v1/nodes/{name}/network` | the commands that create a node's mesh network on its host and the compose lines that attach a service; `?runtime=docker\|podman\|swarm` (`meshctl node network`) |
 | `POST /admin/v1/nodes/{name}/phone` | a phone's WireGuard profile with a new key pair; `{"exit": "<server>"}` (optional) sends its internet through that exit; the answer is the only copy of the private key (`meshctl node phone`) |
+| `GET /admin/v1/segmentation` | the mesh firewall (amendment A43): the document (groups, address and service objects, zones, policies), the rules it compiles to, each zone's addresses and inbound/outbound rules, and the plan's warnings (`meshctl firewall show`) |
+| `PUT /admin/v1/segmentation` | replace the whole document; checked against the mesh like every change (`meshctl firewall apply`) |
+| `GET /admin/v1/segmentation/check` | what the policy does with one flow: `?from=<node or IPv4>&to=<node or IPv4>&service=tcp/PORT\|udp/PORT\|icmp`; the answer names the rule that decided (`meshctl firewall check`) |
 
 Every admin write goes through the reconciler (below) with actor `cli` and is audited. Join
 tokens appear only in the answer to add and token, never in the audit log or the server log.
@@ -124,10 +127,22 @@ on the mesh is left out), sorted by name; `upstream` is the operator's resolvers
 through the tunnel; `forward_for` lists, on a server, the /32 of each phone whose hub it is,
 whose other lookups it forwards too; `domains` (amendment A39, absent when there are none) are
 the extra domains, sorted: the resolver answers the containers' names in them, forwards every
-other name in them for anyone, and the host registers them with the zone. A server's `firewall` opens 53/udp and 53/tcp to the mesh
-CIDR, accepts ping from it (`proto` `icmp`, port 0: ICMP echo requests, which the mesh zone's
-DROP target would drop too; amendment A42) and the custom rules (`note` says where each rule comes from; it never reaches
-firewall-cmd).
+other name in them for anyone, and the host registers them with the zone. A server's `firewall` holds udp/51820 in the public zone and,
+in the mesh zone, one rule that accepts everything from the mesh CIDR (`proto` `all`, port 0;
+amendment A43): what crosses is the `policy`'s to decide (`note` says where a rule comes from; it
+never reaches firewall-cmd).
+
+A server's `policy` (amendment A43, the last field of its config; no other node has one) is the
+mesh firewall: `mesh` (the mesh CIDR) and `rules` in order. A rule has a `name` (display only:
+`system: ping`, `policy: <name>`, `zone: <name>`), `from` and `to` (addresses, networks and ranges
+in canonical form, sorted and merged; absent is any), `services` (each a `proto` -- `tcp`, `udp`
+or `icmp`, which is ping -- with `ports` such as `22` or `1000-2000`; absent is every port, and
+absent services any traffic) and `action` (`allow` or `deny`). A packet between two mesh
+addresses that the server relays, receives or sends is checked against the rules in order; the
+first that matches decides, and one none matches is dropped. Replies and ICMP errors of a flow
+that was allowed always pass; traffic with an end outside the mesh (an exit's) is not mesh
+traffic. The rules start with the system rules (ping across the mesh, DNS to the servers, Swarm
+between them), then the enabled policies, then an allow within each zone that does not deny.
 
 A node whose containers are on the mesh (amendment A37) has a `containers` section, the last
 field of the config and absent otherwise, so other configs hash as before: `mode` (`host` or

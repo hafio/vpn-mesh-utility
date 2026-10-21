@@ -58,9 +58,12 @@ type NodeConfig struct {
 	Firewall  *Firewall `json:"firewall,omitempty"`
 	Sysctl    []Sysctl  `json:"sysctl,omitempty"`
 	// Containers is set when the node's containers are on the mesh
-	// (amendment A37). It is last and omitted otherwise, so a mesh without
+	// (amendment A37). It is omitted otherwise, so a mesh without
 	// container networks encodes, and hashes, as before.
 	Containers *Containers `json:"containers,omitempty"`
+	// Policy is a server's mesh firewall (amendment A43). It is last and
+	// omitted on every other node.
+	Policy *Policy `json:"policy,omitempty"`
 }
 
 // Self identifies the node the config is for.
@@ -190,8 +193,16 @@ const (
 // requests) from its source; it has no port (0) and always a source.
 const ProtoICMP = "icmp"
 
+// ProtoAll is the protocol of a rule that accepts everything from its
+// source; it has no port (0), always a source, and is in the mesh zone
+// only. A server's mesh zone holds just this rule, from the mesh CIDR, and
+// its Policy decides (amendment A43): an accept in one nftables table does
+// not end the walk through another, so the zone must let through what the
+// policy allows.
+const ProtoAll = "all"
+
 // FWRule opens one port in a zone, optionally from one source prefix only;
-// a ProtoICMP rule accepts ping from its source.
+// a ProtoICMP rule accepts ping from its source, a ProtoAll rule everything.
 type FWRule struct {
 	Zone   string `json:"zone"`
 	Proto  string `json:"proto"`

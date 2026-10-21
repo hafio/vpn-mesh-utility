@@ -3,20 +3,17 @@ package api
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"sort"
-	"strconv"
 
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
-	"github.com/hafio/vpn-mesh-utility/internal/server/planner"
 	"github.com/hafio/vpn-mesh-utility/internal/server/store"
 	"github.com/hafio/vpn-mesh-utility/internal/validate"
 )
 
-// The custom DNS records and firewall rules (spec S8.3 "DNS" and "Firewall"
-// pages). Like every other change they go through the reconciler, so they
-// are versioned, audited and pushed to the nodes whose config they change.
+// The custom DNS records (spec S8.3 "DNS" page). Like every other change
+// they go through the reconciler, so they are versioned, audited and pushed
+// to the nodes whose config they change.
 
 // MeshChange is the answer to a change that is not about one node.
 type MeshChange struct {
@@ -59,45 +56,6 @@ type RecordRequest struct {
 	Node string `json:"node,omitempty"`
 	IP   string `json:"ip,omitempty"`
 }
-
-// FirewallView is what the servers' firewalls hold (spec S7.5): every
-// rendered rule with where it comes from, and the custom rules.
-type FirewallView struct {
-	MeshCIDR string           `json:"mesh_cidr"`
-	Servers  []ServerFirewall `json:"servers"`
-	Custom   []CustomRule     `json:"custom"`
-}
-
-// ServerFirewall is one server's rendered firewall section; Firewall is nil
-// while the server gets no config (not enrolled, or disabled).
-type ServerFirewall struct {
-	Name     string          `json:"name"`
-	Firewall *proto.Firewall `json:"firewall,omitempty"`
-}
-
-// CustomRule is an operator's opening in the mesh zone.
-type CustomRule struct {
-	ID int64 `json:"id"`
-	// Node is the one server it opens; empty means every server.
-	Node   string `json:"node,omitempty"`
-	Proto  string `json:"proto"`
-	Port   int    `json:"port"`
-	Source string `json:"source"`
-	Note   string `json:"note,omitempty"`
-}
-
-// RuleRequest adds a custom rule; an empty Node means every server.
-type RuleRequest struct {
-	Node   string `json:"node,omitempty"`
-	Proto  string `json:"proto"`
-	Port   int    `json:"port"`
-	Source string `json:"source"`
-	Note   string `json:"note,omitempty"`
-}
-
-// maxNote bounds a rule's note; the planner adds a "custom: " prefix and the
-// agent accepts 200 bytes.
-const maxNote = 120
 
 // DNS returns the mesh zone.
 func (s *Nodes) DNS(ctx context.Context) (DNSView, error) {
@@ -201,111 +159,6 @@ func (s *Nodes) RemoveRecord(ctx context.Context, by Actor, name string) (MeshCh
 				}
 			}
 			return errorf(http.StatusNotFound, proto.CodeNotFound, "there is no custom DNS record %q; node names cannot be removed", name)
-		})
-	return meshChange(res, err)
-}
-
-// Firewall returns every server's rendered firewall and the custom rules.
-func (s *Nodes) Firewall(ctx context.Context) (FirewallView, error) {
-	v := FirewallView{Servers: []ServerFirewall{}, Custom: []CustomRule{}}
-	err := s.db.Tx(ctx, func(tx *store.Tx) error {
-		in, nodes, err := LoadInput(tx)
-		if err != nil {
-			return err
-		}
-		configs, _, err := planner.Compute(in)
-		if err != nil {
-			return err
-		}
-		v.MeshCIDR = in.MeshCIDR.String()
-		names := map[int64]string{}
-		for _, n := range nodes {
-			names[n.ID] = n.Name
-			if n.Role != string(proto.RoleServer) {
-				continue
-			}
-			sf := ServerFirewall{Name: n.Name}
-			if c, ok := configs[n.ID]; ok {
-				sf.Firewall = c.Firewall
-			}
-			v.Servers = append(v.Servers, sf)
-		}
-		sort.Slice(v.Servers, func(i, j int) bool { return v.Servers[i].Name < v.Servers[j].Name })
-		rules, err := tx.FirewallRules()
-		if err != nil {
-			return err
-		}
-		for _, r := range rules {
-			v.Custom = append(v.Custom, CustomRule{ID: r.ID, Node: names[r.NodeID], Proto: r.Proto, Port: r.Port, Source: r.SourceCIDR, Note: r.Note})
-		}
-		return nil
-	})
-	return v, err
-}
-
-// AddRule adds a custom rule.
-func (s *Nodes) AddRule(ctx context.Context, by Actor, req RuleRequest) (MeshChange, error) {
-	var errs []error
-	check := func(err error) {
-		if err != nil {
-			errs = append(errs, err)
-		}
-	}
-	if req.Node != "" {
-		_, err := validate.Name("server", req.Node)
-		check(err)
-	}
-	_, err := validate.Enum("proto", req.Proto, "tcp", "udp")
-	check(err)
-	_, err = validate.Port("port", req.Port)
-	check(err)
-	src, err := validate.Prefix4("source", req.Source)
-	check(err)
-	_, err = validate.Text("note", req.Note, maxNote)
-	check(err)
-	if err := errors.Join(errs...); err != nil {
-		return MeshChange{}, invalid(err)
-	}
-	rule := store.FirewallRule{Proto: req.Proto, Port: req.Port, SourceCIDR: src.String(), Note: req.Note}
-	where := "every server"
-	if req.Node != "" {
-		where = req.Node
-	}
-	target := fmt.Sprintf("%s/%d from %s on %s", req.Proto, req.Port, rule.SourceCIDR, where)
-	res, err := s.rec.Apply(ctx, Change{Actor: by.Name, UserID: by.UserID, Action: "firewall.add", Target: target,
-		Detail: map[string]any{"note": req.Note}},
-		func(tx *store.Tx, _ *Change) error {
-			if req.Node != "" {
-				n, err := nodeByName(tx, req.Node, "server")
-				if err != nil {
-					return err
-				}
-				if n.Role != string(proto.RoleServer) {
-					return errorf(http.StatusBadRequest, proto.CodeBadRequest,
-						"%q is a %s; only servers have a firewall meshctl manages (spokes keep their own)", n.Name, n.Role)
-				}
-				rule.NodeID = n.ID
-			}
-			return tx.InsertFirewallRule(&rule)
-		})
-	return meshChange(res, err)
-}
-
-// RemoveRule removes a custom rule by id.
-func (s *Nodes) RemoveRule(ctx context.Context, by Actor, id int64) (MeshChange, error) {
-	res, err := s.rec.Apply(ctx, Change{Actor: by.Name, UserID: by.UserID, Action: "firewall.rm", Target: "rule " + strconv.FormatInt(id, 10)},
-		func(tx *store.Tx, c *Change) error {
-			rules, err := tx.FirewallRules()
-			if err != nil {
-				return err
-			}
-			for _, r := range rules {
-				if r.ID == id {
-					c.Detail = map[string]any{"proto": r.Proto, "port": r.Port, "source": r.SourceCIDR, "note": r.Note}
-					return tx.DeleteFirewallRule(id)
-				}
-			}
-			return errorf(http.StatusNotFound, proto.CodeNotFound, "there is no custom firewall rule %d; the firewall page lists them", id)
 		})
 	return meshChange(res, err)
 }

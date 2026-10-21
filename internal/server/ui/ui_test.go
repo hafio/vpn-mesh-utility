@@ -504,7 +504,7 @@ func TestContainerModePages(t *testing.T) {
 // The DNS page lists the zone and manages the custom records; the firewall
 // page shows each server's rules with their source and manages the custom
 // rules. A refusal comes back on the page with the form as it was.
-func TestDNSAndFirewallPages(t *testing.T) {
+func TestDNSPage(t *testing.T) {
 	r := newRig(t)
 	r.seedServers()
 	cookie, csrf := r.signIn()
@@ -534,30 +534,6 @@ func TestDNSAndFirewallPages(t *testing.T) {
 		t.Fatalf("remove record = %d\n%s", w.Code, w.Body)
 	}
 
-	body = r.do(http.MethodGet, "/firewall", cookie, nil).Body.String()
-	for _, want := range []string{"<h2>vps-1</h2>", "<td>53/udp</td><td>10.77.0.0/16</td><td>dns</td>", "swarm manager: vps-2", "None yet."} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("the firewall page lacks %q:\n%s", want, body)
-		}
-	}
-	w := post("/firewall", url.Values{"proto": {"tcp"}, "port": {"9100"}, "source": {"10.77.0.0/16"}, "note": {"node exporter"}})
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Rule tcp/9100 from 10.77.0.0/16 added") ||
-		strings.Count(w.Body.String(), "custom: node exporter") != 2 || !strings.Contains(w.Body.String(), "<td>every server</td>") {
-		t.Fatalf("add rule = %d\n%s", w.Code, w.Body)
-	}
-	if w := post("/firewall", url.Values{"proto": {"tcp"}, "port": {"http"}, "source": {"10.77.0.0/16"}}); w.Code != http.StatusBadRequest ||
-		!strings.Contains(w.Body.String(), "must be a number") || !strings.Contains(w.Body.String(), `value="http"`) {
-		t.Fatalf("a bad port = %d\n%s", w.Code, w.Body)
-	}
-	if w := post("/firewall/1/remove", url.Values{}); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Rule 1 removed") ||
-		strings.Contains(w.Body.String(), "node exporter") {
-		t.Fatalf("remove rule = %d\n%s", w.Code, w.Body)
-	}
-	for _, path := range []string{"/firewall/1/remove", "/firewall/one/remove"} {
-		if w := post(path, url.Values{}); w.Code != http.StatusNotFound {
-			t.Fatalf("remove a missing rule (%s) = %d\n%s", path, w.Code, w.Body)
-		}
-	}
 }
 
 // A spoke's edit form sets its hub, exit and keepalive; its page offers the
@@ -642,7 +618,9 @@ func TestStoreFailuresAreLoggedNotShown(t *testing.T) {
 		{http.MethodGet, "/nodes/vps-1/remove"}, {http.MethodGet, "/versions"}, {http.MethodGet, "/versions/1"},
 		{http.MethodGet, "/audit"}, {http.MethodGet, "/settings"}, {http.MethodGet, "/export"},
 		{http.MethodPost, "/nodes/vps-1"}, {http.MethodPost, "/nodes/vps-1/remove"}, {http.MethodPost, "/versions/1/rollback"},
-		{http.MethodGet, "/dns"}, {http.MethodGet, "/firewall"}, {http.MethodPost, "/dns/files/remove"}, {http.MethodPost, "/firewall/1/remove"},
+		{http.MethodGet, "/dns"}, {http.MethodGet, "/firewall"}, {http.MethodPost, "/dns/files/remove"},
+		{http.MethodGet, "/firewall/zones"}, {http.MethodGet, "/firewall/objects"}, {http.MethodGet, "/firewall/reach"},
+		{http.MethodPost, "/firewall/policies/allow-all/remove"}, {http.MethodPost, "/firewall/zones"},
 		{http.MethodPost, "/nodes/vps-1/phone"},
 	} {
 		var form url.Values
@@ -982,6 +960,23 @@ func TestPageGoldens(t *testing.T) {
 			}
 			return p
 		}(),
+		"firewall": func() page {
+			p := base
+			p.Title, p.Nav, p.Flash = "Firewall", "firewall", "Policy smb saved; config v6 is on its way to the agents"
+			rules := []proto.PolicyRule{{Name: "system: ping", Services: []proto.Service{{Proto: "icmp"}}, Action: "allow"},
+				{Name: "policy: smb", From: []string{"10.77.2.1"}, To: []string{"10.77.1.1"}, Services: []proto.Service{{Proto: "tcp", Ports: []string{"445"}}},
+					Action: "allow"},
+				{Name: "policy: allow-all", Action: "allow"}}
+			p.Data = fwPage{Tab: "policies", Tabs: fwTabs, Warnings: []string{`warning: zone "lab" has no addresses`}, View: policiesView{
+				Policies: []policyRow{
+					{Pos: 1, Up: 0, Down: 2, Name: "smb", Action: "allow", From: "group:laptops", To: "node:nas", Services: "tcp/445", First: true},
+					{Pos: 2, Up: 1, Down: 3, Name: "allow-all", Action: "allow", From: "any", To: "any", Services: "any", Description: "Every mesh address", Last: true},
+				},
+				Rules: ruleRows(rules),
+				Form:  newPolicyForm(2),
+			}}
+			return p
+		}(),
 		"version": func() page {
 			p := base
 			p.Title, p.Nav = "Config v3", "versions"
@@ -1015,7 +1010,11 @@ func TestEveryPageRenders(t *testing.T) {
 		"node": nodeData{Node: api.NodeInfo{Rollback: &proto.Rollback{From: 5, To: 4, Reason: "no answer from the server"}}}, "remove": api.NodeInfo{Name: "x"},
 		"versions": versionsData{}, "version": versionData{Current: true}, "audit": auditData{}, "settings": settingsData{},
 		"users": []userRow{{Name: "ops"}, {Name: "admin", Self: true}}, "account": nil, "error": nil,
-		"dns": dnsData{}, "firewall": firewallData{View: api.FirewallView{Servers: []api.ServerFirewall{{Name: "vps-1"}}}},
+		"dns": dnsData{}, "firewall": fwPage{Tabs: fwTabs, View: policiesView{Policies: []policyRow{{Pos: 1, Name: "p", First: true}}}},
+		"policy": fwPage{View: policyView{}}, "zones": fwPage{View: zonesView{Zones: []zoneRow{{Name: "z"}}}},
+		"zone": fwPage{View: zoneView{Inbound: []ruleRow{{N: 1, Text: "x", System: true}}}}, "objects": fwPage{View: objectsView{}},
+		"reach": fwPage{View: reachView{Result: &api.ReachResult{Index: -1}, Zones: []string{"z"}, Rows: []matrixRow{{Zone: "z",
+			Cells: []matrixCell{{Class: "ok", Verdict: "allow"}}}}}},
 		"phone": phoneData{Node: "phone", Exit: "vps-2", QR: qrCode{View: "-4 -4 29 29", Path: "M0 0h7v1h-7z"}, Profile: "[Interface]", Warnings: []string{"w"}},
 	}
 	for name := range pages.pages {

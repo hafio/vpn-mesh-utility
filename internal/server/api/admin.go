@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/hafio/vpn-mesh-utility/deploy"
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
@@ -71,6 +74,9 @@ func (a *api) adminRoutes() []route {
 		{Route{http.MethodGet, one + "/compose", "socket"}, a.adminCompose},
 		{Route{http.MethodGet, one + "/network", "socket"}, a.adminNetwork},
 		{Route{http.MethodPost, one + "/phone", "socket"}, a.adminPhone},
+		{Route{http.MethodGet, AdminSegmentation, "socket"}, a.adminSegment},
+		{Route{http.MethodPut, AdminSegmentation, "socket"}, a.adminSetSegment},
+		{Route{http.MethodGet, AdminSegmentation + "/check", "socket"}, a.adminReach},
 	}
 }
 
@@ -287,9 +293,14 @@ func (s *Nodes) List(ctx context.Context) (NodeList, error) {
 		if err != nil {
 			return err
 		}
+		groups, err := tx.NodeGroups()
+		if err != nil {
+			return err
+		}
 		out.Nodes = make([]NodeInfo, 0, len(nodes))
 		for _, n := range nodes {
 			info := nodeInfo(n, nodes)
+			info.Groups = groups[n.ID]
 			if err := withHandshake(tx, &info); err != nil {
 				return err
 			}
@@ -318,6 +329,9 @@ func (s *Nodes) Show(ctx context.Context, name string) (NodeDetail, error) {
 			return err
 		}
 		out.Node = nodeInfo(n, nodes)
+		if err := withGroups(tx, &out.Node); err != nil {
+			return err
+		}
 		if err := withHandshake(tx, &out.Node); err != nil {
 			return err
 		}
@@ -350,6 +364,10 @@ func (s *Nodes) Show(ctx context.Context, name string) (NodeDetail, error) {
 // instead (Phone).
 func (s *Nodes) Add(ctx context.Context, by Actor, req NodeAddRequest) (NodeChange, error) {
 	n, fixedIP, err := newNode(req)
+	if err != nil {
+		return NodeChange{}, err
+	}
+	groups, err := checkGroups(req.Groups)
 	if err != nil {
 		return NodeChange{}, err
 	}
@@ -401,7 +419,15 @@ func (s *Nodes) Add(ctx context.Context, by Actor, req NodeAddRequest) (NodeChan
 			}
 			return err
 		}
+		if len(groups) > 0 {
+			if err := setGroups(tx, n.ID, groups); err != nil {
+				return err
+			}
+		}
 		detail := map[string]any{"role": n.Role, "mesh_ip": n.MeshIP, "endpoint": n.Endpoint, "hub": req.Hub, "can_exit": n.CanExit}
+		if len(groups) > 0 {
+			detail["groups"] = groups
+		}
 		if n.Mode != proto.ModeHost {
 			detail["mode"] = n.Mode
 		}
@@ -489,6 +515,13 @@ func (s *Nodes) Set(ctx context.Context, by Actor, name string, req NodeSetReque
 			}
 			detail["container_subnet"] = n.ContainerSubnet
 		}
+		if req.Groups != nil {
+			groups, _ := checkGroups(*req.Groups) // validated in validateSet
+			if err := setGroups(tx, n.ID, groups); err != nil {
+				return err
+			}
+			detail["groups"] = groups
+		}
 		c.Detail = detail
 		return tx.UpdateNode(n)
 	})
@@ -532,18 +565,46 @@ func moveMeshIP(tx *store.Tx, n *store.Node, ip string) ([]string, error) {
 	case string(proto.RolePhone):
 		notes = append(notes, fmt.Sprintf("the phone's profile still has %s: make a new one (`meshctl node phone %s`)", old, n.Name))
 	}
-	rules, err := tx.FirewallRules()
+	seg, err := tx.Segmentation()
 	if err != nil {
 		return nil, err
 	}
 	oldIP, _ := netip.ParseAddr(old) // stored validated
-	for _, r := range rules {
-		if p, err := netip.ParsePrefix(r.SourceCIDR); err == nil && p.Contains(oldIP) && !p.Contains(addr) {
-			notes = append(notes, fmt.Sprintf("custom firewall rule %d opens %d/%s from %s, which held the old address", r.ID, r.Port, r.Proto, r.SourceCIDR))
+	for _, l := range segLiterals(seg) {
+		if r, err := validate.AddrEntry("entry", l.entry); err == nil && inRange(r, oldIP) && !inRange(r, addr) {
+			notes = append(notes, fmt.Sprintf("%s names %s by address, which held the old one; node:%s follows the node", l.where, l.entry, n.Name))
 		}
 	}
 	return notes, nil
 }
+
+// segLiteral is an address written into the segmentation, and where.
+type segLiteral struct{ where, entry string }
+
+// segLiterals are the literal addresses of address objects, zone members
+// and policies' From and To.
+func segLiterals(s store.Segmentation) []segLiteral {
+	var out []segLiteral
+	add := func(where string, vs []string) {
+		for _, v := range vs {
+			if !strings.Contains(v, ":") {
+				out = append(out, segLiteral{where, v})
+			}
+		}
+	}
+	for _, o := range s.Addresses {
+		add(fmt.Sprintf("address object %q", o.Name), o.Entries)
+	}
+	for _, z := range s.Zones {
+		add(fmt.Sprintf("zone %q", z.Name), z.Members)
+	}
+	for _, p := range s.Policies {
+		add(fmt.Sprintf("policy %q", p.Name), append(slices.Clone(p.From), p.To...))
+	}
+	return out
+}
+
+func inRange(r validate.AddrRange, a netip.Addr) bool { return !a.Less(r.First) && !r.Last.Less(a) }
 
 // SetDisabled disables a node (every peer drops it; its stream is closed) or
 // enables it again.
@@ -643,6 +704,9 @@ func (s *Nodes) answer(ctx context.Context, name string, res Result, enroll *Enr
 			return err
 		}
 		info = nodeInfo(n, nodes)
+		if err := withGroups(tx, &info); err != nil {
+			return err
+		}
 		return withHandshake(tx, &info)
 	})
 	if err != nil {
@@ -812,10 +876,53 @@ func validateSet(req NodeSetRequest) error {
 		_, err := validate.IPv4("mesh_ip", *req.MeshIP)
 		check(err)
 	}
+	if req.Groups != nil {
+		if _, err := checkGroups(*req.Groups); err != nil {
+			return err
+		}
+	}
 	if err := errors.Join(errs...); err != nil {
 		return invalid(err)
 	}
 	return nil
+}
+
+// checkGroups validates group names: each a Name, once; sorted.
+func checkGroups(in []string) ([]string, error) {
+	seen := map[string]bool{}
+	for i, g := range in {
+		if _, err := validate.Name(fmt.Sprintf("groups[%d]", i), g); err != nil {
+			return nil, invalid(err)
+		}
+		if seen[g] {
+			return nil, invalid(&validate.Error{Field: "groups", Value: g, Reason: "is listed twice"})
+		}
+		seen[g] = true
+	}
+	return slices.Sorted(maps.Keys(seen)), nil
+}
+
+// setGroups puts node id in exactly groups and checks the segmentation
+// still keeps its limits.
+func setGroups(tx *store.Tx, id int64, groups []string) error {
+	if err := tx.SetNodeGroups(id, groups); err != nil {
+		return err
+	}
+	seg, err := tx.Segmentation()
+	if err != nil {
+		return err
+	}
+	if err := seg.Validate(); err != nil {
+		return invalid(err)
+	}
+	return nil
+}
+
+// withGroups fills in the node's groups.
+func withGroups(tx *store.Tx, info *NodeInfo) error {
+	groups, err := tx.NodeGroups()
+	info.Groups = groups[info.ID]
+	return err
 }
 
 func (s *Nodes) enrollment(token string, expires int64) *Enrollment {

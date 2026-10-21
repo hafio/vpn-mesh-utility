@@ -21,7 +21,8 @@ func linuxOnly(t *testing.T) {
 	}
 }
 
-// document is a three-server export, as `meshctl export` writes it.
+// document is a three-server export as `meshctl export` wrote it before the
+// mesh firewall: one custom rule, which imports as a policy.
 func document() export.Document {
 	d := export.Document{Format: export.Format, Settings: map[string]string{store.SettingMeshCIDR: testfix.MeshCIDR}}
 	for _, f := range testfix.Servers {
@@ -57,8 +58,10 @@ func TestImportRestoresAnExport(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if len(snap.Nodes) != 3 || snap.Nodes[1].ID != testfix.VPS2.ID || len(snap.Firewall) != 1 || snap.Firewall[0].NodeID != testfix.VPS1.ID {
-		t.Fatalf("restored %+v", snap)
+	pols := snap.Segmentation.Policies
+	if len(snap.Nodes) != 3 || snap.Nodes[1].ID != testfix.VPS2.ID || len(snap.Firewall) != 0 || len(pols) != 2 ||
+		pols[0].Name != "firewall-1" || pols[0].To[0] != "node:vps-1" || pols[0].Services[0] != "tcp/9000" || pols[1].Name != "allow-all" {
+		t.Fatalf("restored %+v, policies %+v", snap, pols)
 	}
 	if len(audit) != 1 || audit[0].Action != "mesh.import" || audit[0].Actor != "cli" {
 		t.Fatalf("audit %+v", audit)

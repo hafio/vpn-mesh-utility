@@ -115,29 +115,9 @@ func Check(in Input) []Problem {
 		errf("", "the default hub (node id %d) is not a server", in.DefaultHub)
 	}
 	checkDNS(in, names, byID, errf)
-	for _, r := range in.Rules {
-		what := fmt.Sprintf("firewall rule %s/%d from %s", r.Proto, r.Port, r.Source)
-		if r.Node != 0 && !isServer(r.Node) {
-			errf("", "%s is for node id %d, which is not a server; only servers have a firewall meshctl manages", what, r.Node)
-		}
-		if t, ok := byID[r.Node]; ok && t.inContainer() {
-			errf("", "%s is for %q, a container-mode server: its host is not on the mesh, and its containers are reached directly", what, t.Name)
-		}
-		if r.Proto != "tcp" && r.Proto != "udp" {
-			errf("", "%s: protocol must be tcp or udp", what)
-		}
-		if r.Port < 1 || r.Port > 65535 {
-			errf("", "%s: port is outside 1-65535", what)
-		}
-		if !r.Source.IsValid() || !r.Source.Addr().Is4() || r.Source.Masked() != r.Source {
-			errf("", "%s: the source must be an IPv4 network such as 10.77.0.0/16", what)
-		}
-		if _, err := validate.Text("note", r.Note, 120); err != nil {
-			errf("", "%s: %v", what, err)
-		}
-	}
 
 	p := newPlan(in)
+	checkSegmentation(in, p.servers, errf, warnf)
 	for _, n := range sortedByID(in.Nodes) {
 		if n.PrimaryHub != 0 && !isServer(n.PrimaryHub) {
 			errf(n.Name, "primary hub (node id %d) is not a server", n.PrimaryHub)

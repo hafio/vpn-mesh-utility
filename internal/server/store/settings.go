@@ -77,6 +77,14 @@ func (t *Tx) Setting(key string) (string, error) {
 	return v, nil
 }
 
+// DeleteSetting removes a setting, so it reads as never set.
+func (t *Tx) DeleteSetting(key string) error {
+	if _, err := t.exec(`DELETE FROM settings WHERE key = ?`, key); err != nil {
+		return fmt.Errorf("remove setting %q: %w", key, err)
+	}
+	return nil
+}
+
 // SetSetting creates or replaces a setting.
 func (t *Tx) SetSetting(key, value string) error {
 	if _, err := t.exec(`INSERT INTO settings (key, value) VALUES (?, ?)
