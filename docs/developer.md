@@ -2,7 +2,7 @@
 
 ## Toolchain
 
-Go is pinned exactly in `go.mod`: `go 1.27` is the language floor and `toolchain go1.27.2` is
+Go is pinned exactly in `go.mod`: `go 1.27` is the language floor and `toolchain go1.27.3` is
 what every build uses. Both dev scripts export `GOTOOLCHAIN` from that line when it is unset,
 so a laptop and both CI runners compile with the same stdlib. The scripts contain no other
 version logic. To bump Go: edit the `toolchain` line, the `golang:` base image in the

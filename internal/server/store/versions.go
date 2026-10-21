@@ -51,10 +51,10 @@ func (t *Tx) VersionByNumber(n int64) (Version, error) {
 	err := t.queryRow(`SELECT version, created_at, actor, user_id, summary, snapshot_json, rolled_back_from
 		FROM config_versions WHERE version = ?`, n).Scan(&v.Version, &v.CreatedAt, &v.Actor, &user, &v.Summary, &snap, &rb)
 	if errors.Is(err, sql.ErrNoRows) {
-		return Version{}, fmt.Errorf("config version %d: %w", n, ErrNotFound)
+		return Version{}, fmt.Errorf("config v%d: %w", n, ErrNotFound)
 	}
 	if err != nil {
-		return Version{}, fmt.Errorf("read config version %d: %w", n, err)
+		return Version{}, fmt.Errorf("read config v%d: %w", n, err)
 	}
 	v.UserID, v.RolledBackFrom, v.Snapshot = user.Int64, rb.Int64, []byte(snap)
 	return v, nil

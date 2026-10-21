@@ -186,7 +186,12 @@ const (
 	ZoneMesh   = "mesh"
 )
 
-// FWRule opens one port in a zone, optionally from one source prefix only.
+// ProtoICMP is the protocol of a rule that accepts ping (ICMP echo
+// requests) from its source; it has no port (0) and always a source.
+const ProtoICMP = "icmp"
+
+// FWRule opens one port in a zone, optionally from one source prefix only;
+// a ProtoICMP rule accepts ping from its source.
 type FWRule struct {
 	Zone   string `json:"zone"`
 	Proto  string `json:"proto"`

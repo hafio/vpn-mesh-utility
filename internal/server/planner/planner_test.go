@@ -767,6 +767,10 @@ func TestFirewallRules(t *testing.T) {
 				t.Errorf("%s does not open 53/%s to the mesh", s.Name, p)
 			}
 		}
+		// The mesh zone's DROP target drops ICMP too: ping from the mesh.
+		if !has(c, proto.FWRule{Zone: proto.ZoneMesh, Proto: proto.ProtoICMP, Source: testfix.MeshCIDR, Note: "ping"}) {
+			t.Errorf("%s does not answer ping from the mesh", s.Name)
+		}
 		if !has(c, proto.FWRule{Zone: proto.ZoneMesh, Proto: "tcp", Port: 9100, Source: testfix.MeshCIDR, Note: "custom: node exporter"}) {
 			t.Errorf("%s misses the rule for every server", s.Name)
 		}

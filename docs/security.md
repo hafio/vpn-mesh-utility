@@ -204,8 +204,8 @@ without the mesh.
 ## The host firewall
 
 On servers the agent creates firewalld's `mesh` zone (target DROP) bound to `wg0`, opens the
-Swarm ports in it only from the other servers' /32s, DNS (53/udp, 53/tcp) from the mesh CIDR, and
-udp/51820 in the public zone. Custom rules from the web UI's Firewall page open one port in the
+Swarm ports in it only from the other servers' /32s, DNS (53/udp, 53/tcp) and ping (ICMP echo
+requests, which DROP would drop too) from the mesh CIDR, and udp/51820 in the public zone. Custom rules from the web UI's Firewall page open one port in the
 mesh zone from the source network an operator gives (validated as an IPv4 network; its note is
 display-only and never reaches firewall-cmd). It records what it added in `firewall.applied.json`
 and only ever removes its own rules. Every 5 minutes, and at every start, it asks firewalld again

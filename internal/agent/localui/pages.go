@@ -134,7 +134,7 @@ func (u *UI) showDashboard(w http.ResponseWriter, r *http.Request, s *session, s
 			via = append(via, "exit "+n.Exit)
 		}
 		d.Mesh = append(d.Mesh, meshRow{Name: n.Name, Role: string(n.Role), Via: strings.Join(via, ", "), MeshIP: n.MeshIP,
-			Class: n.Health, State: n.State, Seen: ago(n.LastSeen, now), Versions: fmt.Sprintf("%d / %d", n.AppliedVersion, n.ConfigVersion)})
+			Class: n.Health, State: n.State, Seen: ago(n.LastSeen, now), Versions: fmt.Sprintf("v%d / v%d", n.AppliedVersion, n.ConfigVersion)})
 	}
 	u.render(w, status, "dashboard.html", page{Title: st.Node.Name, CSRF: s.csrf, Flash: flash, Error: problem, Refresh: true, Data: d})
 }

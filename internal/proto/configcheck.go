@@ -194,11 +194,16 @@ func (f Firewall) validate() error {
 		if _, err := validate.Enum(field+".zone", r.Zone, ZonePublic, ZoneMesh); err != nil {
 			errs = append(errs, err)
 		}
-		if _, err := validate.Enum(field+".proto", r.Proto, "tcp", "udp"); err != nil {
+		if _, err := validate.Enum(field+".proto", r.Proto, "tcp", "udp", ProtoICMP); err != nil {
 			errs = append(errs, err)
 		}
-		if _, err := validate.Port(field+".port", r.Port); err != nil {
-			errs = append(errs, err)
+		switch {
+		case r.Proto == ProtoICMP && (r.Port != 0 || r.Source == ""):
+			errs = append(errs, fmt.Errorf("%s: a ping rule has no port and a source (got port %d, source %q)", field, r.Port, r.Source))
+		case r.Proto != ProtoICMP:
+			if _, err := validate.Port(field+".port", r.Port); err != nil {
+				errs = append(errs, err)
+			}
 		}
 		if r.Source != "" {
 			if _, err := validate.Prefix4(field+".source", r.Source); err != nil {

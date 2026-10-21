@@ -8,7 +8,7 @@ module github.com/hafio/vpn-mesh-utility
 // in the same change (it builds with GOTOOLCHAIN=local).
 go 1.27
 
-toolchain go1.27.2
+toolchain go1.27.3
 
 require (
 	github.com/Microsoft/go-winio v0.6.4

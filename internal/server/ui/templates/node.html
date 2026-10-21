@@ -18,7 +18,7 @@
 {{- else}}
 <tr><th>Host</th><td>{{if .Node.Hostname}}{{.Node.Hostname}} ({{.Node.OS}}/{{.Node.Arch}}){{else}}-{{end}}</td></tr>
 <tr><th>Agent</th><td>{{if .Node.AgentVersion}}{{.Node.AgentVersion}}, {{.Node.WGBackend}} WireGuard{{else}}-{{end}}</td></tr>
-<tr><th>Config version</th><td>applied {{.Node.AppliedVersion}}, current {{.Node.ConfigVersion}}</td></tr>
+<tr><th>Config version</th><td>applied v{{.Node.AppliedVersion}}, current v{{.Node.ConfigVersion}}</td></tr>
 {{- end}}
 {{- if .DNS}}
 <tr><th>DNS</th><td>{{.DNS}}</td></tr>

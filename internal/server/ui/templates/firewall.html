@@ -7,7 +7,7 @@
 <thead><tr><th>Zone</th><th>Port</th><th>From</th><th>Why</th></tr></thead>
 <tbody>
 {{- range .Rules}}
-<tr><td>{{.Zone}}</td><td>{{.Port}}/{{.Proto}}</td><td>{{if .Source}}{{.Source}}{{else}}anywhere{{end}}</td><td>{{.Note}}</td></tr>
+<tr><td>{{.Zone}}</td><td>{{if eq .Proto "icmp"}}ping{{else}}{{.Port}}/{{.Proto}}{{end}}</td><td>{{if .Source}}{{.Source}}{{else}}anywhere{{end}}</td><td>{{.Note}}</td></tr>
 {{- end}}
 </tbody>
 </table>

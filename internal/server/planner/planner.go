@@ -360,12 +360,14 @@ func (p *plan) server(n Node) proto.NodeConfig {
 			proto.FWRule{Zone: proto.ZoneMesh, Proto: "udp", Port: 4789, Source: src, Note: "swarm overlay: " + s.Name},
 		)
 	}
-	// The resolver answers the whole mesh (spec S7.5); the custom rules are
-	// the operator's.
+	// The resolver answers the whole mesh (spec S7.5), and so does ping:
+	// the mesh zone's DROP target drops ICMP too. The custom rules are the
+	// operator's.
 	mesh := p.in.MeshCIDR.String()
 	fw.Rules = append(fw.Rules,
 		proto.FWRule{Zone: proto.ZoneMesh, Proto: "udp", Port: 53, Source: mesh, Note: "dns"},
 		proto.FWRule{Zone: proto.ZoneMesh, Proto: "tcp", Port: 53, Source: mesh, Note: "dns"},
+		proto.FWRule{Zone: proto.ZoneMesh, Proto: proto.ProtoICMP, Source: mesh, Note: "ping"},
 	)
 	for _, r := range p.in.Rules {
 		if r.Node == 0 || r.Node == n.ID {

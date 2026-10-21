@@ -520,7 +520,7 @@ func TestDNSAndFirewallPages(t *testing.T) {
 		}
 	}
 	if w := post("/dns", url.Values{"name": {"files"}, "node": {"vps-2"}}); w.Code != http.StatusOK ||
-		!strings.Contains(w.Body.String(), "Record files added; config version") || !strings.Contains(w.Body.String(), `action="/dns/files/remove"`) {
+		!strings.Contains(w.Body.String(), "Record files added; config v") || !strings.Contains(w.Body.String(), `action="/dns/files/remove"`) {
 		t.Fatalf("add record = %d\n%s", w.Code, w.Body)
 	}
 	if w := post("/dns", url.Values{"name": {"vps-1"}, "ip": {"10.77.1.5"}}); w.Code != http.StatusConflict ||
@@ -960,8 +960,8 @@ func TestPageGoldens(t *testing.T) {
 	base := page{User: "admin", CSRF: "csrf-token", Version: "v1.0.0"}
 	rows := []nodeRow{
 		{Name: "vps-1", Role: "server", MeshIP: "10.77.0.1", Endpoint: "203.0.113.10:51820", Class: "ok", State: "in sync",
-			Versions: "4 / 4", Agent: "v1.0.0", Seen: "12s ago", Peers: []peerAge{{Name: "vps-2", Age: "40s ago"}}},
-		{Name: "nas", Role: "spoke", MeshIP: "10.77.1.1", Class: "off", State: "not joined", Versions: "0 / 0", Seen: "never"},
+			Versions: "v4 / v4", Agent: "v1.0.0", Seen: "12s ago", Peers: []peerAge{{Name: "vps-2", Age: "40s ago"}}},
+		{Name: "nas", Role: "spoke", MeshIP: "10.77.1.1", Class: "off", State: "not joined", Versions: "v0 / v0", Seen: "never"},
 	}
 	cases := map[string]page{
 		"login": {Title: "Sign in", Version: "v1.0.0", Error: "wrong username or password", Data: loginData{Username: "admin"}},
@@ -973,7 +973,7 @@ func TestPageGoldens(t *testing.T) {
 		}(),
 		"node": func() page {
 			p := base
-			p.Title, p.Nav, p.Flash = "vps-1", "nodes", "Saved; config version 5 is on its way to the agents"
+			p.Title, p.Nav, p.Flash = "vps-1", "nodes", "Saved; config v5 is on its way to the agents"
 			p.Data = nodeData{
 				Node:  api.NodeInfo{Name: "vps-1", Role: "server", MeshIP: "10.77.0.1", Endpoint: "203.0.113.10:51820", ListenPort: 51820, MTU: 1420, Enrolled: true, AgentVersion: "v1.0.0", WGBackend: "kernel", Hostname: "vps-1.example.com", OS: "linux", Arch: "amd64", AppliedVersion: 4, ConfigVersion: 5},
 				Class: "warn", State: "applying v5", Seen: "12s ago", Config: "{\n  \"version\": 5\n}",
@@ -984,7 +984,7 @@ func TestPageGoldens(t *testing.T) {
 		}(),
 		"version": func() page {
 			p := base
-			p.Title, p.Nav = "Version 3", "versions"
+			p.Title, p.Nav = "Config v3", "versions"
 			p.Data = versionData{
 				Version:  versionRow{Number: 3, When: "2026-10-12 08:00:00 UTC", Actor: "user:admin", Summary: "node.rm vps-2"},
 				Change:   versions.Diff{RemovedNodes: []string{"vps-2"}},

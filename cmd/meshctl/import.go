@@ -37,7 +37,7 @@ func setupImport(fs *flag.FlagSet, e *env) action {
 		if res.Version == 0 {
 			fmt.Fprintf(e.stdout, "imported %d nodes from %s; the mesh already matched it, so no config changed\n", len(doc.Nodes), file)
 		} else {
-			fmt.Fprintf(e.stdout, "imported %d nodes from %s as config version %d; agents pick it up when the server starts\n", len(doc.Nodes), file, res.Version)
+			fmt.Fprintf(e.stdout, "imported %d nodes from %s as config v%d; agents pick it up when the server starts\n", len(doc.Nodes), file, res.Version)
 		}
 		for _, w := range res.Warnings {
 			fmt.Fprintln(e.stdout, w.String())

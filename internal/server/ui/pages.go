@@ -87,7 +87,7 @@ func (u *ui) dashboardData(r *http.Request) (dashboardData, error) {
 	d := dashboardData{Warnings: list.Warnings}
 	for _, n := range list.Nodes {
 		row := nodeRow{Name: n.Name, Role: n.Role, MeshIP: n.MeshIP, Endpoint: n.Endpoint, Exit: n.Exit,
-			Versions: fmt.Sprintf("%d / %d", n.AppliedVersion, n.ConfigVersion), Agent: n.AgentVersion, Seen: ago(n.Seen(), now)}
+			Versions: fmt.Sprintf("v%d / v%d", n.AppliedVersion, n.ConfigVersion), Agent: n.AgentVersion, Seen: ago(n.Seen(), now)}
 		row.Class, row.State = api.Health(n, now)
 		for _, p := range peers[n.ID] {
 			row.Peers = append(row.Peers, peerAge{Name: names[p.PeerID], Age: ago(p.LastHandshake, now)})
@@ -418,7 +418,7 @@ func changed(what string, ch api.NodeChange) string {
 	if ch.Version == 0 {
 		return what + "; no node's config changed"
 	}
-	return fmt.Sprintf("%s; config version %d is on its way to the agents", what, ch.Version)
+	return fmt.Sprintf("%s; config v%d is on its way to the agents", what, ch.Version)
 }
 
 func (u *ui) disableNode(w http.ResponseWriter, r *http.Request, s auth.Session) {
@@ -576,7 +576,7 @@ func (u *ui) renderVersion(w http.ResponseWriter, r *http.Request, s auth.Sessio
 		return
 	}
 	p.Data = d
-	u.show(w, r, s, status, "version", "versions", fmt.Sprintf("Version %d", n), p)
+	u.show(w, r, s, status, "version", "versions", fmt.Sprintf("Config v%d", n), p)
 }
 
 // rollback restores a version as a new one. A rollback that adds or removes

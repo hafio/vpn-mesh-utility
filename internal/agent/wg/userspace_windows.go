@@ -95,6 +95,13 @@ func (u *userspace) CreateLink(name string) error {
 	}
 	u.name, u.tun, u.luid, u.bind = name, nt, winipcfg.LUID(nt.LUID()), conn.NewDefaultBind()
 	u.dev = device.NewDevice(tdev, u.bind, u.logger(name))
+	// wintun never reports the adapter up, so nothing brings the device up
+	// for us (wireguard-go's own Windows main calls Up itself); a device
+	// left down sends nothing, not even a handshake.
+	if err := u.dev.Up(); err != nil {
+		u.closeLocked()
+		return fmt.Errorf("bring up the WireGuard device on adapter %s: %w", name, err)
+	}
 	return nil
 }
 

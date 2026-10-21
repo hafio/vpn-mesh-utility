@@ -152,7 +152,7 @@ func setupNodeList(fs *flag.FlagSet, e *env) action {
 			if ep == "" {
 				ep = "-"
 			}
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d/%d\t%s\n", n.Name, n.Role, n.MeshIP, ep, nodeState(n),
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\tv%d/v%d\t%s\n", n.Name, n.Role, n.MeshIP, ep, nodeState(n),
 				n.AppliedVersion, n.ConfigVersion, ago(heard(n), e.now()))
 		}
 		if err := tw.Flush(); err != nil {
@@ -319,7 +319,7 @@ func setupNodeShow(fs *flag.FlagSet, e *env) action {
 		row("host", n.Hostname)
 		row("platform", joinNonEmpty("/", n.OS, n.Arch))
 		row("agent", joinNonEmpty(", ", n.AgentVersion, n.WGBackend))
-		row("version", fmt.Sprintf("applied %d, current %d", n.AppliedVersion, n.ConfigVersion))
+		row("version", fmt.Sprintf("applied v%d, current v%d", n.AppliedVersion, n.ConfigVersion))
 		row("dns", n.DNS)
 		if rb := n.Rollback; rb != nil {
 			row("rollback", fmt.Sprintf("v%d -> v%d: %s", rb.From, rb.To, rb.Reason))
@@ -464,7 +464,7 @@ func printChange(w io.Writer, loc *time.Location, asJSON bool, done string, call
 		return printJSON(w, ch)
 	}
 	if ch.Version != 0 {
-		fmt.Fprintf(w, "%s %s; config version %d is on its way to the agents\n", done, ch.Node.Name, ch.Version)
+		fmt.Fprintf(w, "%s %s; config v%d is on its way to the agents\n", done, ch.Node.Name, ch.Version)
 	} else {
 		fmt.Fprintf(w, "%s %s; no node's config changed\n", done, ch.Node.Name)
 	}

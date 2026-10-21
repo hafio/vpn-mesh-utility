@@ -136,11 +136,14 @@ func TestValidateRejects(t *testing.T) {
 		}, "sysctl[0].key"},
 		{"sysctl value", func(c *proto.NodeConfig) { c.Sysctl = []proto.Sysctl{{Key: proto.SysctlIPForward, Value: "2"}} }, "sysctl[0].value"},
 		{"firewall backend", func(c *proto.NodeConfig) { c.Firewall.Backend = "iptables" }, "firewall.backend"},
-		{"firewall proto", func(c *proto.NodeConfig) { c.Firewall.Rules[0].Proto = "icmp" }, "proto"},
+		{"firewall proto", func(c *proto.NodeConfig) { c.Firewall.Rules[0].Proto = "sctp" }, "firewall.rules[0].proto"},
 		{"firewall port", func(c *proto.NodeConfig) { c.Firewall.Rules[0].Port = 0 }, "firewall.rules[0].port"},
 		{"firewall zone", func(c *proto.NodeConfig) { c.Firewall.Rules[0].Zone = "trusted" }, "zone"},
 		{"firewall source", func(c *proto.NodeConfig) { c.Firewall.Rules[0].Source = "0.0.0.0/0 accept" }, "source"},
 		{"firewall note newline", func(c *proto.NodeConfig) { c.Firewall.Rules[0].Note = "x\nrule accept" }, "note"},
+		{"ping rule with a port", func(c *proto.NodeConfig) {
+			c.Firewall.Rules[0] = proto.FWRule{Zone: proto.ZoneMesh, Proto: proto.ProtoICMP, Port: 22, Source: testfix.MeshCIDR}
+		}, "a ping rule has no port"},
 		{"dns zone", func(c *proto.NodeConfig) { c.DNS = &proto.DNS{Zone: "corp.local"} }, "dns.zone"},
 		{"dns record ip", func(c *proto.NodeConfig) {
 			c.DNS = &proto.DNS{Zone: proto.DefaultZone, Records: []proto.Record{{Name: "nas", IP: "nas.local"}}}

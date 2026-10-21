@@ -56,6 +56,13 @@
       "rules": [
         {
           "zone": "mesh",
+          "proto": "icmp",
+          "port": 0,
+          "source": "10.77.0.0/16",
+          "note": "ping"
+        },
+        {
+          "zone": "mesh",
           "proto": "tcp",
           "port": 53,
           "source": "10.77.0.0/16",
@@ -190,6 +197,13 @@
       "rules": [
         {
           "zone": "mesh",
+          "proto": "icmp",
+          "port": 0,
+          "source": "10.77.0.0/16",
+          "note": "ping"
+        },
+        {
+          "zone": "mesh",
           "proto": "tcp",
           "port": 53,
           "source": "10.77.0.0/16",
@@ -322,6 +336,13 @@
     "firewall": {
       "backend": "firewalld",
       "rules": [
+        {
+          "zone": "mesh",
+          "proto": "icmp",
+          "port": 0,
+          "source": "10.77.0.0/16",
+          "note": "ping"
+        },
         {
           "zone": "mesh",
           "proto": "tcp",

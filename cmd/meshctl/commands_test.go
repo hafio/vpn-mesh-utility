@@ -575,7 +575,7 @@ func TestImportCommand(t *testing.T) {
 	}
 	data := shortDir(t)
 	code, out, errOut := runArgs("import", file, "--data", data)
-	if code != exitOK || !strings.Contains(out, "imported 1 nodes") || !strings.Contains(out, "config version 1") {
+	if code != exitOK || !strings.Contains(out, "imported 1 nodes") || !strings.Contains(out, "config v1;") {
 		t.Fatalf("import: %d %s%s", code, out, errOut)
 	}
 	if code, out, _ = runArgs("export", "--data", data); code != exitOK || !strings.Contains(out, "name: vps-1") {

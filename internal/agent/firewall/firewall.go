@@ -308,7 +308,8 @@ func (f *Firewall) both(ctx context.Context, r proto.FWRule, op string) error {
 }
 
 // RuleArgv renders one rule. A rule without a source opens the port; one with
-// a source is a rich rule that accepts only that prefix.
+// a source is a rich rule that accepts only that prefix -- ping, for a
+// ProtoICMP rule.
 func RuleArgv(r proto.FWRule, op string, permanent bool) []string {
 	argv := []string{program}
 	if permanent {
@@ -324,6 +325,9 @@ func RuleArgv(r proto.FWRule, op string, permanent bool) []string {
 // richRule is a rule with a source, in firewalld's own spelling (what
 // --list-rich-rules prints).
 func richRule(r proto.FWRule) string {
+	if r.Proto == proto.ProtoICMP {
+		return fmt.Sprintf(`rule family="ipv4" source address="%s" icmp-type name="echo-request" accept`, r.Source)
+	}
 	return fmt.Sprintf(`rule family="ipv4" source address="%s" port port="%d" protocol="%s" accept`, r.Source, r.Port, r.Proto)
 }
 
@@ -448,10 +452,15 @@ func check(fw proto.Firewall) error {
 		field := fmt.Sprintf("firewall.rules[%d]", i)
 		_, err = validate.Enum(field+".zone", r.Zone, proto.ZonePublic, proto.ZoneMesh)
 		add(err)
-		_, err = validate.Enum(field+".proto", r.Proto, "tcp", "udp")
+		_, err = validate.Enum(field+".proto", r.Proto, "tcp", "udp", proto.ProtoICMP)
 		add(err)
-		_, err = validate.Port(field+".port", r.Port)
-		add(err)
+		switch {
+		case r.Proto == proto.ProtoICMP && (r.Port != 0 || r.Source == ""):
+			add(fmt.Errorf("%s: a ping rule has no port and a source (got port %d, source %q)", field, r.Port, r.Source))
+		case r.Proto != proto.ProtoICMP:
+			_, err = validate.Port(field+".port", r.Port)
+			add(err)
+		}
 		if r.Source != "" {
 			_, err = validate.Prefix4(field+".source", r.Source)
 			add(err)

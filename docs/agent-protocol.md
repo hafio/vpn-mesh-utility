@@ -125,7 +125,8 @@ through the tunnel; `forward_for` lists, on a server, the /32 of each phone whos
 whose other lookups it forwards too; `domains` (amendment A39, absent when there are none) are
 the extra domains, sorted: the resolver answers the containers' names in them, forwards every
 other name in them for anyone, and the host registers them with the zone. A server's `firewall` opens 53/udp and 53/tcp to the mesh
-CIDR and the custom rules (`note` says where each rule comes from; it never reaches
+CIDR, accepts ping from it (`proto` `icmp`, port 0: ICMP echo requests, which the mesh zone's
+DROP target would drop too; amendment A42) and the custom rules (`note` says where each rule comes from; it never reaches
 firewall-cmd).
 
 A node whose containers are on the mesh (amendment A37) has a `containers` section, the last

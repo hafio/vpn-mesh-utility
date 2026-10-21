@@ -206,6 +206,8 @@ func TestHostileRulesNeverReachFirewallCmd(t *testing.T) {
 		"proto with option": {Zone: "mesh", Proto: "tcp --permanent", Port: 2377},
 		"port out of range": {Zone: "public", Proto: "udp", Port: 70000},
 		"source is a host":  {Zone: "mesh", Proto: "tcp", Port: 2377, Source: "10.77.0.2/24"},
+		"ping with a port":  {Zone: "mesh", Proto: proto.ProtoICMP, Port: 22, Source: "10.77.0.0/16"},
+		"ping from anyone":  {Zone: "mesh", Proto: proto.ProtoICMP},
 	}
 	for name, rule := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -219,6 +221,31 @@ func TestHostileRulesNeverReachFirewallCmd(t *testing.T) {
 				t.Fatalf("firewall-cmd ran %d times: %q", len(r.calls), r.calls)
 			}
 		})
+	}
+}
+
+// A ping rule is a rich rule accepting ICMP echo requests from its source,
+// both at runtime and permanently, and passes the argv gate.
+func TestPingRule(t *testing.T) {
+	rule := proto.FWRule{Zone: proto.ZoneMesh, Proto: proto.ProtoICMP, Source: "10.77.0.0/16", Note: "ping"}
+	want := []string{"firewall-cmd", "--permanent", "--zone=mesh",
+		`--add-rich-rule=rule family="ipv4" source address="10.77.0.0/16" icmp-type name="echo-request" accept`}
+	if got := RuleArgv(rule, "add", true); !slices.Equal(got, want) {
+		t.Fatalf("RuleArgv = %q", got)
+	}
+	r := freshHost()
+	f := newFirewall(t, r)
+	if _, err := f.Apply(context.Background(), &proto.Firewall{Backend: "firewalld", Rules: []proto.FWRule{rule}}); err != nil {
+		t.Fatal(err)
+	}
+	added := 0
+	for _, c := range r.calls {
+		if strings.Contains(strings.Join(c, " "), `icmp-type name="echo-request"`) {
+			added++
+		}
+	}
+	if added != 2 {
+		t.Fatalf("the ping rule was added %d times (want runtime and permanent): %q", added, r.calls)
 	}
 }
 
