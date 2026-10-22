@@ -214,7 +214,7 @@ func LoadInput(tx *store.Tx) (planner.Input, []store.Node, error) {
 		return planner.Input{}, nil, fmt.Errorf("setting %s = %q is not a CIDR: %w", store.SettingMeshCIDR, settings[store.SettingMeshCIDR], err)
 	}
 	in := planner.Input{MeshCIDR: mesh, Zone: settings[store.SettingDNSZone], Domains: store.SplitDomains(settings[store.SettingDNSExtraDomains])}
-	if s := settings[store.SettingMeshCIDR6]; s != "" {
+	if s := settings[store.SettingMeshCIDR6]; s != "" && s != store.MeshCIDR6Off {
 		if in.MeshCIDR6, err = netip.ParsePrefix(s); err != nil {
 			return planner.Input{}, nil, fmt.Errorf("setting %s = %q is not a CIDR: %w", store.SettingMeshCIDR6, s, err)
 		}

@@ -20,7 +20,8 @@ import (
 // giving it up takes every IPv6 mesh address and container /112 away. A
 // prefix that holds addresses is not swapped for another: give IPv6 up
 // first. The admin API, `meshctl ipv6` and the web UI's Settings page use
-// it.
+// it; the server sets a random one at start when IPv6 was never chosen
+// (DefaultIPv6), and an IPv6 given up stays given up.
 
 // AdminIPv6 is the admin API's IPv6 prefix.
 const AdminIPv6 = "/admin/v1/ipv6"
@@ -80,7 +81,9 @@ func ipv6View(tx *store.Tx) (IPv6View, error) {
 	if err != nil {
 		return v, err
 	}
-	v.Prefix = cur
+	if cur != store.MeshCIDR6Off {
+		v.Prefix = cur
+	}
 	for _, n := range nodes {
 		if n.MeshIP6 != "" {
 			v.Addressed++
@@ -126,7 +129,7 @@ func (s *Nodes) SetIPv6(ctx context.Context, by Actor, req IPv6Request) (IPv6Vie
 		if want == IPv6Off {
 			return giveUpIPv6(tx, nodes, c)
 		}
-		if cur != "" && cur != p.String() {
+		if cur != "" && cur != store.MeshCIDR6Off && cur != p.String() {
 			for _, n := range nodes {
 				if n.MeshIP6 != "" {
 					return errorf(http.StatusConflict, proto.CodeConflict,
@@ -189,11 +192,32 @@ func giveUpIPv6(tx *store.Tx, nodes []store.Node, c *Change) error {
 		}
 		removed++
 	}
-	if err := tx.DeleteSetting(store.SettingMeshCIDR6); err != nil {
+	if err := tx.SetSetting(store.SettingMeshCIDR6, store.MeshCIDR6Off); err != nil {
 		return err
 	}
 	c.Detail = map[string]any{"prefix": "", "removed": removed}
 	return nil
+}
+
+// DefaultIPv6 gives a mesh whose IPv6 was never chosen a random unique
+// local /64 (M8: both families by default), as the actor system; a mesh
+// with a prefix, or whose IPv6 was given up, is left as it is. The server
+// calls it at every start; changed reports whether it set one.
+func (s *Nodes) DefaultIPv6(ctx context.Context) (v IPv6View, changed bool, err error) {
+	var cur string
+	err = s.db.Tx(ctx, func(tx *store.Tx) error {
+		var err error
+		cur, err = tx.Setting(store.SettingMeshCIDR6)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		return err
+	})
+	if err != nil || cur != "" {
+		return IPv6View{}, false, err
+	}
+	v, err = s.SetIPv6(ctx, Actor{Name: "system"}, IPv6Request{Prefix: IPv6Auto})
+	return v, err == nil, err
 }
 
 func (a *api) adminIPv6(w http.ResponseWriter, r *http.Request) {

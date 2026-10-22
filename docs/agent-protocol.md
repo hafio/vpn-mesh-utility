@@ -40,7 +40,7 @@ Admin socket (`<data>/admin.sock`, mode 0600, so only the server's own user reac
 | `GET /admin/v1/segmentation` | the mesh firewall (amendment A43): the document (groups, address and service objects, zones, policies), the rules it compiles to, each zone's addresses and inbound/outbound rules, and the plan's warnings (`meshctl firewall show`) |
 | `PUT /admin/v1/segmentation` | replace the whole document; checked against the mesh like every change (`meshctl firewall apply`) |
 | `GET /admin/v1/ipv6` | the mesh's IPv6 prefix (empty for none) and how many nodes have an IPv6 mesh address (`meshctl ipv6`, amendment A46) |
-| `PUT /admin/v1/ipv6` | `{"prefix": "<IPv6 /48 to /64>\|auto\|off"}`: a prefix gives every node whose `ip_family` allows IPv6 an address in its role's block; `auto` keeps the prefix there is or draws a random unique local /64; `off` (or empty) takes every IPv6 mesh address and container /112 away, refused while a node is IPv6 only; a prefix that holds addresses is not swapped for another (`meshctl ipv6 <prefix>\|auto\|off`) |
+| `PUT /admin/v1/ipv6` | `{"prefix": "<IPv6 /48 to /64>\|auto\|off"}`: a prefix gives every node whose `ip_family` allows IPv6 an address in its role's block; `auto` keeps the prefix there is or draws a random unique local /64; `off` (or empty) takes every IPv6 mesh address and container /112 away, refused while a node is IPv6 only, and is remembered (the setting `mesh_cidr6` holds `off`); a mesh whose IPv6 was never chosen gets an `auto` prefix at the server's start, as `system`; a prefix that holds addresses is not swapped for another (`meshctl ipv6 <prefix>\|auto\|off`) |
 | `GET /admin/v1/segmentation/check` | what the policy does with one flow: `?from=<node or address>&to=<node or address>&service=tcp/PORT\|udp/PORT\|icmp[&at=<RFC 3339>]` (default now; two nodes meet over IPv4 when both have it, else IPv6); the answer names the rule that decided and the scheduled rules not in force then (`meshctl firewall check`) |
 
 Every admin write goes through the reconciler (below) with actor `cli` and is audited. Join
@@ -137,8 +137,9 @@ endpoint; a server that is such an exit has `firewall.exit6`, the IPv6 prefix it
 IPv6 is on the mesh add `subnet6` (a /112), `network6`, `range6`, `bridge6` and `gateway6` to the
 `containers` section, and `sysctl` asks for `net.ipv6.conf.all.forwarding` (and
 `net.ipv6.conf.all.proxy_ndp` for a container-mode gateway). Every one of these is absent in an
-IPv4-only mesh, whose configs hash as before. The prefix is set by `PUT /admin/v1/ipv6` (above),
-a node's families and IPv6 addresses by node add and set; amendment A46.
+IPv4-only mesh, whose configs hash as before. The server gives a new mesh a prefix at its first
+start; `PUT /admin/v1/ipv6` (above) changes or gives it up, node add and set a node's families
+and IPv6 addresses; amendment A46.
 
 Its `dns` section (servers and spokes; spec S7.4, amendment A12) is the whole mesh zone: `records`
 holds one name per enrolled, enabled node and the custom records (an alias of a node that is not

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/hafio/vpn-mesh-utility/internal/server/api"
 )
 
 func TestRunServesAndShutsDown(t *testing.T) {
@@ -91,4 +93,48 @@ func TestListenAdminRefusesALongPath(t *testing.T) {
 	if _, err := ListenAdmin("/" + strings.Repeat("d", 120) + "/admin.sock"); err == nil || !strings.Contains(err.Error(), "shorter --data") {
 		t.Fatalf("ListenAdmin = %v", err)
 	}
+}
+
+// The first start gives the mesh an IPv6 prefix (M8: both families by
+// default); given up, it stays given up across a restart.
+func TestRunGivesTheMeshIPv6(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the server runs on Linux; Windows only builds it")
+	}
+	data := t.TempDir()
+	run := func(check func(c *api.AdminClient)) {
+		t.Helper()
+		ctx, cancel := context.WithCancel(context.Background())
+		ready, done := make(chan net.Addr, 1), make(chan error, 1)
+		go func() {
+			done <- Run(ctx, Config{DataDir: data, Listen: "127.0.0.1:0", URL: "http://127.0.0.1:8080", Version: "v1.0.0",
+				Ready: func(a net.Addr) { ready <- a }})
+		}()
+		select {
+		case <-ready:
+		case err := <-done:
+			t.Fatalf("Run ended early: %v", err)
+		case <-time.After(10 * time.Second):
+			t.Fatal("server did not start")
+		}
+		check(api.NewAdminClient(filepath.Join(data, AdminSocket)))
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatalf("Run = %v", err)
+		}
+	}
+	run(func(c *api.AdminClient) {
+		v, err := c.IPv6(context.Background())
+		if err != nil || !strings.HasPrefix(v.Prefix, "fd") || !strings.HasSuffix(v.Prefix, "::/64") {
+			t.Fatalf("after the first start: %+v, %v", v, err)
+		}
+		if _, err := c.SetIPv6(context.Background(), api.IPv6Request{Prefix: api.IPv6Off}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	run(func(c *api.AdminClient) {
+		if v, err := c.IPv6(context.Background()); err != nil || v.Prefix != "" {
+			t.Fatalf("after a restart: %+v, %v", v, err)
+		}
+	})
 }

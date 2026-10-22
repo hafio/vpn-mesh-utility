@@ -19,9 +19,13 @@ const (
 	// SettingDNSExtraDomains are the extra domains every node resolves
 	// (amendment A39), comma separated.
 	SettingDNSExtraDomains = "dns_extra_domains"
-	// SettingMeshCIDR6 is the mesh's IPv6 prefix (M8); unset, the mesh is
-	// IPv4 only.
+	// SettingMeshCIDR6 is the mesh's IPv6 prefix (M8): MeshCIDR6Off when
+	// IPv6 was turned off, "" (or unset) until the server picks one at its
+	// next start.
 	SettingMeshCIDR6 = "mesh_cidr6"
+	// MeshCIDR6Off is SettingMeshCIDR6 for a mesh whose IPv6 was turned
+	// off (M8): the server leaves it IPv4 only.
+	MeshCIDR6Off = "off"
 	// SettingPolicyTZ is the time zone the mesh firewall's schedules are
 	// read in (amendment A43): Segmentation.TimeZone, so part of the
 	// segmentation document, not of DesiredSettings. Unset is

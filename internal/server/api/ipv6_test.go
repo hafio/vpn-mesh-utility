@@ -13,6 +13,7 @@ import (
 
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
 	"github.com/hafio/vpn-mesh-utility/internal/server/planner"
+	"github.com/hafio/vpn-mesh-utility/internal/server/store"
 	"github.com/hafio/vpn-mesh-utility/internal/testfix"
 )
 
@@ -450,5 +451,45 @@ func TestReportedHostFamilies(t *testing.T) {
 	}
 	if code, _ := report("ipx"); code != 400 || h.node(t, "nas").HostFamilies != "" || h.audits(t, "node.families") != 3 {
 		t.Errorf("an unknown family: %d", code)
+	}
+}
+
+// A mesh whose IPv6 was never chosen gets a random unique local /64 at the
+// server's start (M8: both families by default); one with a prefix keeps
+// it, and one whose IPv6 was given up stays IPv4 only.
+func TestDefaultIPv6(t *testing.T) {
+	h := newHarness(t)
+	h.seedServers(t)
+	s, ctx := h.nodes(), context.Background()
+	v, set, err := s.DefaultIPv6(ctx)
+	if err != nil || !set || !strings.HasPrefix(v.Prefix, "fd") || !strings.HasSuffix(v.Prefix, "::/64") || v.Addressed != 3 || v.Version == 0 {
+		t.Fatalf("first start = %+v, %v, %v", v, set, err)
+	}
+	if h.audits(t, "ipv6.set") != 1 {
+		t.Fatal("the default prefix was not audited")
+	}
+	if again, set, err := s.DefaultIPv6(ctx); err != nil || set || again.Prefix != "" {
+		t.Fatalf("a second start = %+v, %v, %v", again, set, err)
+	}
+	if _, err := s.SetIPv6(ctx, cli(), IPv6Request{Prefix: IPv6Off}); err != nil {
+		t.Fatal(err)
+	}
+	var stored string
+	if err := h.st.Tx(ctx, func(tx *store.Tx) error {
+		var err error
+		stored, err = tx.Setting(store.SettingMeshCIDR6)
+		return err
+	}); err != nil || stored != store.MeshCIDR6Off {
+		t.Fatalf("given up, the setting is %q, %v", stored, err)
+	}
+	if _, set, err := s.DefaultIPv6(ctx); err != nil || set {
+		t.Fatalf("a start after off = %v, %v", set, err)
+	}
+	if v, err := s.IPv6(ctx); err != nil || v.Prefix != "" {
+		t.Fatalf("after off: %+v, %v", v, err)
+	}
+	h.db.fail.Store(h.db.n.Load() + 1)
+	if _, _, err := s.DefaultIPv6(ctx); err == nil {
+		t.Fatal("a store failure was not reported")
 	}
 }

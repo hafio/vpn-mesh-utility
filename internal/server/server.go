@@ -125,8 +125,17 @@ func Run(ctx context.Context, c Config) error {
 		DB: st, Hub: hub, Reconciler: rec, Now: c.Now, Log: c.Log, ServerURL: origin, Version: c.Version,
 		DistDir: c.DistDir, TrustedProxies: c.TrustedProxies,
 	}
+	nodes := api.NewNodes(deps)
+	// Both families by default (M8): a mesh whose IPv6 was never chosen gets
+	// a random unique local prefix; one given up stays IPv4 only.
+	switch v, set, err := nodes.DefaultIPv6(ctx); {
+	case err != nil:
+		c.Log.Error("the mesh got no IPv6 prefix; it runs IPv4 only until `meshctl ipv6 auto`", "err", err)
+	case set:
+		c.Log.Info("the mesh's IPv6 prefix", "prefix", v.Prefix, "nodes", v.Addressed)
+	}
 	web, err := ui.New(ui.Deps{
-		DB: st, Nodes: api.NewNodes(deps), Reconciler: rec, ServerURL: origin, Version: c.Version,
+		DB: st, Nodes: nodes, Reconciler: rec, ServerURL: origin, Version: c.Version,
 		TrustedProxies: c.TrustedProxies, Now: c.Now, Log: c.Log,
 		// The issuer names the mesh in authenticator apps; no ':' (it
 		// separates issuer and account in the otpauth label).

@@ -33,9 +33,11 @@ groups (`meshctl node add --groups`), zones, address and service objects and ord
 enforced by every server in an nftables table of its own, edited on the web UI's Firewall page or
 with `meshctl firewall`; a mesh starts with one `allow-all` policy. A policy may be scheduled (days
 and a window, in the server's time zone or one you set), and every server switches at the edge by
-its own clock. Dual stack (M8, in progress) gives the mesh an IPv6 prefix (`meshctl ipv6 auto`)
-and each node IPv4, IPv6 or both (`--family`), with IPv6 addresses, endpoints and container
-networks of their own. The live tests and the v1.0.0 release follow.
+its own clock. Dual stack (M8, in progress) runs the mesh on IPv4 and IPv6 by default: a unique
+local IPv6 prefix of its own (`meshctl ipv6`), each node IPv4, IPv6 or both (`--family`), servers'
+IPv6 endpoints with failover between the families, IPv6 through an exit that has it, the mesh
+firewall over both, and a host without IPv6 carried on IPv4. The live tests and the v1.0.0
+release follow.
 
 ## Quick start
 

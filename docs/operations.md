@@ -315,18 +315,20 @@ node ...`. Each change is versioned, audited and pushed to the affected agents a
 | move a node to another mesh IP | `node set laptop --mesh-ip 10.77.2.9`, or Mesh IP on its page: peers, its DNS name and its agent follow; the answer lists what does not (a server's Swarm advertise address, a phone's profile, a firewall zone, object or policy naming the old address) |
 | put a node in firewall groups | `node add laptop --role spoke --groups laptops,office`, `node set laptop --groups laptops`, or Groups on its page |
 
-**IPv6** (amendment A46, in progress: the agents apply IPv6 from the next M8 checkpoint on, so
-leave the mesh without a prefix until then). `meshctl ipv6 auto` gives the mesh a random unique
-local /64 (or `meshctl ipv6 fd12:3456:789a::/64`, any /48 to /64), and every node whose family
-allows IPv6 an address in its role's block beside its IPv4 one; `meshctl ipv6` shows it, and the
-Settings page does the same. A node's family is `dual` (default), `ipv4` or `ipv6`: `node add nas
+**IPv6** (amendment A46). A mesh carries both families by default: its server's first start
+gives it a random unique local /64 (`meshctl ipv6` shows it, and the Settings page), and every
+node whose family allows IPv6 an address in its role's block beside its IPv4 one. `meshctl ipv6
+fd12:3456:789a::/64` picks one of your own (any /48 to /64) while no node holds an address in
+the current one -- right after the first start, say; `meshctl ipv6 auto` draws a new one after
+`off`. A node's family is `dual` (default), `ipv4` or `ipv6`: `node add nas
 --role spoke --family ipv4` for a host without usable IPv6, `node set nas --family dual` later;
 the address a family adds is allocated, the one it drops is freed. `--ip6` and `--mesh-ip6` pick
 an IPv6 address as `--ip` and `--mesh-ip` do; `--endpoint6 [2001:db8::10]:51820` publishes a
 server's IPv6 endpoint, which spokes dial when IPv4 does not work (a server's join finds it
 itself, or takes `agent join --endpoint6`); `--containers6` puts a node's
 containers' IPv6 on the mesh beside their IPv4. `meshctl ipv6 off` takes every IPv6 address away
-again (make IPv6-only nodes dual first, and remove IPv6-only DNS records). A prefix that holds
+again (make IPv6-only nodes dual first, and remove IPv6-only DNS records), and the mesh stays
+IPv4 only across restarts until `meshctl ipv6 auto` or a prefix. A prefix that holds
 addresses is changed by going off first. When a node's agent reports that its host cannot use
 one of its families, the mesh leaves that family out for it (a warning on its page and in `node
 show`, which says what the host can use) until the agent reports it works again.

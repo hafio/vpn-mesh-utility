@@ -281,8 +281,8 @@ func ToSnapshot(d Document) (store.Snapshot, error) {
 			_, err := validate.Prefix4(f, v)
 			bad(err)
 		case store.SettingMeshCIDR6:
-			// Empty is a mesh without IPv6; the size the plan checks.
-			if v != "" {
+			// Empty is not chosen yet, off given up; the size the plan checks.
+			if v != "" && v != store.MeshCIDR6Off {
 				_, err := validate.Prefix6(f, v)
 				bad(err)
 			}

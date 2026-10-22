@@ -215,6 +215,7 @@ and counts transactions, so a refusal can be shown to happen before any database
 | | `TestIPv6DNSRecords` | IPv6-only and dual fixed records (M8): refused before the database when malformed or beside a node, by the plan outside the prefix; the DNS view carries each name's IPv6 and the records reach every server's config |
 | | `TestPickEndpoint6`, `TestJoinTakesAnIPv6Endpoint` | a server's IPv6 endpoint (M8): `--endpoint6`, the detected global IPv6, the operator's, a global source address (unique local, link-local and IPv4 ones refused); the join answer's `mesh_ip6`; an IPv4-only server keeps none |
 | | `TestReportedHostFamilies` | the families a host can use (M8): a change goes through the reconciler as `node.families` (new version, audited once per change), the peers stop routing the family the host cannot use and start again when it can, `node show` names it with a warning; the same report changes nothing; an unknown family is refused |
+| | `TestDefaultIPv6` | M8: a mesh whose IPv6 was never chosen gets a random unique local /64 for its nodes at the server's start, audited, as `system`; one with a prefix keeps it; given up, `mesh_cidr6` holds `off` and a start leaves it; a store failure reported |
 | | `TestAdminCompose` | a spoke's compose file with the server's release and origin, both backends and a chosen directory; a server (409), an unknown node (404), a bad name, backend or directory (400) and a development build refused |
 | | `TestCustomDNSRecords` (`records_test.go`) | an alias and a fixed record reach every config; an alias of a node not on the mesh changes no config but shows as not live; the DNS page's rows; bad names, both or neither target, a bad IP: 400 before any transaction; a duplicate, a node's name, an IP outside the mesh (409) and an unknown node (404) write nothing; removal; audited `dns.add`/`dns.rm`; a name given with the zone is refused (409) |
 | `segment_test.go` | `TestSegmentView` | the mesh firewall of a new mesh (`allow-all` and the system rules), then each zone's addresses and its inbound and outbound rules |
@@ -245,7 +246,8 @@ and counts transactions, so a refusal can be shown to happen before any database
 
 `server_test.go`: `TestRunServesAndShutsDown` (health, the UI on the same listener, `secret.key`
 created, a 0600 admin socket, a second server on the same data dir refused, clean shutdown; Linux
-only), `TestRunRefusesBadConfig`,
+only), `TestRunGivesTheMeshIPv6` (M8: the first start gives the mesh a unique local /64; given up,
+it stays IPv4 only across a restart), `TestRunRefusesBadConfig`,
 `TestListenAdminRefusesALongPath`. `zone_test.go`: `TestServerZone` (the zone the schedules default
 to: TZ's name, else where `/etc/localtime` links, else UTC for no link, a link outside a zone
 database or to an unknown zone). `import_test.go` (Linux only, flock): `TestImportRestoresAnExport`,
@@ -405,7 +407,8 @@ and `Policy.Fail`/`FailOn` inject a failure into one method, also while an agent
 
 Build tags `e2e linux`, root, `./scripts/dev.sh e2e`. Network namespaces on a bridge run the real
 binary with kernel WireGuard -- the NAS spoke with the userspace backend -- and the server behind a
-TLS proxy (a helper process of the test binary).
+TLS proxy (a helper process of the test binary). Every lab's mesh is dual stack, as the server
+gives it an IPv6 prefix at its first start (M8).
 
 `TestServerMesh` checks: join -> two peers and traffic between every pair within 60 s; `node set
 vps-2 --mesh-ip` -> vps-2 reports the new address and the others reach it there, not at the old
@@ -425,6 +428,14 @@ socket whose container is `web` (amendment A38), and vps-2's resolver answers `w
 vps-1, box's container (relayed by vps-1) and pc's host reach pc's container; a LAN host routing
 the subnet through pc does not (the guard); `node set pc --containers=false` takes the guard away
 and leaves the bridge.
+
+`TestDualStack` (`dualstack_test.go`, M8) gives the mesh `fd10:77::/64`, vps-2 an IPv6 endpoint,
+the NAS a host with IPv6 off, and the laptop a network that cannot reach vps-2 over IPv4: the
+laptop reaches vps-1 and vps-3 over IPv6 inside IPv4 tunnels, through the servers' `inet meshctl`
+table (which holds IPv6 rules); the server plans the NAS on IPv4 alone (`node show` names what its
+host can use, with the warning) and it still reaches the laptop; the laptop fails over to vps-2's
+IPv6 endpoint and reaches it; an IPv6-only spoke (no IPv4 mesh address) dials vps-2's IPv6
+endpoint and reaches the laptop through it.
 
 `TestRelayFailover` (`failover_test.go`, amendment A40) runs the agents with `--status-every 1s` and
 the server with `--hub-down-after 3s`: the laptop (hub vps-2) and the NAS (hub vps-3) talk through
