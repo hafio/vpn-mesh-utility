@@ -201,7 +201,7 @@ func checkUsable(n Node, warnf func(node, format string, args ...any)) {
 	}
 	switch u, ok := n.usable(); {
 	case !ok:
-		warnf(n.Name, "its agent reports that its host cannot use %s, which it cannot do without (it has no other family, or is a server or has a container network, which need IPv4); it is planned as configured", lost)
+		warnf(n.Name, "its agent reports that its host cannot use %s, which it cannot do without (it has no other family, or has a container network, which needs IPv4); it is planned as configured", lost)
 	case u != n:
 		warnf(n.Name, "its agent reports that its host cannot use %s; the mesh leaves %s out for it until the host can", lost, lost)
 	}
@@ -227,11 +227,6 @@ func checkNode6(in Input, n Node, ips map[string]string, errf func(node, format 
 		errf(n.Name, "is IPv4-only (ip_family ipv4) but has the IPv6 mesh address %s; clear it or make it dual", n.MeshIP6)
 	case n.Family == proto.FamilyIPv6 && n.MeshIP.IsValid():
 		errf(n.Name, "is IPv6-only (ip_family ipv6) but has the IPv4 mesh IP %s; clear it or make it dual", n.MeshIP)
-	}
-	// The mesh firewall filters IPv4; a server without an IPv4 address
-	// would enforce nothing (IPv6 policy is M8's 8d).
-	if n.Role == proto.RoleServer && !n.MeshIP.IsValid() {
-		errf(n.Name, "a server needs an IPv4 mesh address: the mesh firewall it enforces is IPv4")
 	}
 	if n.Endpoint6.IsValid() {
 		switch {

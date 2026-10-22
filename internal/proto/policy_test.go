@@ -81,6 +81,54 @@ func TestPolicyMatcherRefusesBadValues(t *testing.T) {
 	}
 }
 
+// Dual stack (M8): IPv6 entries inside the mesh's IPv6 prefix, and IPv6
+// traffic between two of its addresses judged as IPv4 traffic is.
+func TestPolicyDecideDualStack(t *testing.T) {
+	p := testfix.Policy()
+	p.Mesh6 = testfix.MeshCIDR6
+	p.Rules = append([]proto.PolicyRule{{Name: "policy: smb6", From: []string{testfix.Laptop.MeshIP6}, To: []string{testfix.NAS.MeshIP6},
+		Services: []proto.Service{{Proto: "tcp", Ports: []string{"445"}}}, Action: proto.PolicyAllow}}, p.Rules...)
+	m, err := p.Matcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := netip.MustParseAddr
+	for _, c := range []struct {
+		name     string
+		src, dst string
+		proto    string
+		port     int
+		allow    bool
+		rule     int
+	}{
+		{"smb over IPv6", testfix.Laptop.MeshIP6, testfix.NAS.MeshIP6, "tcp", 445, true, 0},
+		{"ping over IPv6", testfix.NAS.MeshIP6, testfix.VPS1.MeshIP6, "icmp", 0, true, 1},
+		{"another IPv6 port", testfix.Laptop.MeshIP6, testfix.NAS.MeshIP6, "tcp", 22, false, proto.RuleDefault},
+		{"IPv6 internet", testfix.Laptop.MeshIP6, "2001:db8::1", "tcp", 443, true, proto.RuleNotMesh},
+	} {
+		allow, rule := m.Decide(a(c.src), a(c.dst), c.proto, c.port, time.Time{})
+		if allow != c.allow || rule != c.rule {
+			t.Errorf("%s: Decide = %v, rule %d; want %v, rule %d", c.name, allow, rule, c.allow, c.rule)
+		}
+	}
+	for name, c := range map[string]struct {
+		edit func(*proto.Policy)
+		want string
+	}{
+		"bad mesh6":      {func(p *proto.Policy) { p.Mesh6 = "fd10:77::1/64" }, "policy.mesh6"},
+		"no IPv6 prefix": {func(p *proto.Policy) { p.Mesh6 = "" }, "the mesh has no IPv6 prefix"},
+		"outside mesh6":  {func(p *proto.Policy) { p.Rules[0].To = []string{"fd99::1"} }, "outside the mesh"},
+	} {
+		q := *p
+		q.Rules = append([]proto.PolicyRule(nil), p.Rules...)
+		q.Rules[0].To = append([]string(nil), p.Rules[0].To...)
+		c.edit(&q)
+		if _, err := q.Matcher(); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: Matcher = %v, want an error about %q", name, err, c.want)
+		}
+	}
+}
+
 // officeHours is testfix.Policy with the laptop's SMB to the NAS allowed
 // on weekdays from 09:00 to 18:00 in Singapore; outside it, the zone's
 // rule decides.

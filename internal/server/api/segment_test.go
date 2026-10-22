@@ -264,7 +264,36 @@ func TestReach(t *testing.T) {
 		t.Fatalf("a refused check ran %d transactions", n)
 	}
 	_, err := s.Reach(ctx, ReachRequest{From: "ghost", To: "nas", Service: "icmp"})
-	refused(t, err, http.StatusBadRequest, "a node of this mesh or an IPv4 address")
+	refused(t, err, http.StatusBadRequest, "a node of this mesh or an address")
+}
+
+// Dual stack (M8): two nodes meet over IPv4 when both have it, else over
+// IPv6; an address of either family is an end; nodes without a family in
+// common cannot meet.
+func TestReachDualStack(t *testing.T) {
+	h := meshHarness(t)
+	s, ctx := h.nodes(), context.Background()
+	if _, err := s.SetIPv6(ctx, cli(), IPv6Request{Prefix: testfix.MeshCIDR6}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Set(ctx, cli(), "laptop", NodeSetRequest{Family: ptr(proto.FamilyIPv6)}); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ from, to, wantFrom, wantTo string }{
+		{"nas", "vps-1", testfix.NAS.MeshIP, testfix.VPS1.MeshIP},
+		{"laptop", "vps-1", testfix.Laptop.MeshIP6, testfix.VPS1.MeshIP6},
+		{testfix.NAS.MeshIP6, "vps-2", testfix.NAS.MeshIP6, testfix.VPS2.MeshIP6},
+	} {
+		r, err := s.Reach(ctx, ReachRequest{From: c.from, To: c.to, Service: "icmp"})
+		if err != nil || r.From != c.wantFrom || r.To != c.wantTo || !r.Allowed || r.Rule != "system: ping" {
+			t.Errorf("%s -> %s = %+v, %v; want %s -> %s by system: ping", c.from, c.to, r, err, c.wantFrom, c.wantTo)
+		}
+	}
+	if _, err := s.Set(ctx, cli(), "nas", NodeSetRequest{Family: ptr(proto.FamilyIPv4)}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.Reach(ctx, ReachRequest{From: "laptop", To: "nas", Service: "icmp"})
+	refused(t, err, http.StatusBadRequest, "no address family in common")
 }
 
 func TestMatrix(t *testing.T) {

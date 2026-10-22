@@ -75,45 +75,29 @@ const systemPrefix = "system: "
 var swarmPorts = []proto.Service{{Proto: validate.ServiceTCP, Ports: []string{"2377", "7946"}},
 	{Proto: validate.ServiceUDP, Ports: []string{"4789", "7946"}}}
 
-// span is an inclusive range of addresses as numbers; spans is a sorted,
-// merged set of them.
-type span struct{ lo, hi uint32 }
+// span is an inclusive range of addresses of one family (IPv4 or IPv6,
+// M8); spans is a sorted, merged set of them.
+type span = validate.AddrRange
 type spans []span
 
-func spanOf(r validate.AddrRange) span { return span{validate.U32(r.First), validate.U32(r.Last)} }
-
 // merged sorts and merges s, joining ranges that touch.
-func (s spans) merged() spans {
-	if len(s) == 0 {
-		return nil
-	}
-	in := slices.Clone(s)
-	slices.SortFunc(in, func(a, b span) int { return cmp.Compare(a.lo, b.lo) })
-	out := spans{in[0]}
-	for _, x := range in[1:] {
-		last := &out[len(out)-1]
-		if uint64(x.lo) <= uint64(last.hi)+1 {
-			last.hi = max(last.hi, x.hi)
-			continue
-		}
-		out = append(out, x)
-	}
-	return out
-}
+func (s spans) merged() spans { return validate.MergeRanges(s) }
 
 // strings is the set in validate.AddrEntry's canonical form.
 func (s spans) strings() []string {
 	var out []string
 	for _, x := range s {
-		out = append(out, validate.AddrRange{First: validate.FromU32(x.lo), Last: validate.FromU32(x.hi)}.String())
+		out = append(out, x.String())
 	}
 	return out
 }
 
+// overlaps reports whether s and o share an address; ranges of different
+// families never do (IPv4 sorts before IPv6).
 func (s spans) overlaps(o spans) bool {
 	for _, a := range s {
 		for _, b := range o {
-			if a.lo <= b.hi && b.lo <= a.hi {
+			if a.First.Compare(b.Last) <= 0 && b.First.Compare(a.Last) <= 0 {
 				return true
 			}
 		}
@@ -126,7 +110,7 @@ func (s spans) covers(o spans) bool {
 	for _, b := range o {
 		ok := false
 		for _, a := range s {
-			if a.lo <= b.lo && b.hi <= a.hi {
+			if a.First.Compare(b.First) <= 0 && b.Last.Compare(a.Last) <= 0 {
 				ok = true
 				break
 			}
@@ -144,7 +128,7 @@ func parseSpans(in []string) spans {
 	var out spans
 	for _, e := range in {
 		if r, err := validate.AddrEntry("entry", e); err == nil {
-			out = append(out, spanOf(r))
+			out = append(out, r)
 		}
 	}
 	return out.merged()
@@ -173,32 +157,50 @@ func newSegResolver(in Input, report func(bool, string, ...any)) *segResolver {
 	return r
 }
 
-// literal is an address entry, clipped to the mesh: the mesh firewall only
-// sees mesh addresses, so 0.0.0.0/0 (a custom rule's source, say) is the
-// whole mesh, and an entry wholly outside it matches nothing.
+// literal is an address entry, clipped to the mesh of its family: the
+// mesh firewall only sees mesh addresses, so 0.0.0.0/0 (a custom rule's
+// source, say) is the whole mesh, and an entry wholly outside it -- an
+// IPv6 one in a mesh without IPv6 among them -- matches nothing.
 func (r *segResolver) literal(where, s string) (span, bool) {
 	a, err := validate.AddrEntry(where, s)
 	if err != nil {
 		r.report(false, "%v", err)
 		return span{}, false
 	}
-	x, ok := r.clip(spanOf(a))
-	if !ok {
+	x, ok := r.clip(a)
+	switch {
+	case ok:
+	case a.First.Is6() && !r.in.MeshCIDR6.IsValid():
+		r.report(true, "%s: %s is IPv6 and the mesh has no IPv6 prefix, so it matches no address", where, s)
+	case a.First.Is6():
+		r.report(true, "%s: %s is outside the mesh's IPv6 prefix %s, so it matches no address", where, s, r.in.MeshCIDR6)
+	default:
 		r.report(true, "%s: %s is outside the mesh %s, so it matches no address", where, s, r.in.MeshCIDR)
 	}
 	return x, ok
 }
 
-// clip is the part of x inside the mesh; ok is false when there is none.
+// clip is the part of x inside the mesh of its family; ok is false when
+// there is none.
 func (r *segResolver) clip(x span) (span, bool) {
 	m := r.in.MeshCIDR
+	if x.First.Is6() {
+		if m = r.in.MeshCIDR6; !m.IsValid() {
+			return span{}, false
+		}
+	}
 	if !m.IsValid() {
 		return x, true
 	}
-	mesh, _ := validate.AddrEntry("mesh", m.String()) // a valid prefix
-	ms := spanOf(mesh)
-	lo, hi := max(x.lo, ms.lo), min(x.hi, ms.hi)
-	return span{lo, hi}, lo <= hi
+	ms := validate.PrefixRange(m)
+	lo, hi := x.First, x.Last
+	if ms.First.Compare(lo) > 0 {
+		lo = ms.First
+	}
+	if ms.Last.Compare(hi) < 0 {
+		hi = ms.Last
+	}
+	return span{First: lo, Last: hi}, lo.Compare(hi) <= 0
 }
 
 func (r *segResolver) node(where, name string) (Node, bool) {
@@ -209,12 +211,15 @@ func (r *segResolver) node(where, name string) (Node, bool) {
 	return n, ok
 }
 
-func host(a netip.Addr) spans {
-	if !a.Is4() {
-		return nil
+// hosts are a node's mesh addresses, of both families (M8).
+func hosts(n Node) spans {
+	var out spans
+	for _, a := range []netip.Addr{n.MeshIP, n.MeshIP6} {
+		if a.IsValid() {
+			out = append(out, span{First: a, Last: a})
+		}
 	}
-	n := validate.U32(a)
-	return spans{{n, n}}
+	return out
 }
 
 // refs resolves a list (a zone's members, a policy's From or To) to one
@@ -242,7 +247,7 @@ func (r *segResolver) ref(where, s string, kinds []string) spans {
 	switch kind {
 	case refNode:
 		n, _ := r.node(where, name)
-		return host(n.MeshIP)
+		return hosts(n)
 	case refContainers:
 		n, ok := r.node(where, name)
 		if !ok {
@@ -252,8 +257,11 @@ func (r *segResolver) ref(where, s string, kinds []string) spans {
 			r.report(true, "%s: %q has no container network, so this matches no address", where, name)
 			return nil
 		}
-		k, _ := validate.AddrEntry(where, n.Containers.String()) // a /24, checked with the node
-		return spans{spanOf(k)}
+		out := spans{validate.PrefixRange(n.Containers)} // a /24, checked with the node
+		if n.Containers6.IsValid() {
+			out = append(out, validate.PrefixRange(n.Containers6)) // their IPv6 /112 (M8)
+		}
+		return out
 	case refGroup:
 		members, ok := r.seg.Groups[name]
 		if !ok {
@@ -263,7 +271,7 @@ func (r *segResolver) ref(where, s string, kinds []string) spans {
 		var out spans
 		for _, m := range members {
 			if n, ok := r.nodes[m]; ok {
-				out = append(out, host(n.MeshIP)...)
+				out = append(out, hosts(n)...)
 			}
 		}
 		return out
@@ -277,7 +285,7 @@ func (r *segResolver) ref(where, s string, kinds []string) spans {
 		}
 		for _, n := range r.in.Nodes {
 			if n.Role == proto.Role(name) {
-				out = append(out, host(n.MeshIP)...)
+				out = append(out, hosts(n)...)
 			}
 		}
 		return out
@@ -347,15 +355,37 @@ func (r *segResolver) services(where string, in []string) []proto.Service {
 	return mergeServices(all)
 }
 
+// portRange is an inclusive range of ports.
+type portRange struct{ lo, hi int }
+
+// mergePorts sorts and merges ports, joining ranges that touch.
+func mergePorts(in []portRange) []portRange {
+	if len(in) == 0 {
+		return nil
+	}
+	in = slices.Clone(in)
+	slices.SortFunc(in, func(a, b portRange) int { return cmp.Compare(a.lo, b.lo) })
+	out := []portRange{in[0]}
+	for _, x := range in[1:] {
+		last := &out[len(out)-1]
+		if x.lo <= last.hi+1 {
+			last.hi = max(last.hi, x.hi)
+			continue
+		}
+		out = append(out, x)
+	}
+	return out
+}
+
 func mergeServices(in []validate.Service) []proto.Service {
-	ports := map[string]spans{}
+	ports := map[string][]portRange{}
 	every := map[string]bool{}
 	for _, s := range in {
 		if s.First == 0 {
 			every[s.Proto] = true
 			continue
 		}
-		ports[s.Proto] = append(ports[s.Proto], span{uint32(s.First), uint32(s.Last)})
+		ports[s.Proto] = append(ports[s.Proto], portRange{s.First, s.Last})
 	}
 	protos := maps.Clone(every)
 	for p := range ports {
@@ -365,9 +395,9 @@ func mergeServices(in []validate.Service) []proto.Service {
 	for _, p := range slices.Sorted(maps.Keys(protos)) {
 		svc := proto.Service{Proto: p}
 		if !every[p] {
-			for _, x := range ports[p].merged() {
+			for _, x := range mergePorts(ports[p]) {
 				if x.lo == x.hi {
-					svc.Ports = append(svc.Ports, strconv.FormatUint(uint64(x.lo), 10))
+					svc.Ports = append(svc.Ports, strconv.Itoa(x.lo))
 				} else {
 					svc.Ports = append(svc.Ports, fmt.Sprintf("%d-%d", x.lo, x.hi))
 				}
@@ -388,9 +418,12 @@ func (r *segResolver) compile(servers []Node) *proto.Policy {
 	pol := &proto.Policy{Mesh: r.in.MeshCIDR.String(), Rules: []proto.PolicyRule{
 		{Name: systemPrefix + "ping", Services: []proto.Service{{Proto: validate.ServiceICMP}}, Action: proto.PolicyAllow},
 	}}
+	if r.in.MeshCIDR6.IsValid() {
+		pol.Mesh6 = r.in.MeshCIDR6.String() // the policy filters IPv6 as well (M8)
+	}
 	var srv spans
 	for _, s := range servers {
-		srv = append(srv, host(s.MeshIP)...)
+		srv = append(srv, hosts(s)...)
 	}
 	if srv = srv.merged(); len(srv) > 0 {
 		dns := []proto.Service{{Proto: validate.ServiceTCP, Ports: []string{"53"}}, {Proto: validate.ServiceUDP, Ports: []string{"53"}}}

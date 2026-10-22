@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -60,7 +59,8 @@ type ZoneView struct {
 }
 
 // ReachRequest asks what the policy does with one flow. From and To are
-// node names or IPv4 addresses; Service is tcp/PORT, udp/PORT or icmp.
+// node names or addresses of either family (two nodes meet over IPv4 when
+// both have it, else IPv6); Service is tcp/PORT, udp/PORT or icmp.
 type ReachRequest struct {
 	From    string `json:"from"`
 	To      string `json:"to"`
@@ -417,11 +417,7 @@ func (s *Nodes) Reach(ctx context.Context, req ReachRequest) (ReachResult, error
 		if err != nil {
 			return err
 		}
-		src, err := flowEnd("from", req.From, nodes)
-		if err != nil {
-			return err
-		}
-		dst, err := flowEnd("to", req.To, nodes)
+		src, dst, err := flowEnds(req.From, req.To, nodes)
 		if err != nil {
 			return err
 		}
@@ -456,22 +452,47 @@ func (s *Nodes) Reach(ctx context.Context, req ReachRequest) (ReachResult, error
 	return out, err
 }
 
-// flowEnd is a node's mesh IP, or an IPv4 address.
-func flowEnd(field, v string, nodes []store.Node) (netip.Addr, error) {
-	for _, n := range nodes {
-		if n.Name == v {
-			a, err := netip.ParseAddr(n.MeshIP)
-			if err != nil {
-				return netip.Addr{}, fmt.Errorf("node %q has no mesh IP: %w", v, err)
-			}
-			return a, nil
+// flowEnds are a flow's two ends in one family (M8): a node's mesh IPs,
+// or an address; IPv4 when both ends have it, else IPv6.
+func flowEnds(from, to string, nodes []store.Node) (netip.Addr, netip.Addr, error) {
+	src, err := flowEnd("from", from, nodes)
+	if err != nil {
+		return netip.Addr{}, netip.Addr{}, err
+	}
+	dst, err := flowEnd("to", to, nodes)
+	if err != nil {
+		return netip.Addr{}, netip.Addr{}, err
+	}
+	for _, six := range []bool{false, true} {
+		i := slices.IndexFunc(src, func(a netip.Addr) bool { return a.Is6() == six })
+		j := slices.IndexFunc(dst, func(a netip.Addr) bool { return a.Is6() == six })
+		if i >= 0 && j >= 0 {
+			return src[i], dst[j], nil
 		}
 	}
-	a, err := validate.IPv4(field, v)
-	if err != nil {
-		return netip.Addr{}, invalid(&validate.Error{Field: field, Value: v, Reason: "must be a node of this mesh or an IPv4 address"})
+	return netip.Addr{}, netip.Addr{}, errorf(http.StatusBadRequest, proto.CodeBadRequest,
+		"%s and %s have no address family in common: one is IPv4 only, the other IPv6 only", from, to)
+}
+
+// flowEnd is a node's mesh IPs, or one address of either family.
+func flowEnd(field, v string, nodes []store.Node) ([]netip.Addr, error) {
+	for _, n := range nodes {
+		if n.Name != v {
+			continue
+		}
+		var out []netip.Addr
+		for _, s := range []string{n.MeshIP, n.MeshIP6} {
+			if a, err := netip.ParseAddr(s); err == nil {
+				out = append(out, a)
+			}
+		}
+		return out, nil
 	}
-	return a, nil
+	a, err := validate.IP(field, v)
+	if err != nil {
+		return nil, invalid(&validate.Error{Field: field, Value: v, Reason: "must be a node of this mesh or an address such as 10.77.1.5 or fd10:77::1:5"})
+	}
+	return []netip.Addr{a}, nil
 }
 
 // Matrix is how every zone reaches every other.

@@ -20,11 +20,29 @@ import (
 var update = flag.Bool("update", false, "rewrite testdata/ruleset.golden.txt (review the diff)")
 
 // vps1 is the reference server without containers; vps2 hosts the
-// containers of testfix.ContainerSubnet.
+// containers of testfix.ContainerSubnet; dual2 is vps2 on the dual-stack
+// mesh, its containers' IPv6 too (M8).
 var (
-	vps1 = policy.Local{Self: netip.MustParseAddr(testfix.VPS1.MeshIP)}
-	vps2 = policy.Local{Self: netip.MustParseAddr(testfix.VPS2.MeshIP), Containers: netip.MustParsePrefix(testfix.ContainerSubnet)}
+	vps1  = policy.Local{Self: netip.MustParseAddr(testfix.VPS1.MeshIP)}
+	vps2  = policy.Local{Self: netip.MustParseAddr(testfix.VPS2.MeshIP), Containers: netip.MustParsePrefix(testfix.ContainerSubnet)}
+	dual2 = policy.Local{Self: vps2.Self, Self6: netip.MustParseAddr(testfix.VPS2.MeshIP6), Containers: vps2.Containers,
+		Containers6: netip.MustParsePrefix(testfix.ContainerSubnet6)}
 )
+
+// dualPolicy is testfix.Policy on the dual-stack mesh: its system rules
+// name the servers' IPv6 addresses too, the laptop may reach the NAS's SMB
+// over IPv6 alone, and the spokes' zone holds both families.
+func dualPolicy() *proto.Policy {
+	p := testfix.Policy()
+	p.Mesh6 = testfix.MeshCIDR6
+	servers6 := testfix.VPS1.MeshIP6 + "-" + testfix.VPS3.MeshIP6
+	p.Rules[1].To = append(p.Rules[1].To, servers6)
+	p.Rules[2].From, p.Rules[2].To = append(p.Rules[2].From, servers6), append(p.Rules[2].To, servers6)
+	p.Rules[3].From, p.Rules[3].To = []string{testfix.Laptop.MeshIP6}, []string{testfix.NAS.MeshIP6}
+	p.Rules[5].From = append(p.Rules[5].From, testfix.NAS.MeshIP6, testfix.Laptop.MeshIP6)
+	p.Rules[5].To = p.Rules[5].From
+	return p
+}
 
 func compile(t *testing.T, p *proto.Policy, l policy.Local) *policy.Ruleset {
 	t.Helper()
@@ -35,9 +53,11 @@ func compile(t *testing.T, p *proto.Policy, l policy.Local) *policy.Ruleset {
 	return rs
 }
 
-// The table for vps-1 and for vps-2 with its containers, in nft's spelling.
+// The table for vps-1, for vps-2 with its containers, and for vps-2 on the
+// dual-stack mesh (M8), in nft's spelling.
 func TestCompileGolden(t *testing.T) {
-	got := compile(t, testfix.Policy(), vps1).Text() + "\n" + compile(t, testfix.Policy(), vps2).Text()
+	got := compile(t, testfix.Policy(), vps1).Text() + "\n" + compile(t, testfix.Policy(), vps2).Text() + "\n" +
+		compile(t, dualPolicy(), dual2).Text()
 	path := filepath.Join("testdata", "ruleset.golden.txt")
 	if *update {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -58,34 +78,41 @@ func TestCompileGolden(t *testing.T) {
 
 // packet is one new packet, as the kernel sees it at a hook.
 type packet struct {
-	src, dst uint32
+	src, dst netip.Addr
 	proto    string
 	port     int
 	iif, oif string
 }
 
 func (p packet) matches(r policy.Rule) bool {
-	in := func(rs []policy.Range, v uint32) bool {
-		if rs == nil {
-			return true
-		}
+	in := func(rs []validate.AddrRange, a netip.Addr) bool { return rs == nil || validate.RangesContain(rs, a) }
+	ports := func(rs []policy.Range, v int) bool {
 		for _, x := range rs {
-			if x.First <= v && v <= x.Last {
+			if int(x.First) <= v && v <= int(x.Last) {
 				return true
 			}
 		}
-		return false
+		return rs == nil
+	}
+	family, l4 := policy.IPv4, p.proto
+	if p.src.Is6() {
+		family = policy.IPv6
+		if p.proto == validate.ServiceICMP {
+			l4 = policy.ICMPv6 // ping over IPv6 is ICMPv6
+		}
 	}
 	switch {
 	case r.IIF != "" && r.IIF != p.iif, r.OIF != "" && r.OIF != p.oif:
 		return false
 	case r.State != "": // a new packet is neither established nor invalid
 		return false
+	case r.Family != policy.Both && r.Family != family:
+		return false
 	case !in(r.Src, p.src) || !in(r.Dst, p.dst):
 		return false
-	case r.Proto != "" && r.Proto != p.proto:
+	case r.Proto != "" && r.Proto != l4:
 		return false
-	case r.Ports != nil && !in(r.Ports, uint32(p.port)):
+	case r.Ports != nil && !ports(r.Ports, p.port):
 		return false
 	}
 	return !r.Echo || p.proto == validate.ServiceICMP // our icmp packets are echo requests
@@ -136,18 +163,25 @@ func admit(rs *policy.Ruleset, hook string, p packet) bool {
 // firewall's.
 func TestCompileAgreesWithDecide(t *testing.T) {
 	pool := []string{testfix.VPS1.MeshIP, testfix.VPS2.MeshIP, testfix.VPS3.MeshIP, testfix.NAS.MeshIP, testfix.Laptop.MeshIP,
-		testfix.Phone.MeshIP, "10.77.128.5", "10.77.128.200", "10.77.200.1", "192.168.1.5", "1.1.1.1"}
+		testfix.Phone.MeshIP, "10.77.128.5", "10.77.128.200", "10.77.200.1", "192.168.1.5", "1.1.1.1",
+		testfix.VPS1.MeshIP6, testfix.VPS2.MeshIP6, testfix.NAS.MeshIP6, testfix.Laptop.MeshIP6, "fd10:77::8000:5", "fd10:77::9:9", "2001:db8::1"}
 	checked := 0
 	for _, c := range []struct {
-		pol *proto.Policy
-		at  time.Time
-	}{{testfix.Policy(), time.Time{}}, {officeHours(), sgt(19, 10)}, {officeHours(), sgt(19, 20)}} {
+		pol    *proto.Policy
+		at     time.Time
+		locals []policy.Local
+	}{
+		{testfix.Policy(), time.Time{}, []policy.Local{vps1, vps2}},
+		{officeHours(), sgt(19, 10), []policy.Local{vps1, vps2}},
+		{officeHours(), sgt(19, 20), []policy.Local{vps1, vps2}},
+		{dualPolicy(), time.Time{}, []policy.Local{vps1, dual2}},
+	} {
 		pol := c.pol
 		m, err := pol.Matcher()
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, l := range []policy.Local{vps1, vps2} {
+		for _, l := range c.locals {
 			rs, err := policy.Compile(*pol, l, c.at)
 			if err != nil {
 				t.Fatal(err)
@@ -155,22 +189,24 @@ func TestCompileAgreesWithDecide(t *testing.T) {
 			for _, s := range pool {
 				for _, d := range pool {
 					src, dst := netip.MustParseAddr(s), netip.MustParseAddr(d)
-					if src == dst {
-						continue
+					if src == dst || src.Is4() != dst.Is4() {
+						continue // a packet is of one family
 					}
 					for _, pr := range []string{"tcp", "udp", "icmp"} {
 						for _, port := range []int{22, 53, 445, 2377, 4789, 9000} {
-							p := packet{src: validate.U32(src), dst: validate.U32(dst), proto: pr, port: port, iif: "wg0", oif: "wg0"}
+							p := packet{src: src, dst: dst, proto: pr, port: port, iif: "wg0", oif: "wg0"}
+							self := func(a netip.Addr) bool { return a == l.Self || a == l.Self6 }
 							hook := policy.HookForward
 							switch {
-							case dst == l.Self:
+							case self(dst):
 								hook = policy.HookInput
-							case src == l.Self:
+							case self(src):
 								hook = policy.HookOutput
 							}
 							want, _ := m.Decide(src, dst, pr, port, c.at)
 							inNode := func(a netip.Addr) bool {
-								return a == l.Self || (l.Containers.IsValid() && l.Containers.Contains(a))
+								return self(a) || (l.Containers.IsValid() && l.Containers.Contains(a)) ||
+									(l.Containers6.IsValid() && l.Containers6.Contains(a))
 							}
 							if inNode(src) && inNode(dst) {
 								want = true // within the node
@@ -190,7 +226,7 @@ func TestCompileAgreesWithDecide(t *testing.T) {
 	}
 	// Loopback is the node itself.
 	rs := compile(t, testfix.Policy(), vps1)
-	if !admit(rs, policy.HookInput, packet{src: validate.U32(vps1.Self), dst: validate.U32(vps1.Self), proto: "tcp", port: 22, iif: "lo"}) {
+	if !admit(rs, policy.HookInput, packet{src: vps1.Self, dst: vps1.Self, proto: "tcp", port: 22, iif: "lo"}) {
 		t.Fatal("loopback was filtered")
 	}
 }
@@ -256,6 +292,21 @@ func TestCompileRefuses(t *testing.T) {
 			t.Errorf("%s: Compile = %v, want an error about %q", name, err, c.want)
 		}
 	}
+	// The IPv6 side (M8).
+	for name, c := range map[string]struct {
+		pol  *proto.Policy
+		l    policy.Local
+		want string
+	}{
+		"no address":         {dualPolicy(), policy.Local{}, "no mesh address"},
+		"IPv6 without mesh6": {testfix.Policy(), dual2, "no IPv6 prefix"},
+		"IPv6 outside":       {dualPolicy(), policy.Local{Self6: netip.MustParseAddr("fd99::1")}, "outside the mesh"},
+		"bad mesh6":          {&proto.Policy{Mesh: testfix.MeshCIDR, Mesh6: "fd10:77::1/64"}, dual2, "policy.mesh6"},
+	} {
+		if _, err := policy.Compile(*c.pol, c.l, time.Time{}); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: Compile = %v, want an error about %q", name, err, c.want)
+		}
+	}
 }
 
 // Sync installs a ruleset once, leaves the same one alone, replaces a
@@ -316,9 +367,18 @@ func TestRulesetText(t *testing.T) {
 	if rs.Count() == 0 || len(rs.Fingerprint()) != 16 || rs.Fingerprint() == compile(t, testfix.Policy(), vps1).Fingerprint() {
 		t.Fatalf("count %d, fingerprint %q", rs.Count(), rs.Fingerprint())
 	}
-	r := policy.Rule{IIF: "lo", OIF: "wg0", State: policy.StateInvalid, Src: []policy.Range{{1, 1}}, Proto: "udp",
+	one := func(s string) []validate.AddrRange {
+		a := netip.MustParseAddr(s)
+		return []validate.AddrRange{{First: a, Last: a}}
+	}
+	r := policy.Rule{IIF: "lo", OIF: "wg0", State: policy.StateInvalid, Family: policy.IPv4, Src: one("10.77.0.1"), Proto: "udp",
 		Ports: []policy.Range{{53, 53}, {1000, 2000}}, Verdict: policy.Jump, Target: "x"}
-	want := `iifname "lo" oifname "wg0" ct state invalid ip saddr { 0.0.0.1 } meta l4proto udp th dport { 53, 1000-2000 } jump x`
+	want := `iifname "lo" oifname "wg0" ct state invalid meta nfproto ipv4 ip saddr { 10.77.0.1 } meta l4proto udp th dport { 53, 1000-2000 } jump x`
+	if got := r.String(); got != want {
+		t.Fatalf("String =\n%s\nwant\n%s", got, want)
+	}
+	r = policy.Rule{Family: policy.IPv6, Dst: one("fd10:77::1"), Proto: policy.ICMPv6, Echo: true, Verdict: policy.Accept}
+	want = `meta nfproto ipv6 ip6 daddr { fd10:77::1 } meta l4proto ipv6-icmp icmpv6 type echo-request accept`
 	if got := r.String(); got != want {
 		t.Fatalf("String =\n%s\nwant\n%s", got, want)
 	}
@@ -333,8 +393,8 @@ func TestCompileMerges(t *testing.T) {
 		Services: []proto.Service{{Proto: "tcp"}, {Proto: "udp", Ports: []string{"53", "50-60", "61"}}}, Action: proto.PolicyAllow}}}
 	text := compile(t, p, vps1).Text()
 	for _, want := range []string{
-		"  ip saddr { 10.77.2.1-10.77.2.6 } meta l4proto tcp accept  # merge\n",
-		"  ip saddr { 10.77.2.1-10.77.2.6 } meta l4proto udp th dport { 50-61 } accept  # merge\n",
+		"  meta nfproto ipv4 ip saddr { 10.77.2.1-10.77.2.6 } meta l4proto tcp accept  # merge\n",
+		"  meta nfproto ipv4 ip saddr { 10.77.2.1-10.77.2.6 } meta l4proto udp th dport { 50-61 } accept  # merge\n",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the table lacks %q:\n%s", want, text)

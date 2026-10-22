@@ -1,8 +1,8 @@
 package validate
 
 import (
-	"math/bits"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -11,7 +11,8 @@ import (
 // zones, the services of policies, and the kind:name references between
 // them.
 
-// AddrRange is an inclusive range of IPv4 addresses.
+// AddrRange is an inclusive range of addresses of one family, IPv4 or IPv6
+// (M8).
 type AddrRange struct {
 	First, Last netip.Addr
 }
@@ -29,38 +30,74 @@ func (r AddrRange) String() string {
 
 // Prefix is the network the range is exactly, when it is one.
 func (r AddrRange) Prefix() (netip.Prefix, bool) {
-	lo, hi := U32(r.First), U32(r.Last)
-	size := uint64(hi) - uint64(lo) + 1
-	if size&(size-1) != 0 { // not a power of two
+	if r.First.BitLen() != r.Last.BitLen() {
 		return netip.Prefix{}, false
 	}
-	n := bits.TrailingZeros64(size)
-	if lo&uint32((uint64(1)<<n)-1) != 0 { // not aligned to its size
-		return netip.Prefix{}, false
+	for bits := 0; bits <= r.First.BitLen(); bits++ {
+		if p := netip.PrefixFrom(r.First, bits); p.Masked().Addr() == r.First && LastOf(p) == r.Last {
+			return p, true
+		}
 	}
-	return netip.PrefixFrom(r.First, 32-n), true
+	return netip.Prefix{}, false
 }
 
-// U32 is an IPv4 address as a number, for range arithmetic.
-func U32(a netip.Addr) uint32 {
-	b := a.As4()
-	return uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
+// PrefixRange is the range of addresses a network holds.
+func PrefixRange(p netip.Prefix) AddrRange {
+	return AddrRange{First: p.Masked().Addr(), Last: LastOf(p)}
 }
 
-// FromU32 is the address of a number.
-func FromU32(n uint32) netip.Addr {
-	return netip.AddrFrom4([4]byte{byte(n >> 24), byte(n >> 16), byte(n >> 8), byte(n)})
+// LastOf is the last address of a network: its host bits all set.
+func LastOf(p netip.Prefix) netip.Addr {
+	b := p.Masked().Addr().AsSlice()
+	for i := p.Bits(); i < len(b)*8; i++ {
+		b[i/8] |= 0x80 >> (i % 8)
+	}
+	a, _ := netip.AddrFromSlice(b)
+	return a
 }
 
-// AddrEntry validates one address of an object, a zone or a policy: an IPv4
-// address, an IPv4 network without host bits, or a range first-last with
-// first <= last.
+// MergeRanges sorts rs and joins the ranges that overlap or touch; ranges
+// of different families never meet (IPv4 sorts first).
+func MergeRanges(rs []AddrRange) []AddrRange {
+	if len(rs) == 0 {
+		return nil
+	}
+	in := slices.Clone(rs)
+	slices.SortFunc(in, func(a, b AddrRange) int { return a.First.Compare(b.First) })
+	out := []AddrRange{in[0]}
+	for _, r := range in[1:] {
+		last := &out[len(out)-1]
+		// Next of the family's last address is no address: nothing touches it.
+		if next := last.Last.Next(); r.First.Compare(last.Last) <= 0 || (next.IsValid() && r.First == next) {
+			if r.Last.Compare(last.Last) > 0 {
+				last.Last = r.Last
+			}
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// RangesContain reports whether a is in one of rs.
+func RangesContain(rs []AddrRange, a netip.Addr) bool {
+	for _, r := range rs {
+		if r.First.Compare(a) <= 0 && a.Compare(r.Last) <= 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// AddrEntry validates one address of an object, a zone or a policy: an
+// address, a network without host bits, or a range first-last with first
+// <= last, of either family (IPv6, M8) -- a range within one.
 func AddrEntry(field, s string) (AddrRange, error) {
 	if first, last, ok := strings.Cut(s, "-"); ok {
-		a, errA := netip.ParseAddr(first)
-		b, errB := netip.ParseAddr(last)
-		if errA != nil || errB != nil || !a.Is4() || !b.Is4() {
-			return AddrRange{}, fail(field, s, "a range must be two IPv4 addresses such as 10.77.2.10-10.77.2.20")
+		a, errA := IP(field, first)
+		b, errB := IP(field, last)
+		if errA != nil || errB != nil || a.Is4() != b.Is4() {
+			return AddrRange{}, fail(field, s, "a range must be two addresses of one family such as 10.77.2.10-10.77.2.20 or fd10:77::2:10-fd10:77::2:20")
 		}
 		if b.Less(a) {
 			return AddrRange{}, fail(field, s, "a range must start at or below where it ends")
@@ -68,15 +105,15 @@ func AddrEntry(field, s string) (AddrRange, error) {
 		return AddrRange{First: a, Last: b}, nil
 	}
 	if strings.Contains(s, "/") {
-		p, err := Prefix4(field, s)
+		p, err := Prefix(field, s)
 		if err != nil {
 			return AddrRange{}, err
 		}
-		return AddrRange{First: p.Addr(), Last: FromU32(U32(p.Addr()) | uint32(uint64(1)<<(32-p.Bits())-1))}, nil
+		return PrefixRange(p), nil
 	}
-	a, err := netip.ParseAddr(s)
-	if err != nil || !a.Is4() {
-		return AddrRange{}, fail(field, s, "must be an IPv4 address, network or range such as 10.77.1.5, 10.77.1.0/24 or 10.77.1.5-10.77.1.20")
+	a, err := IP(field, s)
+	if err != nil {
+		return AddrRange{}, fail(field, s, "must be an address, network or range such as 10.77.1.5, 10.77.1.0/24, 10.77.1.5-10.77.1.20 or fd10:77::1:5")
 	}
 	return AddrRange{First: a, Last: a}, nil
 }
@@ -149,7 +186,9 @@ func ServiceEntry(field, s string) (Service, error) {
 // and the caller validates it as a literal.
 func Ref(field, s string, kinds ...string) (kind, name string, ok bool, err error) {
 	kind, name, ok = strings.Cut(s, ":")
-	if !ok {
+	// An IPv6 literal has colons of its own (M8): with two or more and no
+	// known kind before the first, it is a literal, valid or not.
+	if !ok || (strings.Count(s, ":") >= 2 && !slices.Contains(kinds, kind)) {
 		return "", "", false, nil
 	}
 	if _, err := Enum(field, kind, kinds...); err != nil {

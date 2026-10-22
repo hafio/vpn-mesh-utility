@@ -127,7 +127,7 @@ meshctl firewall apply <file> [flags]
 
 ## meshctl firewall check
 
-Say what the mesh firewall does with one flow, now or --at a time (from and to: nodes or IPv4 addresses; service: tcp/PORT, udp/PORT or icmp).
+Say what the mesh firewall does with one flow, now or --at a time (from and to: nodes or addresses, IPv4 or IPv6; service: tcp/PORT, udp/PORT or icmp).
 
 ```
 meshctl firewall check <from> <to> <service> [flags]

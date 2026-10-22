@@ -354,13 +354,17 @@ func RuleArgv(r proto.FWRule, op string, permanent bool) []string {
 // richRule is a rule with a source, in firewalld's own spelling (what
 // --list-rich-rules prints).
 func richRule(r proto.FWRule) string {
+	family := "ipv4"
+	if strings.Contains(r.Source, ":") {
+		family = "ipv6" // the mesh's IPv6 prefix (M8)
+	}
 	switch r.Proto {
 	case proto.ProtoICMP:
-		return fmt.Sprintf(`rule family="ipv4" source address="%s" icmp-type name="echo-request" accept`, r.Source)
+		return fmt.Sprintf(`rule family="%s" source address="%s" icmp-type name="echo-request" accept`, family, r.Source)
 	case proto.ProtoAll:
-		return fmt.Sprintf(`rule family="ipv4" source address="%s" accept`, r.Source)
+		return fmt.Sprintf(`rule family="%s" source address="%s" accept`, family, r.Source)
 	}
-	return fmt.Sprintf(`rule family="ipv4" source address="%s" port port="%d" protocol="%s" accept`, r.Source, r.Port, r.Proto)
+	return fmt.Sprintf(`rule family="%s" source address="%s" port port="%d" protocol="%s" accept`, family, r.Source, r.Port, r.Proto)
 }
 
 // ensureZone checks firewalld and creates the mesh zone once: created
@@ -501,7 +505,7 @@ func check(fw proto.Firewall) error {
 			add(err)
 		}
 		if r.Source != "" {
-			_, err = validate.Prefix4(field+".source", r.Source)
+			_, err = validate.Prefix(field+".source", r.Source)
 			add(err)
 		}
 	}

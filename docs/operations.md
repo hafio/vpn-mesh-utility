@@ -501,7 +501,7 @@ segmentation:
 scheduled policies not in force then.
 
 A change applies to new connections at once; the servers re-check existing mesh connections too.
-On a server, `nft list table ip meshctl` shows what it enforces (the first rule's comment carries
+On a server, `nft list table inet meshctl` shows what it enforces (the first rule's comment carries
 the policy's fingerprint), and `meshctl status` there reports a policy the kernel refused as the
 error of the config it could not apply.
 

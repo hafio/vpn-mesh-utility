@@ -233,8 +233,8 @@ WireGuard drops a packet whose source is not in the AllowedIPs of the peer it ca
 cannot send as another, and a container network is its node's /24. Same-node traffic (a node and
 its own containers, two of its containers) does not cross a server and is not filtered.
 
-A server enforces it in a table of the agent's own (`table ip meshctl`, nftables over netlink, no
-binary): installed before firewalld lets the mesh through the mesh zone, so the zone is never open
+A server enforces it in a table of the agent's own (`table inet meshctl`, nftables over netlink, no
+binary; IPv6 between mesh addresses is filtered as IPv4 is, M8): installed before firewalld lets the mesh through the mesh zone, so the zone is never open
 without the table; a config that fails to install it is not applied (safe apply puts the previous
 one back). An accept in one nftables table does not end the walk through another, so the table
 only ever takes away what firewalld lets through: a packet arriving on the public interface stays

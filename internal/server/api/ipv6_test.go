@@ -188,8 +188,9 @@ func TestDualStackNodes(t *testing.T) {
 			t.Errorf("%s: %d %q", name, code, msg)
 		}
 	}
-	if _, code, msg := add(NodeAddRequest{Name: "v6vps", Role: "server", Family: proto.FamilyIPv6}); code != 409 || !strings.Contains(msg, "needs an IPv4 mesh address") {
-		t.Errorf("an IPv6-only server: %d %q", code, msg)
+	// The mesh firewall filters IPv6 too, so a server may be IPv6 only.
+	if n, code, msg := add(NodeAddRequest{Name: "v6vps", Role: "server", Family: proto.FamilyIPv6}); code != 200 || n.MeshIP != "" || n.MeshIP6 != "fd10:77::4" {
+		t.Errorf("an IPv6-only server: %d %+v %q", code, n, msg)
 	}
 
 	if n, code, msg := add(NodeAddRequest{Name: "nas", Role: "spoke", AlwaysOn: true}); code != 200 || n.MeshIP != "10.77.1.1" || n.MeshIP6 != "fd10:77::1:1" {

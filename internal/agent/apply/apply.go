@@ -247,9 +247,17 @@ func (e *Engine) Apply(ctx context.Context, cfg proto.NodeConfig) (Result, error
 	}
 	var rules *policy.Ruleset
 	if cfg.Policy != nil {
-		local := policy.Local{Self: self}
+		var local policy.Local // the node's own addresses, of both families (M8)
+		for _, a := range addrs {
+			if a.Addr().Is4() {
+				local.Self = a.Addr()
+			} else {
+				local.Self6 = a.Addr()
+			}
+		}
 		if cfg.Containers != nil {
 			local.Containers, _ = netip.ParsePrefix(cfg.Containers.Subnet) // validated above
+			local.Containers6, _ = netip.ParsePrefix(cfg.Containers.Subnet6)
 		}
 		if rules, err = policy.Compile(*cfg.Policy, local, e.d.Now()); err != nil {
 			return fail(StepValidate, err)

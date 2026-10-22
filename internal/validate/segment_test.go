@@ -1,6 +1,7 @@
 package validate
 
 import (
+	"net/netip"
 	"strings"
 	"testing"
 )
@@ -15,6 +16,12 @@ func TestAddrEntry(t *testing.T) {
 		"10.77.1.0-10.77.1.255":   "10.77.1.0/24", // a range that is a network reads as one
 		"10.77.1.7-10.77.1.7":     "10.77.1.7",
 		"0.0.0.0-255.255.255.255": "0.0.0.0/0",
+		// IPv6 (M8), in canonical form.
+		"FD10:77::1:5":                       "fd10:77::1:5",
+		"fd10:77::/64":                       "fd10:77::/64",
+		"fd10:77::1:5/128":                   "fd10:77::1:5",
+		"fd10:77::2:10-fd10:77::2:20":        "fd10:77::2:10-fd10:77::2:20",
+		"fd10:77::8000:0-fd10:77::8000:ffff": "fd10:77::8000:0/112",
 	} {
 		r, err := AddrEntry("e", in)
 		if err != nil || r.String() != want {
@@ -22,17 +29,21 @@ func TestAddrEntry(t *testing.T) {
 		}
 	}
 	for in, reason := range map[string]string{
-		"":                        "IPv4 address, network or range",
+		"":                        "address, network or range",
 		"10.77.1.5/24":            "host bits",
 		"10.77.1.20-10.77.1.5":    "start at or below",
-		"10.77.1.5-":              "two IPv4 addresses",
-		"::1":                     "IPv4 address, network or range",
-		"10.77.1.0/33":            "IPv4 CIDR",
-		"10.77.1.5, 10.77.1.6":    "IPv4 address, network or range",
-		"node:nas":                "IPv4 address, network or range",
-		"10.77.1.5-10.77.1.6/24":  "two IPv4 addresses",
-		"10.77.1.5\n10.77.1.6":    "IPv4 address, network or range",
-		"10.77.1.1-10.77.1.2-1.1": "two IPv4 addresses",
+		"10.77.1.5-":              "two addresses of one family",
+		"10.77.1.0/33":            "IPv4 or IPv6 CIDR",
+		"10.77.1.5, 10.77.1.6":    "address, network or range",
+		"node:nas":                "address, network or range",
+		"10.77.1.5-10.77.1.6/24":  "two addresses of one family",
+		"10.77.1.5\n10.77.1.6":    "address, network or range",
+		"10.77.1.1-10.77.1.2-1.1": "two addresses of one family",
+		"10.77.1.5-fd10:77::1":    "two addresses of one family",
+		"fd10:77::5-fd10:77::1":   "start at or below",
+		"fd10:77::1/64":           "host bits",
+		"fe80::1%eth0":            "address, network or range",
+		"::ffff:10.77.1.5":        "address, network or range",
 	} {
 		if _, err := AddrEntry("e", in); err == nil || !strings.Contains(err.Error(), reason) {
 			t.Errorf("AddrEntry(%q) = %v, want an error about %q", in, err, reason)
@@ -54,8 +65,43 @@ func TestAddrRangePrefix(t *testing.T) {
 	if r, _ := AddrEntry("e", "10.77.0.2-10.77.0.3"); r.String() != "10.77.0.2/31" {
 		t.Errorf("an aligned pair reads %s", r)
 	}
-	if U32(FromU32(0x0a4d0105)) != 0x0a4d0105 || FromU32(0x0a4d0105).String() != "10.77.1.5" {
-		t.Fatal("U32 and FromU32 do not round trip")
+	if r, _ := AddrEntry("e", "::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"); r.String() != "::/0" {
+		t.Errorf("the whole of IPv6 reads %s", r)
+	}
+	if r, _ := AddrEntry("e", "fd10:77::2:0-fd10:77::2:ff"); r.String() != "fd10:77::2:0/120" {
+		t.Errorf("an IPv6 range that is a network reads %s", r)
+	}
+	if r := (AddrRange{First: netip.MustParseAddr("10.77.0.1"), Last: netip.MustParseAddr("fd10:77::1")}); r.String() != "10.77.0.1-fd10:77::1" {
+		t.Errorf("a range across families is no network: %s", r)
+	}
+}
+
+func TestMergeRanges(t *testing.T) {
+	var in []AddrRange
+	for _, s := range []string{"fd10:77::5", "10.77.0.4-10.77.0.9", "10.77.0.1-10.77.0.3", "fd10:77::1-fd10:77::4", "10.77.0.20",
+		"255.255.255.255", "::", "10.77.0.2"} {
+		r, err := AddrEntry("e", s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		in = append(in, r)
+	}
+	var got []string
+	for _, r := range MergeRanges(in) {
+		got = append(got, r.String())
+	}
+	// Touching ranges join; IPv4's last address and IPv6's first never do.
+	if want := "10.77.0.1-10.77.0.9 10.77.0.20 255.255.255.255 :: fd10:77::1-fd10:77::5"; strings.Join(got, " ") != want {
+		t.Fatalf("MergeRanges = %v, want %s", got, want)
+	}
+	if MergeRanges(nil) != nil {
+		t.Fatal("nothing merged is nil")
+	}
+	merged := MergeRanges(in)
+	for addr, want := range map[string]bool{"10.77.0.5": true, "10.77.0.10": false, "fd10:77::3": true, "fd10:77::6": false, "::": true} {
+		if RangesContain(merged, netip.MustParseAddr(addr)) != want {
+			t.Errorf("RangesContain(%s) != %v", addr, want)
+		}
 	}
 }
 
@@ -109,8 +155,10 @@ func TestRef(t *testing.T) {
 	if kind != "group" || name != "laptops" || !ok || err != nil {
 		t.Fatalf("Ref = %q %q %v %v", kind, name, ok, err)
 	}
-	if _, _, ok, err := Ref("r", "10.77.1.5", "group"); ok || err != nil {
-		t.Fatalf("a literal is not a reference: %v %v", ok, err)
+	for _, literal := range []string{"10.77.1.5", "fd10:77::1", "fd10:77::/64", "::1-::5", "fd10::zz"} {
+		if _, _, ok, err := Ref("r", literal, "group"); ok || err != nil {
+			t.Fatalf("Ref(%q): a literal is not a reference: %v %v", literal, ok, err)
+		}
 	}
 	for in, reason := range map[string]string{
 		"zone:office":   "kind one of group, node", // a kind this field does not take

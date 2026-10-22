@@ -41,7 +41,7 @@ Admin socket (`<data>/admin.sock`, mode 0600, so only the server's own user reac
 | `PUT /admin/v1/segmentation` | replace the whole document; checked against the mesh like every change (`meshctl firewall apply`) |
 | `GET /admin/v1/ipv6` | the mesh's IPv6 prefix (empty for none) and how many nodes have an IPv6 mesh address (`meshctl ipv6`, amendment A46) |
 | `PUT /admin/v1/ipv6` | `{"prefix": "<IPv6 /48 to /64>\|auto\|off"}`: a prefix gives every node whose `ip_family` allows IPv6 an address in its role's block; `auto` keeps the prefix there is or draws a random unique local /64; `off` (or empty) takes every IPv6 mesh address and container /112 away, refused while a node is IPv6 only; a prefix that holds addresses is not swapped for another (`meshctl ipv6 <prefix>\|auto\|off`) |
-| `GET /admin/v1/segmentation/check` | what the policy does with one flow: `?from=<node or IPv4>&to=<node or IPv4>&service=tcp/PORT\|udp/PORT\|icmp[&at=<RFC 3339>]` (default now); the answer names the rule that decided and the scheduled rules not in force then (`meshctl firewall check`) |
+| `GET /admin/v1/segmentation/check` | what the policy does with one flow: `?from=<node or address>&to=<node or address>&service=tcp/PORT\|udp/PORT\|icmp[&at=<RFC 3339>]` (default now; two nodes meet over IPv4 when both have it, else IPv6); the answer names the rule that decided and the scheduled rules not in force then (`meshctl firewall check`) |
 
 Every admin write goes through the reconciler (below) with actor `cli` and is audited. Join
 tokens appear only in the answer to add and token, never in the audit log or the server log.
@@ -298,7 +298,7 @@ The agent applies a config in fixed steps, each comparing desired with observed 
 | 5 | routes: every AllowedIP of both families except 0.0.0.0/0 and ::/0, protocol 201 | fatal |
 | 6 | exit mode: policy rules and table 51820 (below), or their removal; on Windows split default routes and a bound socket (amendment A35) | fatal |
 | 7 | sysctls (relay and exit servers, container networks); before IPv6 forwarding, every interface taking router advertisements (`accept_ra` 1) moves to `accept_ra` 2, so it keeps its IPv6 default route | fatal |
-| 8 | the mesh firewall (servers, amendment A43, below): the `policy` as the table `ip meshctl`, before step 9 lets the mesh through the mesh zone | fatal; a config without a policy removes the table after step 9, and keeps it while step 9 fails (degraded `policy` when the removal fails) |
+| 8 | the mesh firewall (servers, amendment A43, below): the `policy` as the table `inet meshctl`, before step 9 lets the mesh through the mesh zone | fatal; a config without a policy removes the table after step 9, and keeps it while step 9 fails (degraded `policy` when the removal fails) |
 | 9 | firewall (servers, firewalld; an unzoned containers' bridge goes into the mesh zone) | degraded; the tunnel stays up |
 | 10 | containers (amendment A37, below) | degraded; the tunnel stays up |
 | 11 | DNS: the resolver on the mesh IP and the containers' gateway, then the host's registration (systemd-resolved; NRPT on Windows) | degraded; the tunnel stays up |
@@ -315,7 +315,8 @@ agent holds its local API socket and before the server is contacted. A config th
 minutes pass.
 
 **The mesh firewall** (step 8, `internal/agent/policy`). A server compiles its `policy` into one
-nftables table of its own, `table ip meshctl`, in its own network namespace (the host's, or a
+nftables table of its own, `table inet meshctl` (both families, M8; an agent's older `table ip
+meshctl` is deleted in the same transaction), in its own network namespace (the host's, or a
 container-mode server's): base chains on forward, input and output accept established and related
 traffic, the node's own traffic (loopback, its containers' subnet) and anything with an end
 outside the mesh, and jump to `mesh_forward` (matched on both addresses), `mesh_input` (on the
@@ -326,7 +327,11 @@ first rule's comment, `meshctl policy <fingerprint>`, by which the agent sees wh
 holds the table it installed. A different table is replaced whole in one transaction, and the
 connection tracking of flows between two mesh addresses is then deleted, so open connections
 are judged by the new policy at their next packet. The step runs at every apply and every drift
-check; an unchanged table costs one read. `nft list table ip meshctl` shows it. A policy with
+check; an unchanged table costs one read. `nft list table inet meshctl` shows it. With the mesh's IPv6 prefix
+(`policy.mesh6`), a policy rule becomes one rule per family it names -- `meta nfproto ipv4` with `ip
+saddr`/`ip daddr`, `meta nfproto ipv6` with `ip6 saddr`/`ip6 daddr` -- and ping is ICMP echo or
+ICMPv6 echo; a rule that names only one family's addresses has no rule in the other, and the
+connection tracking deleted on a change is both families'. A policy with
 schedules (amendment A44) is compiled for the time of the apply, leaving out the rules whose
 window does not hold, and the agent applies the config again when the next window starts or ends:
 a timer on that edge, with the drift check as the net when the clock is set or a

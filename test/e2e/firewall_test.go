@@ -44,9 +44,9 @@ func (l *lab) waitOrDump(within time.Duration, what, space string, cond func() b
 			return
 		}
 	}
-	table, _ := exec.Command("ip", "netns", "exec", ns(space), "nft", "-a", "list", "table", "ip", "meshctl").CombinedOutput()
+	table, _ := exec.Command("ip", "netns", "exec", ns(space), "nft", "-a", "list", "table", "inet", "meshctl").CombinedOutput()
 	tables, _ := exec.Command("ip", "netns", "exec", ns(space), "nft", "list", "tables").CombinedOutput()
-	l.t.Fatalf("not within %s: %s\n--- %s: nft list table ip meshctl ---\n%s\n--- nft list tables ---\n%s", within, what, space, table, tables)
+	l.t.Fatalf("not within %s: %s\n--- %s: nft list table inet meshctl ---\n%s\n--- nft list tables ---\n%s", within, what, space, table, tables)
 }
 
 func (l *lab) applyFirewall(doc string) {
@@ -77,7 +77,7 @@ func TestMeshFirewall(t *testing.T) {
 		return l.ping(laptop.ns, nas.meshIP) && l.ping(nas.ns, laptop.meshIP)
 	})
 	for _, n := range nodes {
-		if out := l.sh("ip", "netns", "exec", ns(n.ns), "nft", "list", "table", "ip", "meshctl"); !strings.Contains(out, `comment "meshctl policy `) {
+		if out := l.sh("ip", "netns", "exec", ns(n.ns), "nft", "list", "table", "inet", "meshctl"); !strings.Contains(out, `comment "meshctl policy `) {
 			t.Fatalf("%s holds no mesh firewall table:\n%s", n.name, out)
 		}
 	}

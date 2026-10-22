@@ -24,7 +24,7 @@ import (
 func firewallCommands() []command {
 	return []command{
 		{name: "apply", args: "<file>", summary: "replace the mesh firewall with a YAML file, as `firewall show --yaml` writes it", setup: setupFirewallApply},
-		{name: "check", args: "<from> <to> <service>", summary: "say what the mesh firewall does with one flow, now or --at a time (from and to: nodes or IPv4 addresses; service: tcp/PORT, udp/PORT or icmp)", setup: setupFirewallCheck},
+		{name: "check", args: "<from> <to> <service>", summary: "say what the mesh firewall does with one flow, now or --at a time (from and to: nodes or addresses, IPv4 or IPv6; service: tcp/PORT, udp/PORT or icmp)", setup: setupFirewallCheck},
 		{name: "show", summary: "print the mesh firewall: policies, zones and the rules every server enforces", setup: setupFirewallShow},
 	}
 }

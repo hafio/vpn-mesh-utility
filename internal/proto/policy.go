@@ -18,8 +18,9 @@ import (
 // traffic and is never filtered here. A rule with a Schedule takes part only
 // while its window holds, on the wall clock of TZ.
 type Policy struct {
-	// Mesh is the mesh CIDR.
+	// Mesh is the mesh CIDR; Mesh6 its IPv6 prefix, when it has one (M8).
 	Mesh  string       `json:"mesh"`
+	Mesh6 string       `json:"mesh6,omitempty"`
 	Rules []PolicyRule `json:"rules"`
 	// TZ is the IANA time zone the schedules are read in; set when a rule
 	// has one.
@@ -39,8 +40,8 @@ type PolicyRule struct {
 	// Name says where the rule comes from ("system: ping", "policy: web",
 	// "zone: office"). Display only; it never reaches the kernel.
 	Name string `json:"name"`
-	// From and To are addresses, networks and ranges in validate.AddrEntry's
-	// canonical form, sorted and merged.
+	// From and To are addresses, networks and ranges of either family in
+	// validate.AddrEntry's canonical form, sorted and merged.
 	From     []string  `json:"from,omitempty"`
 	To       []string  `json:"to,omitempty"`
 	Services []Service `json:"services,omitempty"`
@@ -89,9 +90,9 @@ const (
 
 // Matcher is a parsed Policy.
 type Matcher struct {
-	mesh  netip.Prefix
-	loc   *time.Location // where the schedules are read; nil without TZ
-	rules []matchRule
+	mesh, mesh6 netip.Prefix   // mesh6 invalid without IPv6
+	loc         *time.Location // where the schedules are read; nil without TZ
+	rules       []matchRule
 }
 
 type matchRule struct {
@@ -112,6 +113,10 @@ func (p Policy) Matcher() (*Matcher, error) {
 		errs = append(errs, fmt.Errorf("policy.rules: %d rules, at most %d", len(p.Rules), MaxPolicyRules))
 	}
 	m := &Matcher{mesh: mesh}
+	if p.Mesh6 != "" {
+		m.mesh6, err = validate.Prefix6("policy.mesh6", p.Mesh6)
+		errs = append(errs, err)
+	}
 	if p.TZ != "" {
 		m.loc, err = validate.TimeZone("policy.tz", p.TZ)
 		errs = append(errs, err)
@@ -126,8 +131,8 @@ func (p Policy) Matcher() (*Matcher, error) {
 			errs = append(errs, err)
 		}
 		var ferr, terr error
-		mr.from, ferr = parseAddrs(field+".from", r.From, mesh)
-		mr.to, terr = parseAddrs(field+".to", r.To, mesh)
+		mr.from, ferr = m.parseAddrs(field+".from", r.From)
+		mr.to, terr = m.parseAddrs(field+".to", r.To)
 		errs = append(errs, ferr, terr)
 		if r.Schedule != nil {
 			w, err := r.Schedule.window(field + ".schedule")
@@ -162,7 +167,9 @@ func (p Policy) Matcher() (*Matcher, error) {
 	return m, nil
 }
 
-func parseAddrs(field string, in []string, mesh netip.Prefix) ([]validate.AddrRange, error) {
+// parseAddrs reads a rule side; each entry must be inside the mesh of its
+// family.
+func (m *Matcher) parseAddrs(field string, in []string) ([]validate.AddrRange, error) {
 	if len(in) > MaxPolicyEntries {
 		return nil, fmt.Errorf("%s: %d entries, at most %d", field, len(in), MaxPolicyEntries)
 	}
@@ -172,7 +179,15 @@ func parseAddrs(field string, in []string, mesh netip.Prefix) ([]validate.AddrRa
 	)
 	for i, s := range in {
 		r, err := validate.AddrEntry(fmt.Sprintf("%s[%d]", field, i), s)
-		if err == nil && mesh.IsValid() && (!mesh.Contains(r.First) || !mesh.Contains(r.Last)) {
+		mesh := m.mesh
+		if r.First.Is6() {
+			mesh = m.mesh6
+		}
+		switch {
+		case err != nil:
+		case r.First.Is6() && !mesh.IsValid():
+			err = fmt.Errorf("%s[%d]: %s is IPv6, and the mesh has no IPv6 prefix", field, i, s)
+		case m.mesh.IsValid() && (!mesh.Contains(r.First) || !mesh.Contains(r.Last)):
 			err = fmt.Errorf("%s[%d]: %s is outside the mesh %s", field, i, s, mesh)
 		}
 		errs = append(errs, err)
@@ -183,10 +198,13 @@ func parseAddrs(field string, in []string, mesh netip.Prefix) ([]validate.AddrRa
 
 // Decide is the verdict for one packet sent at at: the index of the first
 // rule that applies then and matches it, or RuleDefault (dropped), or
-// RuleNotMesh (not mesh traffic, so not filtered). proto is
-// validate.ServiceTCP, ServiceUDP or ServiceICMP; port is ignored for icmp.
+// RuleNotMesh (not mesh traffic, so not filtered). Mesh traffic has both
+// ends in the mesh, or both in its IPv6 prefix. proto is
+// validate.ServiceTCP, ServiceUDP or ServiceICMP (ping, of either family);
+// port is ignored for icmp.
 func (m *Matcher) Decide(src, dst netip.Addr, proto string, port int, at time.Time) (allow bool, rule int) {
-	if !m.mesh.Contains(src) || !m.mesh.Contains(dst) {
+	in := func(p netip.Prefix) bool { return p.IsValid() && p.Contains(src) && p.Contains(dst) }
+	if !in(m.mesh) && !in(m.mesh6) {
 		return true, RuleNotMesh
 	}
 	for i, r := range m.rules {
@@ -245,15 +263,7 @@ func (m *Matcher) Next(at time.Time) time.Time {
 }
 
 func inRanges(rs []validate.AddrRange, a netip.Addr) bool {
-	if rs == nil {
-		return true
-	}
-	for _, r := range rs {
-		if !a.Less(r.First) && !r.Last.Less(a) {
-			return true
-		}
-	}
-	return false
+	return rs == nil || validate.RangesContain(rs, a)
 }
 
 func serves(ss []validate.Service, proto string, port int) bool {

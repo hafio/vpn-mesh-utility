@@ -704,9 +704,6 @@ func TestCheckRejectsIPv6(t *testing.T) {
 		{"ipv4 node with IPv6", func(in *Input) { in.Nodes[3].Family = proto.FamilyIPv4 }, "nas", "IPv4-only"},
 		{"ipv6 node with IPv4", func(in *Input) { in.Nodes[3].Family = proto.FamilyIPv6 }, "nas", "IPv6-only"},
 		{"unknown family", func(in *Input) { in.Nodes[3].Family = "both" }, "nas", "unknown ip_family"},
-		{"server without IPv4", func(in *Input) {
-			in.Nodes[0].MeshIP, in.Nodes[0].Family = netip.Addr{}, proto.FamilyIPv6
-		}, "vps-1", "a server needs an IPv4 mesh address"},
 		{"no address at all", func(in *Input) { in.Nodes[4].MeshIP, in.Nodes[4].MeshIP6 = netip.Addr{}, netip.Addr{} }, "laptop", "no mesh address"},
 		{"endpoint6 on a spoke", func(in *Input) { in.Nodes[3].Endpoint6 = netip.MustParseAddrPort("[2001:db8::9]:51820") }, "nas", "only servers"},
 		{"container subnet6 size", func(in *Input) { in.Nodes[3].Containers6 = netip.MustParsePrefix("fd10:77::8000:0/111") }, "nas", "IPv6 /112"},
@@ -747,13 +744,13 @@ func TestReportedHostFamilies(t *testing.T) {
 	in.Nodes = append([]Node(nil), in.Nodes...)
 	in.Nodes[3].NoIPv6 = true // nas
 	in.Nodes[4].NoIPv4 = true // laptop
-	in.Nodes[0].NoIPv4 = true // vps-1, a server, keeps IPv4
+	in.Nodes[0].NoIPv4 = true // vps-1, a server, goes IPv6 only
 	out, problems, err := Compute(in)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for node, want := range map[string]string{"nas": "cannot use IPv6; the mesh leaves IPv6 out", "laptop": "cannot use IPv4; the mesh leaves IPv4 out",
-		"vps-1": "planned as configured"} {
+		"vps-1": "cannot use IPv4; the mesh leaves IPv4 out"} {
 		if !hasProblem(problems, node, want, true) {
 			t.Errorf("no warning %q for %s: %v", want, node, problems)
 		}
@@ -768,13 +765,13 @@ func TestReportedHostFamilies(t *testing.T) {
 	if laptop.Interface.Address != "" || laptop.Interface.Address6 != testfix.Laptop.MeshIP6+"/128" {
 		t.Errorf("laptop without IPv4: %+v", laptop.Interface)
 	}
-	if vps1.Interface.Address != testfix.VPS1.MeshIP+"/32" || vps1.Interface.Address6 != testfix.VPS1.MeshIP6+"/128" {
-		t.Errorf("vps-1 as configured: %+v", vps1.Interface)
+	if vps1.Interface.Address != "" || vps1.Interface.Address6 != testfix.VPS1.MeshIP6+"/128" {
+		t.Errorf("vps-1 without IPv4: %+v", vps1.Interface)
 	}
 	for id, c := range out {
 		for _, p := range c.Peers {
 			for _, a := range p.AllowedIPs {
-				if a == testfix.NAS.MeshIP6+"/128" || a == testfix.ContainerSubnet6 || a == testfix.Laptop.MeshIP+"/32" {
+				if a == testfix.NAS.MeshIP6+"/128" || a == testfix.ContainerSubnet6 || a == testfix.Laptop.MeshIP+"/32" || a == testfix.VPS1.MeshIP+"/32" {
 					t.Errorf("node %d routes %s to %s", id, a, p.Name)
 				}
 			}

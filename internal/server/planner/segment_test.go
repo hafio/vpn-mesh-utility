@@ -2,6 +2,7 @@ package planner
 
 import (
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -62,6 +63,49 @@ func TestPolicyCompiles(t *testing.T) {
 	}
 	if !hasProblem(Check(topology("servers")), "", "no policy or zone allows any traffic", true) {
 		t.Fatal("no warning for a mesh that denies everything")
+	}
+}
+
+// Dual stack (M8): references resolve to both families' addresses, the
+// policy names the IPv6 prefix, IPv6 literals are clipped to it, and every
+// server with IPv6 lets the mesh's IPv6 into its mesh zone.
+func TestPolicyCompilesDualStack(t *testing.T) {
+	in := topology("dual")
+	in.Segmentation = meshFirewall()
+	in.Segmentation.Addresses["printer"] = append(in.Segmentation.Addresses["printer"], "fd10:77::1:200", "fd99::1")
+	pol := CompilePolicy(in)
+	if _, err := pol.Matcher(); err != nil || pol.Mesh6 != testfix.MeshCIDR6 {
+		t.Fatalf("policy mesh6 %q: %v", pol.Mesh6, err)
+	}
+	byName := map[string]proto.PolicyRule{}
+	for _, r := range pol.Rules {
+		byName[r.Name] = r
+	}
+	servers := []string{"10.77.0.1-10.77.0.3", "fd10:77::1-fd10:77::3"}
+	home := []string{testfix.NAS.MeshIP, "10.77.1.200", testfix.NAS.MeshIP6, "fd10:77::1:200"}
+	for name, c := range map[string]struct{ from, to []string }{
+		"system: dns":        {nil, servers},
+		"policy: laptop-smb": {[]string{testfix.Laptop.MeshIP, testfix.Laptop.MeshIP6}, home},
+		"zone: home":         {home, home},
+	} {
+		if r := byName[name]; !reflect.DeepEqual(r.From, c.from) || !reflect.DeepEqual(r.To, c.to) {
+			t.Errorf("%s: from %v to %v, want %v to %v", name, r.From, r.To, c.from, c.to)
+		}
+	}
+	if !hasProblem(Check(in), "", "fd99::1 is outside the mesh's IPv6 prefix", true) {
+		t.Errorf("no warning for an IPv6 literal outside the prefix: %v", Check(in))
+	}
+	vps1 := mustCompute(t, in)[testfix.VPS1.ID]
+	accept6 := proto.FWRule{Zone: proto.ZoneMesh, Proto: proto.ProtoAll, Source: testfix.MeshCIDR6, Note: "segmentation: the policy decides"}
+	if vps1.Firewall == nil || !slices.Contains(vps1.Firewall.Rules, accept6) || vps1.Policy == nil || vps1.Policy.Mesh6 != testfix.MeshCIDR6 {
+		t.Errorf("vps-1's firewall %+v, policy mesh6 %v", vps1.Firewall, vps1.Policy)
+	}
+	// An IPv6 literal in a mesh without IPv6 matches nothing, and says so.
+	v4 := topology("full")
+	v4.Segmentation = meshFirewall()
+	v4.Segmentation.Addresses["printer"] = append(v4.Segmentation.Addresses["printer"], "fd10:77::1:200")
+	if !hasProblem(Check(v4), "", "the mesh has no IPv6 prefix", true) || CompilePolicy(v4).Mesh6 != "" {
+		t.Errorf("an IPv6 literal without IPv6: %v", Check(v4))
 	}
 }
 

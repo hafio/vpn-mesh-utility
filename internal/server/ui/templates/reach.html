@@ -4,8 +4,8 @@
 {{- with .View}}
 <h2>Check a flow</h2>
 <form method="get" action="/firewall/reach" class="grid">
-<label>From <input name="from" value="{{.From}}" list="fw-nodes" placeholder="node or IPv4" required></label>
-<label>To <input name="to" value="{{.To}}" list="fw-nodes" placeholder="node or IPv4" required></label>
+<label>From <input name="from" value="{{.From}}" list="fw-nodes" placeholder="node or address" required></label>
+<label>To <input name="to" value="{{.To}}" list="fw-nodes" placeholder="node or address" required></label>
 <label>Service <input name="service" value="{{.Service}}" placeholder="tcp/22, udp/53 or icmp" required></label>
 <label>At <input name="at" value="{{.At}}" placeholder="now, or 2026-10-23T09:30:00+08:00"></label>
 <button type="submit">Check</button>

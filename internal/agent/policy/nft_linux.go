@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"slices"
 	"strings"
 
 	"github.com/google/nftables"
@@ -14,6 +15,8 @@ import (
 	"github.com/google/nftables/userdata"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
+
+	"github.com/hafio/vpn-mesh-utility/internal/validate"
 )
 
 // NewKernel is the kernel of the agent's own network namespace: the host's
@@ -30,7 +33,11 @@ const markPrefix = "meshctl policy "
 // unmarked is what Installed reports for a table without our mark.
 const unmarked = "unmarked"
 
-var nftTable = &nftables.Table{Family: nftables.TableFamilyIPv4, Name: TableName}
+var nftTable = &nftables.Table{Family: nftables.TableFamilyINet, Name: TableName}
+
+// legacyTable is the table agents before dual stack (M8) kept, in the ip
+// family: it goes when the inet one comes, so no stale policy filters on.
+var legacyTable = &nftables.Table{Family: nftables.TableFamilyIPv4, Name: TableName}
 
 func conn() (*nftables.Conn, error) {
 	c, err := nftables.New()
@@ -45,13 +52,16 @@ func (nftKernel) Installed() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	tables, err := c.ListTablesOfFamily(nftables.TableFamilyIPv4)
+	tables, err := c.ListTablesOfFamily(nftables.TableFamilyINet)
 	if err != nil {
 		return "", fmt.Errorf("list the nftables tables: %w (the agent needs CAP_NET_ADMIN)", err)
 	}
 	found := false
 	for _, t := range tables {
 		found = found || t.Name == TableName
+	}
+	if hasLegacy(c) {
+		return unmarked, nil // replaced, the legacy table with it
 	}
 	if !found {
 		return "", nil
@@ -74,6 +84,9 @@ func (nftKernel) Replace(rs *Ruleset, fingerprint string) error {
 		return err
 	}
 	b := build(rs, fingerprint)
+	if hasLegacy(c) {
+		c.DelTable(legacyTable)
+	}
 	c.AddTable(b.table)
 	c.FlushTable(b.table)
 	for _, ch := range b.chains {
@@ -99,15 +112,37 @@ func (nftKernel) Remove() error {
 	if err != nil {
 		return err
 	}
-	c.DelTable(nftTable)
+	// Only a table that is there can be deleted in a batch; when the
+	// listing fails, the commit says why.
+	inet, legacy := true, hasLegacy(c)
+	if tables, err := c.ListTablesOfFamily(nftables.TableFamilyINet); err == nil {
+		inet = slices.ContainsFunc(tables, func(t *nftables.Table) bool { return t.Name == TableName })
+	}
+	if inet || !legacy {
+		c.DelTable(nftTable)
+	}
+	if legacy {
+		c.DelTable(legacyTable)
+	}
 	if err := c.Flush(); err != nil {
 		return fmt.Errorf("delete the table %s: %w", TableName, err)
 	}
 	return nil
 }
 
+// hasLegacy reports whether the ip family holds the agent's old table; a
+// listing that fails says no, and the commit that follows fails for itself.
+func hasLegacy(c *nftables.Conn) bool {
+	tables, err := c.ListTablesOfFamily(nftables.TableFamilyIPv4)
+	return err == nil && slices.ContainsFunc(tables, func(t *nftables.Table) bool { return t.Name == TableName })
+}
+
 func (nftKernel) Forget(mesh netip.Prefix) (int, error) {
-	ipnet := &net.IPNet{IP: mesh.Masked().Addr().AsSlice(), Mask: net.CIDRMask(mesh.Bits(), 32)}
+	bits, family := mesh.Addr().BitLen(), uint8(unix.AF_INET)
+	if mesh.Addr().Is6() {
+		family = unix.AF_INET6
+	}
+	ipnet := &net.IPNet{IP: mesh.Masked().Addr().AsSlice(), Mask: net.CIDRMask(mesh.Bits(), bits)}
 	f := &netlink.ConntrackFilter{}
 	if err := f.AddIPNet(netlink.ConntrackOrigSrcIP, ipnet); err != nil {
 		return 0, fmt.Errorf("conntrack filter on %s: %w", mesh, err)
@@ -115,7 +150,7 @@ func (nftKernel) Forget(mesh netip.Prefix) (int, error) {
 	if err := f.AddIPNet(netlink.ConntrackOrigDstIP, ipnet); err != nil {
 		return 0, fmt.Errorf("conntrack filter on %s: %w", mesh, err)
 	}
-	n, err := netlink.ConntrackDeleteFilters(netlink.ConntrackTable, unix.AF_INET, f)
+	n, err := netlink.ConntrackDeleteFilters(netlink.ConntrackTable, netlink.InetFamily(family), f)
 	if err != nil {
 		return int(n), fmt.Errorf("delete the conntrack entries of %s: %w", mesh, err)
 	}
@@ -142,10 +177,16 @@ var nftHooks = map[string]*nftables.ChainHook{
 	HookOutput:  nftables.ChainHookOutput,
 }
 
-var nftProtos = map[string]byte{"tcp": unix.IPPROTO_TCP, "udp": unix.IPPROTO_UDP, "icmp": unix.IPPROTO_ICMP}
+var nftProtos = map[string]byte{"tcp": unix.IPPROTO_TCP, "udp": unix.IPPROTO_UDP, "icmp": unix.IPPROTO_ICMP, ICMPv6: unix.IPPROTO_ICMPV6}
 
-// icmpEchoRequest is ICMP type 8.
-const icmpEchoRequest = 8
+// The echo request (ping): ICMP type 8, ICMPv6 type 128.
+const (
+	icmpEchoRequest   = 8
+	icmpv6EchoRequest = 128
+)
+
+// nfprotos are the families as meta nfproto compares them.
+var nfprotos = map[int]byte{IPv4: unix.NFPROTO_IPV4, IPv6: unix.NFPROTO_IPV6}
 
 // build turns rs into the batch Replace sends: the table, its chains (the
 // base ones accepting what no rule decides), then each rule with its
@@ -209,15 +250,23 @@ func exprs(r Rule, set func(nftables.SetDatatype, []nftables.SetElement) *nftabl
 				Xor: binaryutil.NativeEndian.PutUint32(0)},
 			&expr.Cmp{Op: expr.CmpOpNeq, Register: 1, Data: []byte{0, 0, 0, 0}})
 	}
+	if r.Family != Both {
+		x = append(x, &expr.Meta{Key: expr.MetaKeyNFPROTO, Register: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{nfprotos[r.Family]}})
+	}
+	// The source and destination in the IPv4 header, or the IPv6 one.
+	src, dst, size, key := uint32(12), uint32(16), uint32(4), nftables.TypeIPAddr
+	if r.Family == IPv6 {
+		src, dst, size, key = 8, 24, 16, nftables.TypeIP6Addr
+	}
 	for _, side := range []struct {
 		offset uint32
-		ranges []Range
-	}{{12, r.Src}, {16, r.Dst}} { // the IPv4 header's source and destination
+		ranges []validate.AddrRange
+	}{{src, r.Src}, {dst, r.Dst}} {
 		if side.ranges == nil {
 			continue
 		}
-		s := set(nftables.TypeIPAddr, intervalElems(side.ranges, 4))
-		x = append(x, &expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: side.offset, Len: 4},
+		s := set(key, intervalAddrElems(side.ranges))
+		x = append(x, &expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: side.offset, Len: size},
 			&expr.Lookup{SourceRegister: 1, SetName: s.Name, SetID: s.ID})
 	}
 	if r.Proto != "" {
@@ -229,8 +278,12 @@ func exprs(r Rule, set func(nftables.SetDatatype, []nftables.SetElement) *nftabl
 			&expr.Lookup{SourceRegister: 1, SetName: s.Name, SetID: s.ID})
 	}
 	if r.Echo {
+		echo := byte(icmpEchoRequest)
+		if r.Proto == ICMPv6 {
+			echo = icmpv6EchoRequest
+		}
 		x = append(x, &expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 0, Len: 1},
-			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{icmpEchoRequest}})
+			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{echo}})
 	}
 	switch r.Verdict {
 	case Accept:
@@ -241,6 +294,29 @@ func exprs(r Rule, set func(nftables.SetDatatype, []nftables.SetElement) *nftabl
 		x = append(x, &expr.Verdict{Kind: expr.VerdictJump, Chain: r.Target})
 	}
 	return x
+}
+
+// intervalAddrElems are merged address ranges of one family as an
+// interval set's elements, as intervalElems lays them out.
+func intervalAddrElems(rs []validate.AddrRange) []nftables.SetElement {
+	if len(rs) == 0 {
+		return nil
+	}
+	zero := netip.IPv4Unspecified()
+	if rs[0].First.Is6() {
+		zero = netip.IPv6Unspecified()
+	}
+	var out []nftables.SetElement
+	if rs[0].First != zero {
+		out = append(out, nftables.SetElement{Key: zero.AsSlice(), IntervalEnd: true})
+	}
+	for _, r := range rs {
+		out = append(out, nftables.SetElement{Key: r.First.AsSlice()})
+		if next := r.Last.Next(); next.IsValid() {
+			out = append(out, nftables.SetElement{Key: next.AsSlice(), IntervalEnd: true})
+		}
+	}
+	return out
 }
 
 // intervalElems are merged ranges as an interval set's elements, as nft

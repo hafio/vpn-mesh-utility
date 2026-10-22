@@ -1,84 +1,150 @@
-table ip meshctl
+table inet meshctl
 chain forward hook forward priority filter policy accept
   ct state established,related accept  # replies and errors of accepted flows
-  ip saddr { 10.77.0.0/16 } ip daddr { 10.77.0.0/16 } jump mesh_forward  # mesh traffic
+  meta nfproto ipv4 ip saddr { 10.77.0.0/16 } ip daddr { 10.77.0.0/16 } jump mesh_forward  # mesh traffic
 chain input hook input priority filter policy accept
   iifname "lo" accept  # the node itself
   ct state established,related accept  # replies and errors of accepted flows
-  ip saddr { 10.77.0.0/16 } jump mesh_input  # mesh traffic
+  meta nfproto ipv4 ip saddr { 10.77.0.0/16 } jump mesh_input  # mesh traffic
 chain output hook output priority filter policy accept
   oifname "lo" accept  # the node itself
   ct state established,related accept  # replies and errors of accepted flows
-  ip daddr { 10.77.0.0/16 } jump mesh_output  # mesh traffic
+  meta nfproto ipv4 ip daddr { 10.77.0.0/16 } jump mesh_output  # mesh traffic
 chain mesh_forward
   ct state invalid drop  # not part of any flow
-  meta l4proto icmp icmp type echo-request accept  # system: ping
-  ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto tcp th dport { 53 } accept  # system: dns
-  ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto udp th dport { 53 } accept  # system: dns
-  ip saddr { 10.77.0.1-10.77.0.3 } ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto tcp th dport { 2377, 7946 } accept  # system: swarm
-  ip saddr { 10.77.0.1-10.77.0.3 } ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto udp th dport { 4789, 7946 } accept  # system: swarm
-  ip saddr { 10.77.2.1 } ip daddr { 10.77.1.1 } meta l4proto tcp th dport { 445 } accept  # policy: laptop-smb
-  ip saddr { 10.77.2.1 } ip daddr { 10.77.0.1-10.77.0.3 } drop  # policy: laptop-servers
-  ip saddr { 10.77.1.1, 10.77.2.1 } ip daddr { 10.77.1.1, 10.77.2.1 } accept  # zone: spokes
+  meta nfproto ipv4 meta l4proto icmp icmp type echo-request accept  # system: ping
+  meta nfproto ipv4 ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto tcp th dport { 53 } accept  # system: dns
+  meta nfproto ipv4 ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto udp th dport { 53 } accept  # system: dns
+  meta nfproto ipv4 ip saddr { 10.77.0.1-10.77.0.3 } ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto tcp th dport { 2377, 7946 } accept  # system: swarm
+  meta nfproto ipv4 ip saddr { 10.77.0.1-10.77.0.3 } ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto udp th dport { 4789, 7946 } accept  # system: swarm
+  meta nfproto ipv4 ip saddr { 10.77.2.1 } ip daddr { 10.77.1.1 } meta l4proto tcp th dport { 445 } accept  # policy: laptop-smb
+  meta nfproto ipv4 ip saddr { 10.77.2.1 } ip daddr { 10.77.0.1-10.77.0.3 } drop  # policy: laptop-servers
+  meta nfproto ipv4 ip saddr { 10.77.1.1, 10.77.2.1 } ip daddr { 10.77.1.1, 10.77.2.1 } accept  # zone: spokes
   drop  # no rule matched
 chain mesh_input
   ct state invalid drop  # not part of any flow
-  meta l4proto icmp icmp type echo-request accept  # system: ping
-  meta l4proto tcp th dport { 53 } accept  # system: dns
-  meta l4proto udp th dport { 53 } accept  # system: dns
-  ip saddr { 10.77.0.1-10.77.0.3 } meta l4proto tcp th dport { 2377, 7946 } accept  # system: swarm
-  ip saddr { 10.77.0.1-10.77.0.3 } meta l4proto udp th dport { 4789, 7946 } accept  # system: swarm
-  ip saddr { 10.77.2.1 } drop  # policy: laptop-servers
+  meta nfproto ipv4 meta l4proto icmp icmp type echo-request accept  # system: ping
+  meta nfproto ipv4 meta l4proto tcp th dport { 53 } accept  # system: dns
+  meta nfproto ipv4 meta l4proto udp th dport { 53 } accept  # system: dns
+  meta nfproto ipv4 ip saddr { 10.77.0.1-10.77.0.3 } meta l4proto tcp th dport { 2377, 7946 } accept  # system: swarm
+  meta nfproto ipv4 ip saddr { 10.77.0.1-10.77.0.3 } meta l4proto udp th dport { 4789, 7946 } accept  # system: swarm
+  meta nfproto ipv4 ip saddr { 10.77.2.1 } drop  # policy: laptop-servers
   drop  # no rule matched
 chain mesh_output
   ct state invalid drop  # not part of any flow
-  meta l4proto icmp icmp type echo-request accept  # system: ping
-  ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto tcp th dport { 53 } accept  # system: dns
-  ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto udp th dport { 53 } accept  # system: dns
-  ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto tcp th dport { 2377, 7946 } accept  # system: swarm
-  ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto udp th dport { 4789, 7946 } accept  # system: swarm
+  meta nfproto ipv4 meta l4proto icmp icmp type echo-request accept  # system: ping
+  meta nfproto ipv4 ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto tcp th dport { 53 } accept  # system: dns
+  meta nfproto ipv4 ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto udp th dport { 53 } accept  # system: dns
+  meta nfproto ipv4 ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto tcp th dport { 2377, 7946 } accept  # system: swarm
+  meta nfproto ipv4 ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto udp th dport { 4789, 7946 } accept  # system: swarm
   drop  # no rule matched
 
-table ip meshctl
+table inet meshctl
 chain forward hook forward priority filter policy accept
   ct state established,related accept  # replies and errors of accepted flows
-  ip saddr { 10.77.128.0/24 } ip daddr { 10.77.128.0/24 } accept  # within the node's containers
-  ip saddr { 10.77.0.0/16 } ip daddr { 10.77.0.0/16 } jump mesh_forward  # mesh traffic
+  meta nfproto ipv4 ip saddr { 10.77.128.0/24 } ip daddr { 10.77.128.0/24 } accept  # within the node's containers
+  meta nfproto ipv4 ip saddr { 10.77.0.0/16 } ip daddr { 10.77.0.0/16 } jump mesh_forward  # mesh traffic
 chain input hook input priority filter policy accept
   iifname "lo" accept  # the node itself
   ct state established,related accept  # replies and errors of accepted flows
-  ip saddr { 10.77.128.0/24 } accept  # the node's containers
-  ip saddr { 10.77.0.0/16 } jump mesh_input  # mesh traffic
+  meta nfproto ipv4 ip saddr { 10.77.128.0/24 } accept  # the node's containers
+  meta nfproto ipv4 ip saddr { 10.77.0.0/16 } jump mesh_input  # mesh traffic
 chain output hook output priority filter policy accept
   oifname "lo" accept  # the node itself
   ct state established,related accept  # replies and errors of accepted flows
-  ip daddr { 10.77.128.0/24 } accept  # the node's containers
-  ip daddr { 10.77.0.0/16 } jump mesh_output  # mesh traffic
+  meta nfproto ipv4 ip daddr { 10.77.128.0/24 } accept  # the node's containers
+  meta nfproto ipv4 ip daddr { 10.77.0.0/16 } jump mesh_output  # mesh traffic
 chain mesh_forward
   ct state invalid drop  # not part of any flow
-  meta l4proto icmp icmp type echo-request accept  # system: ping
-  ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto tcp th dport { 53 } accept  # system: dns
-  ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto udp th dport { 53 } accept  # system: dns
-  ip saddr { 10.77.0.1-10.77.0.3 } ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto tcp th dport { 2377, 7946 } accept  # system: swarm
-  ip saddr { 10.77.0.1-10.77.0.3 } ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto udp th dport { 4789, 7946 } accept  # system: swarm
-  ip saddr { 10.77.2.1 } ip daddr { 10.77.1.1 } meta l4proto tcp th dport { 445 } accept  # policy: laptop-smb
-  ip saddr { 10.77.2.1 } ip daddr { 10.77.0.1-10.77.0.3 } drop  # policy: laptop-servers
-  ip saddr { 10.77.1.1, 10.77.2.1 } ip daddr { 10.77.1.1, 10.77.2.1 } accept  # zone: spokes
+  meta nfproto ipv4 meta l4proto icmp icmp type echo-request accept  # system: ping
+  meta nfproto ipv4 ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto tcp th dport { 53 } accept  # system: dns
+  meta nfproto ipv4 ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto udp th dport { 53 } accept  # system: dns
+  meta nfproto ipv4 ip saddr { 10.77.0.1-10.77.0.3 } ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto tcp th dport { 2377, 7946 } accept  # system: swarm
+  meta nfproto ipv4 ip saddr { 10.77.0.1-10.77.0.3 } ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto udp th dport { 4789, 7946 } accept  # system: swarm
+  meta nfproto ipv4 ip saddr { 10.77.2.1 } ip daddr { 10.77.1.1 } meta l4proto tcp th dport { 445 } accept  # policy: laptop-smb
+  meta nfproto ipv4 ip saddr { 10.77.2.1 } ip daddr { 10.77.0.1-10.77.0.3 } drop  # policy: laptop-servers
+  meta nfproto ipv4 ip saddr { 10.77.1.1, 10.77.2.1 } ip daddr { 10.77.1.1, 10.77.2.1 } accept  # zone: spokes
   drop  # no rule matched
 chain mesh_input
   ct state invalid drop  # not part of any flow
-  meta l4proto icmp icmp type echo-request accept  # system: ping
-  meta l4proto tcp th dport { 53 } accept  # system: dns
-  meta l4proto udp th dport { 53 } accept  # system: dns
-  ip saddr { 10.77.0.1-10.77.0.3 } meta l4proto tcp th dport { 2377, 7946 } accept  # system: swarm
-  ip saddr { 10.77.0.1-10.77.0.3 } meta l4proto udp th dport { 4789, 7946 } accept  # system: swarm
-  ip saddr { 10.77.2.1 } drop  # policy: laptop-servers
+  meta nfproto ipv4 meta l4proto icmp icmp type echo-request accept  # system: ping
+  meta nfproto ipv4 meta l4proto tcp th dport { 53 } accept  # system: dns
+  meta nfproto ipv4 meta l4proto udp th dport { 53 } accept  # system: dns
+  meta nfproto ipv4 ip saddr { 10.77.0.1-10.77.0.3 } meta l4proto tcp th dport { 2377, 7946 } accept  # system: swarm
+  meta nfproto ipv4 ip saddr { 10.77.0.1-10.77.0.3 } meta l4proto udp th dport { 4789, 7946 } accept  # system: swarm
+  meta nfproto ipv4 ip saddr { 10.77.2.1 } drop  # policy: laptop-servers
   drop  # no rule matched
 chain mesh_output
   ct state invalid drop  # not part of any flow
-  meta l4proto icmp icmp type echo-request accept  # system: ping
-  ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto tcp th dport { 53 } accept  # system: dns
-  ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto udp th dport { 53 } accept  # system: dns
-  ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto tcp th dport { 2377, 7946 } accept  # system: swarm
-  ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto udp th dport { 4789, 7946 } accept  # system: swarm
+  meta nfproto ipv4 meta l4proto icmp icmp type echo-request accept  # system: ping
+  meta nfproto ipv4 ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto tcp th dport { 53 } accept  # system: dns
+  meta nfproto ipv4 ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto udp th dport { 53 } accept  # system: dns
+  meta nfproto ipv4 ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto tcp th dport { 2377, 7946 } accept  # system: swarm
+  meta nfproto ipv4 ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto udp th dport { 4789, 7946 } accept  # system: swarm
+  drop  # no rule matched
+
+table inet meshctl
+chain forward hook forward priority filter policy accept
+  ct state established,related accept  # replies and errors of accepted flows
+  meta nfproto ipv4 ip saddr { 10.77.128.0/24 } ip daddr { 10.77.128.0/24 } accept  # within the node's containers
+  meta nfproto ipv4 ip saddr { 10.77.0.0/16 } ip daddr { 10.77.0.0/16 } jump mesh_forward  # mesh traffic
+  meta nfproto ipv6 ip6 saddr { fd10:77::8000:0/112 } ip6 daddr { fd10:77::8000:0/112 } accept  # within the node's containers
+  meta nfproto ipv6 ip6 saddr { fd10:77::/64 } ip6 daddr { fd10:77::/64 } jump mesh_forward  # mesh traffic
+chain input hook input priority filter policy accept
+  iifname "lo" accept  # the node itself
+  ct state established,related accept  # replies and errors of accepted flows
+  meta nfproto ipv4 ip saddr { 10.77.128.0/24 } accept  # the node's containers
+  meta nfproto ipv4 ip saddr { 10.77.0.0/16 } jump mesh_input  # mesh traffic
+  meta nfproto ipv6 ip6 saddr { fd10:77::8000:0/112 } accept  # the node's containers
+  meta nfproto ipv6 ip6 saddr { fd10:77::/64 } jump mesh_input  # mesh traffic
+chain output hook output priority filter policy accept
+  oifname "lo" accept  # the node itself
+  ct state established,related accept  # replies and errors of accepted flows
+  meta nfproto ipv4 ip daddr { 10.77.128.0/24 } accept  # the node's containers
+  meta nfproto ipv4 ip daddr { 10.77.0.0/16 } jump mesh_output  # mesh traffic
+  meta nfproto ipv6 ip6 daddr { fd10:77::8000:0/112 } accept  # the node's containers
+  meta nfproto ipv6 ip6 daddr { fd10:77::/64 } jump mesh_output  # mesh traffic
+chain mesh_forward
+  ct state invalid drop  # not part of any flow
+  meta nfproto ipv4 meta l4proto icmp icmp type echo-request accept  # system: ping
+  meta nfproto ipv6 meta l4proto ipv6-icmp icmpv6 type echo-request accept  # system: ping
+  meta nfproto ipv4 ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto tcp th dport { 53 } accept  # system: dns
+  meta nfproto ipv4 ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto udp th dport { 53 } accept  # system: dns
+  meta nfproto ipv6 ip6 daddr { fd10:77::1-fd10:77::3 } meta l4proto tcp th dport { 53 } accept  # system: dns
+  meta nfproto ipv6 ip6 daddr { fd10:77::1-fd10:77::3 } meta l4proto udp th dport { 53 } accept  # system: dns
+  meta nfproto ipv4 ip saddr { 10.77.0.1-10.77.0.3 } ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto tcp th dport { 2377, 7946 } accept  # system: swarm
+  meta nfproto ipv4 ip saddr { 10.77.0.1-10.77.0.3 } ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto udp th dport { 4789, 7946 } accept  # system: swarm
+  meta nfproto ipv6 ip6 saddr { fd10:77::1-fd10:77::3 } ip6 daddr { fd10:77::1-fd10:77::3 } meta l4proto tcp th dport { 2377, 7946 } accept  # system: swarm
+  meta nfproto ipv6 ip6 saddr { fd10:77::1-fd10:77::3 } ip6 daddr { fd10:77::1-fd10:77::3 } meta l4proto udp th dport { 4789, 7946 } accept  # system: swarm
+  meta nfproto ipv6 ip6 saddr { fd10:77::2:1 } ip6 daddr { fd10:77::1:1 } meta l4proto tcp th dport { 445 } accept  # policy: laptop-smb
+  meta nfproto ipv4 ip saddr { 10.77.2.1 } ip daddr { 10.77.0.1-10.77.0.3 } drop  # policy: laptop-servers
+  meta nfproto ipv4 ip saddr { 10.77.1.1, 10.77.2.1 } ip daddr { 10.77.1.1, 10.77.2.1 } accept  # zone: spokes
+  meta nfproto ipv6 ip6 saddr { fd10:77::1:1, fd10:77::2:1 } ip6 daddr { fd10:77::1:1, fd10:77::2:1 } accept  # zone: spokes
+  drop  # no rule matched
+chain mesh_input
+  ct state invalid drop  # not part of any flow
+  meta nfproto ipv4 meta l4proto icmp icmp type echo-request accept  # system: ping
+  meta nfproto ipv6 meta l4proto ipv6-icmp icmpv6 type echo-request accept  # system: ping
+  meta nfproto ipv4 meta l4proto tcp th dport { 53 } accept  # system: dns
+  meta nfproto ipv4 meta l4proto udp th dport { 53 } accept  # system: dns
+  meta nfproto ipv6 meta l4proto tcp th dport { 53 } accept  # system: dns
+  meta nfproto ipv6 meta l4proto udp th dport { 53 } accept  # system: dns
+  meta nfproto ipv4 ip saddr { 10.77.0.1-10.77.0.3 } meta l4proto tcp th dport { 2377, 7946 } accept  # system: swarm
+  meta nfproto ipv4 ip saddr { 10.77.0.1-10.77.0.3 } meta l4proto udp th dport { 4789, 7946 } accept  # system: swarm
+  meta nfproto ipv6 ip6 saddr { fd10:77::1-fd10:77::3 } meta l4proto tcp th dport { 2377, 7946 } accept  # system: swarm
+  meta nfproto ipv6 ip6 saddr { fd10:77::1-fd10:77::3 } meta l4proto udp th dport { 4789, 7946 } accept  # system: swarm
+  meta nfproto ipv4 ip saddr { 10.77.2.1 } drop  # policy: laptop-servers
+  drop  # no rule matched
+chain mesh_output
+  ct state invalid drop  # not part of any flow
+  meta nfproto ipv4 meta l4proto icmp icmp type echo-request accept  # system: ping
+  meta nfproto ipv6 meta l4proto ipv6-icmp icmpv6 type echo-request accept  # system: ping
+  meta nfproto ipv4 ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto tcp th dport { 53 } accept  # system: dns
+  meta nfproto ipv4 ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto udp th dport { 53 } accept  # system: dns
+  meta nfproto ipv6 ip6 daddr { fd10:77::1-fd10:77::3 } meta l4proto tcp th dport { 53 } accept  # system: dns
+  meta nfproto ipv6 ip6 daddr { fd10:77::1-fd10:77::3 } meta l4proto udp th dport { 53 } accept  # system: dns
+  meta nfproto ipv4 ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto tcp th dport { 2377, 7946 } accept  # system: swarm
+  meta nfproto ipv4 ip daddr { 10.77.0.1-10.77.0.3 } meta l4proto udp th dport { 4789, 7946 } accept  # system: swarm
+  meta nfproto ipv6 ip6 daddr { fd10:77::1-fd10:77::3 } meta l4proto tcp th dport { 2377, 7946 } accept  # system: swarm
+  meta nfproto ipv6 ip6 daddr { fd10:77::1-fd10:77::3 } meta l4proto udp th dport { 4789, 7946 } accept  # system: swarm
   drop  # no rule matched

@@ -273,6 +273,15 @@ func TestAcceptAllRule(t *testing.T) {
 	if added != 2 {
 		t.Fatalf("the accept-all rule was added %d times (want runtime and permanent): %q", added, r.calls)
 	}
+	// The mesh's IPv6 prefix (M8) is an IPv6 rich rule.
+	rule.Source = "fd10:77::/64"
+	want = []string{"firewall-cmd", "--permanent", "--zone=mesh", `--add-rich-rule=rule family="ipv6" source address="fd10:77::/64" accept`}
+	if got := RuleArgv(rule, "add", true); !slices.Equal(got, want) {
+		t.Fatalf("RuleArgv(IPv6) = %q", got)
+	}
+	if _, err := newFirewall(t, freshHost()).Apply(context.Background(), &proto.Firewall{Backend: "firewalld", Rules: []proto.FWRule{rule}}); err != nil {
+		t.Fatalf("an IPv6 source: %v", err)
+	}
 }
 
 // A host-mode server's containers' bridge (amendment A37) goes into the

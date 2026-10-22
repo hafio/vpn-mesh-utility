@@ -16,6 +16,7 @@ import (
 	"github.com/google/nftables/userdata"
 
 	"github.com/hafio/vpn-mesh-utility/internal/testfix"
+	"github.com/hafio/vpn-mesh-utility/internal/validate"
 )
 
 // The batch: the table, the six chains (the base ones accepting by
@@ -27,7 +28,7 @@ func TestBuildBatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	b := build(rs, "0123456789abcdef")
-	if b.table.Name != TableName || b.table.Family != nftables.TableFamilyIPv4 || len(b.chains) != len(rs.Chains) {
+	if b.table.Name != TableName || b.table.Family != nftables.TableFamilyINet || len(b.chains) != len(rs.Chains) {
 		t.Fatalf("table %+v, %d chains", b.table, len(b.chains))
 	}
 	for i, ch := range b.chains {
@@ -96,6 +97,43 @@ func TestIntervalElems(t *testing.T) {
 	}
 }
 
+// Address sets of both families (M8): 4- or 16-byte keys, an end past each
+// range but the family's last address.
+func TestIntervalAddrElems(t *testing.T) {
+	r := func(first, last string) validate.AddrRange {
+		return validate.AddrRange{First: netip.MustParseAddr(first), Last: netip.MustParseAddr(last)}
+	}
+	text := func(es []nftables.SetElement) string {
+		var out []string
+		for _, e := range es {
+			a, _ := netip.AddrFromSlice(e.Key)
+			out = append(out, a.String()+map[bool]string{true: "]"}[e.IntervalEnd])
+		}
+		return strings.Join(out, " ")
+	}
+	for name, c := range map[string]struct {
+		rs   []validate.AddrRange
+		want string
+	}{
+		"IPv4":            {[]validate.AddrRange{r("10.77.0.1", "10.77.0.3"), r("10.77.1.5", "10.77.1.5")}, "0.0.0.0] 10.77.0.1 10.77.0.4] 10.77.1.5 10.77.1.6]"},
+		"IPv6":            {[]validate.AddrRange{r("fd10:77::1", "fd10:77::3")}, "::] fd10:77::1 fd10:77::4]"},
+		"IPv6 to the top": {[]validate.AddrRange{r("ffff::", "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff")}, "::] ffff::"},
+		"from zero":       {[]validate.AddrRange{r("::", "::9")}, ":: ::a]"},
+	} {
+		if got := text(intervalAddrElems(c.rs)); got != c.want {
+			t.Errorf("%s: %s, want %s", name, got, c.want)
+		}
+		for _, e := range intervalAddrElems(c.rs) {
+			if len(e.Key) != len(c.rs[0].First.AsSlice()) {
+				t.Errorf("%s: a %d-byte key", name, len(e.Key))
+			}
+		}
+	}
+	if intervalAddrElems(nil) != nil {
+		t.Error("no ranges, no elements")
+	}
+}
+
 // A rule's expressions, field by field.
 func TestExprs(t *testing.T) {
 	var added []*nftables.Set
@@ -104,11 +142,16 @@ func TestExprs(t *testing.T) {
 		added = append(added, s)
 		return s
 	}
-	got := exprs(Rule{IIF: "wg0", State: StateEstablishedRelated, Src: []Range{{1, 1}}, Proto: "tcp", Ports: []Range{{22, 22}},
+	one := func(s string) []validate.AddrRange {
+		a := netip.MustParseAddr(s)
+		return []validate.AddrRange{{First: a, Last: a}}
+	}
+	got := exprs(Rule{IIF: "wg0", State: StateEstablishedRelated, Family: IPv4, Src: one("10.77.0.1"), Proto: "tcp", Ports: []Range{{22, 22}},
 		Verdict: Jump, Target: "x"}, set)
 	want := []expr.Any{
 		&expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: ifname("wg0")},
 		&expr.Ct{Register: 1, Key: expr.CtKeySTATE}, got[3], &expr.Cmp{Op: expr.CmpOpNeq, Register: 1, Data: []byte{0, 0, 0, 0}},
+		&expr.Meta{Key: expr.MetaKeyNFPROTO, Register: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{2}},
 		&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: 12, Len: 4},
 		&expr.Lookup{SourceRegister: 1, SetName: "__set%d", SetID: 1},
 		&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{6}},
@@ -138,6 +181,21 @@ func TestExprs(t *testing.T) {
 	if echo := exprs(Rule{Proto: "icmp", Echo: true, Verdict: Accept}, set); !reflect.DeepEqual(echo[3], &expr.Cmp{Op: expr.CmpOpEq,
 		Register: 1, Data: []byte{icmpEchoRequest}}) {
 		t.Errorf("an echo request = %#v", echo)
+	}
+	// IPv6 (M8): its family, the IPv6 header's destination, ICMPv6's ping.
+	added = nil
+	six := exprs(Rule{Family: IPv6, Dst: one("fd10:77::1"), Proto: ICMPv6, Echo: true, Verdict: Accept}, set)
+	want = []expr.Any{
+		&expr.Meta{Key: expr.MetaKeyNFPROTO, Register: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{10}},
+		&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: 24, Len: 16},
+		&expr.Lookup{SourceRegister: 1, SetName: "__set%d", SetID: 1},
+		&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1}, &expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{58}},
+		&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 0, Len: 1},
+		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{icmpv6EchoRequest}},
+		&expr.Verdict{Kind: expr.VerdictAccept},
+	}
+	if !reflect.DeepEqual(six, want) || len(added) != 1 || added[0].KeyType.Name != "ipv6_addr" {
+		t.Fatalf("IPv6 exprs =\n%#v\nwant\n%#v", six, want)
 	}
 }
 

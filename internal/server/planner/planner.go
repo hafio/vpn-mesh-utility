@@ -147,13 +147,13 @@ func (n Node) active() bool { return n.Enrolled && !n.Disabled && n.WGPubKey != 
 // reported its host cannot use -- that family's address, endpoint and
 // containers -- so no peer routes it there, DNS does not name it there and
 // nobody dials it there. ok is false when n cannot do without the family
-// (none would be left, or it is a server or has a container network, which
-// need IPv4); it is then planned as configured.
+// (none would be left, or it has a container network, which needs IPv4);
+// it is then planned as configured.
 func (n Node) usable() (u Node, ok bool) {
 	switch {
 	case !n.NoIPv4 && !n.NoIPv6:
 		return n, true
-	case n.NoIPv4 && (n.NoIPv6 || !n.has6() || n.Role == proto.RoleServer || n.Containers.IsValid()):
+	case n.NoIPv4 && (n.NoIPv6 || !n.has6() || n.Containers.IsValid()):
 		return n, false
 	case n.NoIPv6 && !n.has4():
 		return n, false
@@ -542,6 +542,11 @@ func (p *plan) server(n Node) proto.NodeConfig {
 	// not allow (amendment A43). Swarm, DNS and ping are its system rules.
 	fw.Rules = append(fw.Rules, proto.FWRule{Zone: proto.ZoneMesh, Proto: proto.ProtoAll, Source: p.in.MeshCIDR.String(),
 		Note: "segmentation: the policy decides"})
+	if p.in.MeshCIDR6.IsValid() && n.has6() {
+		// The policy filters IPv6 too (M8): the zone lets the mesh's IPv6 in.
+		fw.Rules = append(fw.Rules, proto.FWRule{Zone: proto.ZoneMesh, Proto: proto.ProtoAll, Source: p.in.MeshCIDR6.String(),
+			Note: "segmentation: the policy decides"})
+	}
 	sortRules(fw.Rules)
 	c.Firewall = fw
 	return c

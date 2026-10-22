@@ -17,12 +17,10 @@
   "35": "agent/agent_test.go",
   "41": "openTest",
   "43": "netlinkNet",
-  "46": "meshDNS",
   "48": "README.md",
   "51": "otherNet",
   "61": "Tx",
   "63": "service_test.go",
-  "85": "deploy_test.go",
   "87": "fetchwintun/main_test.go",
   "98": "userspace",
   "101": "serveRuntime"

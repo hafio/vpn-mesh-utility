@@ -1,6 +1,8 @@
 // Package policy enforces a server's mesh firewall (amendment A43): it
 // compiles the config's proto.Policy into a table of the agent's own,
-// `table ip meshctl`, and keeps the kernel holding exactly that table.
+// `table inet meshctl`, and keeps the kernel holding exactly that table.
+// The table filters both families (M8): every rule that matches addresses
+// or ICMP is of one, and a policy rule becomes one per family it names.
 //
 // The compile is pure (Compile, Ruleset.Text, pinned by a golden); the
 // kernel is behind Kernel -- nftables and conntrack over netlink on Linux.
@@ -37,7 +39,7 @@ import (
 	"github.com/hafio/vpn-mesh-utility/internal/validate"
 )
 
-// TableName is the agent's table, in the ip family.
+// TableName is the agent's table, in the inet family (both IPv4 and IPv6).
 const TableName = "meshctl"
 
 // The base chains' hooks.
@@ -62,9 +64,10 @@ const (
 
 // Ruleset is the whole table.
 type Ruleset struct {
-	// Mesh is the mesh CIDR: whose flows a new policy judges again.
-	Mesh   netip.Prefix
-	Chains []Chain
+	// Mesh and Mesh6 are the mesh's prefixes (Mesh6 invalid without IPv6):
+	// whose flows a new policy judges again.
+	Mesh, Mesh6 netip.Prefix
+	Chains      []Chain
 	// Next is when a scheduled rule starts or ends, so the policy must be
 	// compiled again; zero when none has a schedule. Not part of Text.
 	Next time.Time
@@ -78,8 +81,19 @@ type Chain struct {
 	Rules []Rule
 }
 
-// Range is an inclusive range of addresses (as numbers) or of ports.
+// Range is an inclusive range of ports.
 type Range struct{ First, Last uint32 }
+
+// Address families of a rule: one of them, or Both for a rule that matches
+// neither addresses nor ICMP.
+const (
+	Both = 0
+	IPv4 = 4
+	IPv6 = 6
+)
+
+// ICMPv6 is the protocol of IPv6's ping, as nft names it.
+const ICMPv6 = "ipv6-icmp"
 
 // Rule matches a packet when every field that is set does.
 type Rule struct {
@@ -88,10 +102,12 @@ type Rule struct {
 	// State is a connection state, StateEstablishedRelated or
 	// StateInvalid.
 	State string
-	// Src and Dst are merged, sorted ranges; nil is any.
-	Src, Dst []Range
-	// Proto is tcp, udp or icmp; Ports its destination ports (tcp and udp;
-	// nil is every port); Echo an ICMP echo request.
+	// Family is IPv4 or IPv6, or Both.
+	Family int
+	// Src and Dst are merged, sorted ranges of Family; nil is any.
+	Src, Dst []validate.AddrRange
+	// Proto is tcp, udp, icmp or ICMPv6; Ports its destination ports (tcp
+	// and udp; nil is every port); Echo an echo request (ping).
 	Proto string
 	Ports []Range
 	Echo  bool
@@ -104,22 +120,16 @@ type Rule struct {
 
 // Local is what the agent knows of its own node.
 type Local struct {
-	// Self is the node's mesh IP: a packet to the node is received, one
-	// from it sent.
-	Self netip.Addr
-	// Containers is the node's own container subnet, invalid when it has
-	// none: traffic within the node is not the mesh firewall's.
-	Containers netip.Prefix
+	// Self and Self6 are the node's mesh IPs, either of them invalid when
+	// it has none (M8): a packet to the node is received, one from it sent.
+	Self, Self6 netip.Addr
+	// Containers and Containers6 are the node's own container subnets,
+	// invalid when it has none: traffic within the node is not the mesh
+	// firewall's.
+	Containers, Containers6 netip.Prefix
 }
 
-func u32(a netip.Addr) uint32 { return validate.U32(a) }
-
-func prefixRange(p netip.Prefix) Range {
-	r, _ := validate.AddrEntry("prefix", p.Masked().String()) // a valid IPv4 prefix
-	return Range{u32(r.First), u32(r.Last)}
-}
-
-// merged sorts rs and joins ranges that overlap or touch.
+// merged sorts port ranges and joins those that overlap or touch.
 func merged(rs []Range) []Range {
 	if len(rs) == 0 {
 		return nil
@@ -138,28 +148,45 @@ func merged(rs []Range) []Range {
 	return out
 }
 
-func contains(rs []Range, v uint32) bool {
-	if rs == nil {
-		return true // any
-	}
-	for _, r := range rs {
-		if r.First <= v && v <= r.Last {
-			return true
-		}
-	}
-	return false
+// contains reports whether a is in rs; nil is any.
+func contains(rs []validate.AddrRange, a netip.Addr) bool {
+	return rs == nil || validate.RangesContain(rs, a)
 }
 
-func addrs(field string, in []string) ([]Range, error) {
-	var out []Range
+func addrs(field string, in []string) ([]validate.AddrRange, error) {
+	var out []validate.AddrRange
 	for i, s := range in {
 		r, err := validate.AddrEntry(fmt.Sprintf("%s[%d]", field, i), s)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, Range{u32(r.First), u32(r.Last)})
+		out = append(out, r)
 	}
-	return merged(out), nil
+	return validate.MergeRanges(out), nil
+}
+
+// ofFamily is the part of a rule side in family f: any stays any, and ok
+// is false when the side names addresses but none of f.
+func ofFamily(rs []validate.AddrRange, f int) ([]validate.AddrRange, bool) {
+	if rs == nil {
+		return nil, true
+	}
+	var out []validate.AddrRange
+	for _, r := range rs {
+		if r.First.Is4() == (f == IPv4) {
+			out = append(out, r)
+		}
+	}
+	return out, out != nil
+}
+
+// family is one address family the table filters, with the node's own
+// addresses in it.
+type family struct {
+	n    int
+	mesh netip.Prefix
+	self netip.Addr
+	own  netip.Prefix
 }
 
 // service is one protocol of a rule's services.
@@ -217,8 +244,24 @@ func Compile(p proto.Policy, l Local, at time.Time) (*Ruleset, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !l.Self.Is4() || !m.Contains(l.Self) {
-		return nil, fmt.Errorf("mesh firewall: this node's address %s is outside the mesh %s", l.Self, m)
+	fams := []family{{n: IPv4, mesh: m, self: l.Self, own: l.Containers}}
+	if p.Mesh6 != "" {
+		m6, err := validate.Prefix6("policy.mesh6", p.Mesh6)
+		if err != nil {
+			return nil, err
+		}
+		fams = append(fams, family{n: IPv6, mesh: m6, self: l.Self6, own: l.Containers6})
+	}
+	if !l.Self.IsValid() && !l.Self6.IsValid() {
+		return nil, errors.New("mesh firewall: this node has no mesh address")
+	}
+	for _, f := range fams {
+		if f.self.IsValid() && (f.self.Is4() != (f.n == IPv4) || !f.mesh.Contains(f.self)) {
+			return nil, fmt.Errorf("mesh firewall: this node's address %s is outside the mesh %s", f.self, f.mesh)
+		}
+	}
+	if l.Self6.IsValid() && len(fams) == 1 {
+		return nil, fmt.Errorf("mesh firewall: this node has the IPv6 address %s, but the policy has no IPv6 prefix", l.Self6)
 	}
 	// Only a policy with schedules needs its clock read; proto.Matcher
 	// parses those.
@@ -233,23 +276,22 @@ func Compile(p proto.Policy, l Local, at time.Time) (*Ruleset, error) {
 		}
 		active, next = matcher.Active(at), matcher.Next(at)
 	}
-	mesh, self := []Range{prefixRange(m)}, u32(l.Self)
-	var own []Range
-	if l.Containers.IsValid() {
-		own = []Range{prefixRange(l.Containers)}
-	}
 	established := Rule{State: StateEstablishedRelated, Verdict: Accept, Why: "replies and errors of accepted flows"}
 	fwd := Chain{Name: chainForward, Hook: HookForward, Rules: []Rule{established}}
 	in := Chain{Name: chainInput, Hook: HookInput, Rules: []Rule{{IIF: "lo", Verdict: Accept, Why: "the node itself"}, established}}
 	out := Chain{Name: chainOutput, Hook: HookOutput, Rules: []Rule{{OIF: "lo", Verdict: Accept, Why: "the node itself"}, established}}
-	if own != nil {
-		fwd.Rules = append(fwd.Rules, Rule{Src: own, Dst: own, Verdict: Accept, Why: "within the node's containers"})
-		in.Rules = append(in.Rules, Rule{Src: own, Verdict: Accept, Why: "the node's containers"})
-		out.Rules = append(out.Rules, Rule{Dst: own, Verdict: Accept, Why: "the node's containers"})
+	for _, f := range fams {
+		mesh := []validate.AddrRange{validate.PrefixRange(f.mesh)}
+		if f.own.IsValid() {
+			own := []validate.AddrRange{validate.PrefixRange(f.own)}
+			fwd.Rules = append(fwd.Rules, Rule{Family: f.n, Src: own, Dst: own, Verdict: Accept, Why: "within the node's containers"})
+			in.Rules = append(in.Rules, Rule{Family: f.n, Src: own, Verdict: Accept, Why: "the node's containers"})
+			out.Rules = append(out.Rules, Rule{Family: f.n, Dst: own, Verdict: Accept, Why: "the node's containers"})
+		}
+		fwd.Rules = append(fwd.Rules, Rule{Family: f.n, Src: mesh, Dst: mesh, Verdict: Jump, Target: chainMeshForward, Why: "mesh traffic"})
+		in.Rules = append(in.Rules, Rule{Family: f.n, Src: mesh, Verdict: Jump, Target: chainMeshInput, Why: "mesh traffic"})
+		out.Rules = append(out.Rules, Rule{Family: f.n, Dst: mesh, Verdict: Jump, Target: chainMeshOutput, Why: "mesh traffic"})
 	}
-	fwd.Rules = append(fwd.Rules, Rule{Src: mesh, Dst: mesh, Verdict: Jump, Target: chainMeshForward, Why: "mesh traffic"})
-	in.Rules = append(in.Rules, Rule{Src: mesh, Verdict: Jump, Target: chainMeshInput, Why: "mesh traffic"})
-	out.Rules = append(out.Rules, Rule{Dst: mesh, Verdict: Jump, Target: chainMeshOutput, Why: "mesh traffic"})
 
 	invalid := Rule{State: StateInvalid, Verdict: Drop, Why: "not part of any flow"}
 	mf := Chain{Name: chainMeshForward, Rules: []Rule{invalid}}
@@ -280,26 +322,40 @@ func Compile(p proto.Policy, l Local, at time.Time) (*Ruleset, error) {
 		default:
 			return nil, fmt.Errorf("%s.action: %q is neither allow nor deny", field, r.Action)
 		}
-		for _, s := range svcs {
-			base := Rule{Proto: s.proto, Ports: s.ports, Echo: s.echo, Verdict: verdict, Why: r.Name}
-			f := base
-			f.Src, f.Dst = from, to
-			mf.Rules = append(mf.Rules, f)
-			if contains(to, self) {
-				received := base
-				received.Src = from
-				mi.Rules = append(mi.Rules, received)
+		for _, f := range fams {
+			fromF, okFrom := ofFamily(from, f.n)
+			toF, okTo := ofFamily(to, f.n)
+			if !okFrom || !okTo {
+				continue // the rule names no address of this family
 			}
-			if contains(from, self) {
-				sent := base
-				sent.Dst = to
-				mo.Rules = append(mo.Rules, sent)
+			for _, s := range svcs {
+				base := Rule{Family: f.n, Proto: s.proto, Ports: s.ports, Echo: s.echo, Verdict: verdict, Why: r.Name}
+				if s.proto == validate.ServiceICMP && f.n == IPv6 {
+					base.Proto = ICMPv6
+				}
+				fr := base
+				fr.Src, fr.Dst = fromF, toF
+				mf.Rules = append(mf.Rules, fr)
+				if f.self.IsValid() && contains(toF, f.self) {
+					received := base
+					received.Src = fromF
+					mi.Rules = append(mi.Rules, received)
+				}
+				if f.self.IsValid() && contains(fromF, f.self) {
+					sent := base
+					sent.Dst = toF
+					mo.Rules = append(mo.Rules, sent)
+				}
 			}
 		}
 	}
 	rest := Rule{Verdict: Drop, Why: "no rule matched"}
 	mf.Rules, mi.Rules, mo.Rules = append(mf.Rules, rest), append(mi.Rules, rest), append(mo.Rules, rest)
-	return &Ruleset{Mesh: m, Chains: []Chain{fwd, in, out, mf, mi, mo}, Next: next}, nil
+	rs := &Ruleset{Mesh: m, Chains: []Chain{fwd, in, out, mf, mi, mo}, Next: next}
+	if len(fams) > 1 {
+		rs.Mesh6 = fams[1].mesh
+	}
+	return rs, nil
 }
 
 // Count is the number of rules.
@@ -311,10 +367,10 @@ func (rs *Ruleset) Count() int {
 	return n
 }
 
-func addrText(rs []Range) string {
+func addrText(rs []validate.AddrRange) string {
 	var parts []string
 	for _, r := range rs {
-		parts = append(parts, validate.AddrRange{First: validate.FromU32(r.First), Last: validate.FromU32(r.Last)}.String())
+		parts = append(parts, r.String())
 	}
 	return "{ " + strings.Join(parts, ", ") + " }"
 }
@@ -344,11 +400,19 @@ func (r Rule) String() string {
 	if r.State != "" {
 		add("ct state", r.State)
 	}
+	ip := "ip"
+	switch r.Family {
+	case IPv4:
+		add("meta nfproto ipv4")
+	case IPv6:
+		add("meta nfproto ipv6")
+		ip = "ip6"
+	}
 	if r.Src != nil {
-		add("ip saddr", addrText(r.Src))
+		add(ip+" saddr", addrText(r.Src))
 	}
 	if r.Dst != nil {
-		add("ip daddr", addrText(r.Dst))
+		add(ip+" daddr", addrText(r.Dst))
 	}
 	if r.Proto != "" {
 		add("meta l4proto", r.Proto)
@@ -356,7 +420,10 @@ func (r Rule) String() string {
 	if r.Ports != nil {
 		add("th dport", portText(r.Ports))
 	}
-	if r.Echo {
+	switch {
+	case r.Echo && r.Proto == ICMPv6:
+		add("icmpv6 type echo-request")
+	case r.Echo:
 		add("icmp type echo-request")
 	}
 	add(r.Verdict)
@@ -367,10 +434,10 @@ func (r Rule) String() string {
 }
 
 // Text is the table in nft's own spelling, each rule with where it comes
-// from: what the golden pins and `nft list table ip meshctl` resembles.
+// from: what the golden pins and `nft list table inet meshctl` resembles.
 func (rs *Ruleset) Text() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "table ip %s\n", TableName)
+	fmt.Fprintf(&b, "table inet %s\n", TableName)
 	for _, c := range rs.Chains {
 		if c.Hook != "" {
 			fmt.Fprintf(&b, "chain %s hook %s priority filter policy accept\n", c.Name, c.Hook)
@@ -446,12 +513,17 @@ func (e *Enforcer) Sync(rs *Ruleset) (int, error) {
 		if log == nil {
 			log = slog.New(slog.DiscardHandler)
 		}
-		n, err := e.K.Forget(rs.Mesh)
-		switch {
-		case err != nil:
-			log.Warn("mesh firewall: open mesh connections could not be re-checked; they keep going until they end", "err", err)
-		case n > 0:
-			log.Info("mesh firewall: open mesh connections are judged again by the new policy", "flows", n)
+		for _, mesh := range []netip.Prefix{rs.Mesh, rs.Mesh6} {
+			if !mesh.IsValid() {
+				continue
+			}
+			n, err := e.K.Forget(mesh)
+			switch {
+			case err != nil:
+				log.Warn("mesh firewall: open mesh connections could not be re-checked; they keep going until they end", "mesh", mesh, "err", err)
+			case n > 0:
+				log.Info("mesh firewall: open mesh connections are judged again by the new policy", "mesh", mesh, "flows", n)
+			}
 		}
 	}
 	return 1, nil
