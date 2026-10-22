@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hafio/vpn-mesh-utility/internal/agent/agentfake"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/policy"
@@ -27,7 +28,7 @@ var (
 
 func compile(t *testing.T, p *proto.Policy, l policy.Local) *policy.Ruleset {
 	t.Helper()
-	rs, err := policy.Compile(*p, l)
+	rs, err := policy.Compile(*p, l, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,46 +131,55 @@ func admit(rs *policy.Ruleset, hook string, p packet) bool {
 
 // The table decides every packet as the policy does (proto.Matcher, which
 // the server's reachability check uses): forwarded, received and sent, for
-// every pair of addresses, protocol and port -- except traffic within the
-// node, which is not the mesh firewall's.
+// every pair of addresses, protocol and port, inside a schedule's window and
+// outside it -- except traffic within the node, which is not the mesh
+// firewall's.
 func TestCompileAgreesWithDecide(t *testing.T) {
-	pol := testfix.Policy()
-	m, err := pol.Matcher()
-	if err != nil {
-		t.Fatal(err)
-	}
 	pool := []string{testfix.VPS1.MeshIP, testfix.VPS2.MeshIP, testfix.VPS3.MeshIP, testfix.NAS.MeshIP, testfix.Laptop.MeshIP,
 		testfix.Phone.MeshIP, "10.77.128.5", "10.77.128.200", "10.77.200.1", "192.168.1.5", "1.1.1.1"}
 	checked := 0
-	for _, l := range []policy.Local{vps1, vps2} {
-		rs := compile(t, pol, l)
-		for _, s := range pool {
-			for _, d := range pool {
-				src, dst := netip.MustParseAddr(s), netip.MustParseAddr(d)
-				if src == dst {
-					continue
-				}
-				for _, pr := range []string{"tcp", "udp", "icmp"} {
-					for _, port := range []int{22, 53, 445, 2377, 4789, 9000} {
-						p := packet{src: validate.U32(src), dst: validate.U32(dst), proto: pr, port: port, iif: "wg0", oif: "wg0"}
-						hook := policy.HookForward
-						switch {
-						case dst == l.Self:
-							hook = policy.HookInput
-						case src == l.Self:
-							hook = policy.HookOutput
+	for _, c := range []struct {
+		pol *proto.Policy
+		at  time.Time
+	}{{testfix.Policy(), time.Time{}}, {officeHours(), sgt(19, 10)}, {officeHours(), sgt(19, 20)}} {
+		pol := c.pol
+		m, err := pol.Matcher()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, l := range []policy.Local{vps1, vps2} {
+			rs, err := policy.Compile(*pol, l, c.at)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, s := range pool {
+				for _, d := range pool {
+					src, dst := netip.MustParseAddr(s), netip.MustParseAddr(d)
+					if src == dst {
+						continue
+					}
+					for _, pr := range []string{"tcp", "udp", "icmp"} {
+						for _, port := range []int{22, 53, 445, 2377, 4789, 9000} {
+							p := packet{src: validate.U32(src), dst: validate.U32(dst), proto: pr, port: port, iif: "wg0", oif: "wg0"}
+							hook := policy.HookForward
+							switch {
+							case dst == l.Self:
+								hook = policy.HookInput
+							case src == l.Self:
+								hook = policy.HookOutput
+							}
+							want, _ := m.Decide(src, dst, pr, port, c.at)
+							inNode := func(a netip.Addr) bool {
+								return a == l.Self || (l.Containers.IsValid() && l.Containers.Contains(a))
+							}
+							if inNode(src) && inNode(dst) {
+								want = true // within the node
+							}
+							if got := admit(rs, hook, p); got != want {
+								t.Fatalf("self %s: %s -> %s %s/%d at %s: table %v, policy %v\n%s", l.Self, s, d, pr, port, hook, got, want, rs.Text())
+							}
+							checked++
 						}
-						want, _ := m.Decide(src, dst, pr, port)
-						inNode := func(a netip.Addr) bool {
-							return a == l.Self || (l.Containers.IsValid() && l.Containers.Contains(a))
-						}
-						if inNode(src) && inNode(dst) {
-							want = true // within the node
-						}
-						if got := admit(rs, hook, p); got != want {
-							t.Fatalf("self %s: %s -> %s %s/%d at %s: table %v, policy %v\n%s", l.Self, s, d, pr, port, hook, got, want, rs.Text())
-						}
-						checked++
 					}
 				}
 			}
@@ -179,9 +189,49 @@ func TestCompileAgreesWithDecide(t *testing.T) {
 		t.Fatalf("only %d packets checked", checked)
 	}
 	// Loopback is the node itself.
-	rs := compile(t, pol, vps1)
+	rs := compile(t, testfix.Policy(), vps1)
 	if !admit(rs, policy.HookInput, packet{src: validate.U32(vps1.Self), dst: validate.U32(vps1.Self), proto: "tcp", port: 22, iif: "lo"}) {
 		t.Fatal("loopback was filtered")
+	}
+}
+
+// officeHours is testfix.Policy with the laptop's SMB to the NAS allowed
+// on weekdays from 09:00 to 18:00 in Singapore.
+func officeHours() *proto.Policy {
+	p := testfix.Policy()
+	p.TZ = "Asia/Singapore"
+	p.Rules[3].Schedule = &proto.Schedule{Days: []string{"mon", "tue", "wed", "thu", "fri"}, Start: "09:00", End: "18:00"}
+	return p
+}
+
+// sgt is an hour in Singapore; 2026-10-19 is a Monday.
+func sgt(day, hour int) time.Time {
+	return time.Date(2026, 10, day, hour, 0, 0, 0, time.FixedZone("SGT", 8*3600))
+}
+
+// A scheduled rule is in the table only inside its window, and Next says
+// when to compile again; the same rules at another time are the same table.
+func TestCompileSchedules(t *testing.T) {
+	at := func(when time.Time) *policy.Ruleset {
+		t.Helper()
+		rs, err := policy.Compile(*officeHours(), vps1, when)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rs
+	}
+	open, later, closed := at(sgt(19, 10)), at(sgt(19, 11)), at(sgt(19, 20))
+	if !strings.Contains(open.Text(), "policy: laptop-smb") || strings.Contains(closed.Text(), "policy: laptop-smb") {
+		t.Fatalf("open:\n%s\nclosed:\n%s", open.Text(), closed.Text())
+	}
+	if open.Fingerprint() != later.Fingerprint() || open.Fingerprint() == closed.Fingerprint() {
+		t.Fatal("the fingerprint follows the clock, not the rules")
+	}
+	if !open.Next.Equal(sgt(19, 18)) || !closed.Next.Equal(sgt(20, 9)) {
+		t.Fatalf("Next = %v, %v", open.Next, closed.Next)
+	}
+	if rs := compile(t, testfix.Policy(), vps1); !rs.Next.IsZero() {
+		t.Fatalf("Next without schedules = %v", rs.Next)
 	}
 }
 
@@ -198,10 +248,11 @@ func TestCompileRefuses(t *testing.T) {
 		"port":             {func(p *proto.Policy) { p.Rules[3].Services[0].Ports = []string{"0"} }, testfix.VPS1.MeshIP, "between 1 and 65535"},
 		"action":           {func(p *proto.Policy) { p.Rules[3].Action = "accept" }, testfix.VPS1.MeshIP, "neither allow nor deny"},
 		"icmp with a port": {func(p *proto.Policy) { p.Rules[0].Services[0].Ports = []string{"8"} }, testfix.VPS1.MeshIP, "not a service"},
+		"schedule":         {func(p *proto.Policy) { p.Rules[3].Schedule = &proto.Schedule{Days: []string{"mon"}} }, testfix.VPS1.MeshIP, "no time zone (tz)"},
 	} {
 		p := testfix.Policy()
 		c.edit(p)
-		if _, err := policy.Compile(*p, policy.Local{Self: netip.MustParseAddr(c.self)}); err == nil || !strings.Contains(err.Error(), c.want) {
+		if _, err := policy.Compile(*p, policy.Local{Self: netip.MustParseAddr(c.self)}, time.Time{}); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: Compile = %v, want an error about %q", name, err, c.want)
 		}
 	}

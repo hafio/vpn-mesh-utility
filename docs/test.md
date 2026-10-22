@@ -47,6 +47,14 @@ it; `TestModuleBoundaries` forbids production code from importing it.
 | `TestServiceEntry` | tcp or udp with no port, one or a range, and icmp without ports; port 0, 65536, leading zeros or signs, reversed ranges, upper case and lists refused |
 | `TestRef` | `kind:name` with a kind the field takes and a Name; a string without a colon is a literal; another kind, an empty or malformed name refused |
 
+`schedule_test.go` (a policy's schedule, amendment A44)
+
+| Test | Pins |
+| --- | --- |
+| `TestSchedule` | days (each once, in any order, read back in the week's order and none for every day), a window of two `HH:MM` times or whole days, as people read them (`mon-fri 09:00-18:00`, `sat,sun`, `daily 22:00-06:00`); no days and no times, unknown or repeated days, one time without the other, equal times, malformed times (`9:00`, `24:00`, `+1:00`, a newline) refused |
+| `TestWindowHolds` | the edges of a window (start in, end out), one across midnight belonging to the day it starts, whole days; the edges a window can change at |
+| `TestTimeZone`, `TestTimestamp` | IANA names (`Etc/GMT+8`, three parts) load from the host or the built-in database; empty, `Local`, paths, empty parts, spaces, newlines and unknown zones refused; RFC 3339 times only |
+
 ## `internal/proto`
 
 | File | Test | Pins |
@@ -67,7 +75,8 @@ it; `TestModuleBoundaries` forbids production code from importing it.
 | `names_test.go` | `TestNamesRequestNormalises`, `TestNamesRequestRejects` | a container names report (amendment A38): names folded to lower case without a trailing dot, an empty list allowed; a newline, an underscore, an empty name, an unknown kind, a non-IPv4 address, a name listed twice for one address and more than 512 entries refused |
 | `policy_test.go` | `TestPolicyDecide` | first match wins and the rest is dropped (`RuleDefault`); traffic with an end outside the mesh is `RuleNotMesh` |
 | | `TestPolicyMatcherRefusesBadValues` | the agent-side gate of a policy: mesh, action, name, addresses (inside the mesh), protocols, ports, icmp without ports, at most 512 rules and 1024 entries |
-| | `TestPolicyRuleString` | one line per rule, as `meshctl firewall show` and the web UI print it |
+| | `TestPolicySchedules`, `TestPolicyNextAcrossDaylightSaving` | a scheduled rule decides only inside its window, read in the policy's zone whatever the zone of the time asked about; `Active` per rule; `Next` is the next start or end (none without schedules) and moves forward by at most a day across a daylight-saving change; a schedule without a zone, a bad schedule or zone refused (in `TestPolicyMatcherRefusesBadValues`) |
+| | `TestPolicyRuleString` | one line per rule, its schedule included, as `meshctl firewall show` and the web UI print it |
 | `sse_test.go` | `TestSSERoundTrip` | exact wire format of retry, comment and event frames, and the reader |
 | | `TestSSEReaderJoinsDataLinesAndDefaultsName`, `TestSSEReaderReportsTruncatedEvent`, `TestSSEReaderBoundsLineLength` | reader edge cases |
 | | `TestSSEWriterRefusesFrameInjection` | names or data with newlines/colons are refused and nothing is written |
@@ -105,9 +114,10 @@ one sanctioned exec site) so a checker that matched nothing cannot pass.
 | `TestRecordStatus` | a heartbeat updates the node and replaces (not merges) its peer rows |
 | `TestPhoneState` | `LastHandshakeWith` is the latest handshake any node reported with a peer (0 for none); `SetApplied` records a phone's profile without counting as a heartbeat |
 | `TestOpenReadOnly` | `export`'s read-only open reads, refuses writes, a missing file (pointing at `--data`) and a schema other than the binary's |
-| `TestSegmentationRoundTrip`, `TestSetSegmentationRefusesAStranger` (`segments_test.go`) | the mesh firewall's document (amendment A43): a new mesh holds `allow-all` only; written and read back exactly (groups with their nodes, objects and zones by name, policies in order); a group naming a node that does not exist is `ErrNotFound` and nothing stays |
+| `TestSegmentationRoundTrip`, `TestSetSegmentationRefusesAStranger` (`segments_test.go`) | the mesh firewall's document (amendment A43): a new mesh holds `allow-all` only; written and read back exactly (groups with their nodes, objects and zones by name, policies in order with their schedules, the time zone; amendment A44); emptied, the zone goes too; a group naming a node that does not exist is `ErrNotFound` and nothing stays |
+| `TestSegScheduleString` | a stored schedule as people read it, one that does not parse as stored |
 | `TestSetNodeGroups` | a node's groups replaced, a new group made on the way, a group's nodes listed by name; out of every group, the groups stay |
-| `TestSegmentationValidate` | every value's grammar and limit: names once per kind, a group's nodes, entries, references by field (no zone in a zone, no svc: in from), actions, descriptions without control characters, at most 32 references and 256 policies |
+| `TestSegmentationValidate` | every value's grammar and limit: names once per kind, a group's nodes, entries, references by field (no zone in a zone, no svc: in from), actions, schedules, the time zone, descriptions without control characters, at most 32 references and 256 policies |
 | `TestMigrationTurnsRulesIntoPolicies` | migration 0006 on a v5 database turns each custom firewall rule into the same policies `LegacySegmentation` makes (to its server, or `role:server`), `allow-all` last, and drops the table |
 | `TestRestoreOfASnapshotWithFirewallRules` | a snapshot from before the mesh firewall restores its rules as policies |
 | `TestUsers`, `TestSessions` | account and session accessors; `UseTOTPStep` refuses a step at or before the last one (replay), and a new secret starts the counter over |
@@ -144,7 +154,7 @@ in through the UI itself (password, then TOTP enrolment).
 | `TestNodeLifecycle` | add (token shown once, form kept on errors), edit, disable, enable, new token, remove with confirmation, audited as `user:admin` |
 | `TestEditSpoke` | a spoke's hub, exit and keepalive edit; the hub and exit choices offered; refused edits (400/404) change nothing; a new mesh IP from the form with its note, a taken one refused; no token for a disabled node; the computed config on a server's page |
 | `TestDNSPage` | the zone with automatic names and the upstreams; a custom record added and removed; a record named like a node (409) and a refusal without CSRF (403) changing nothing |
-| `TestFirewallPages` (`firewall_test.go`) | the mesh firewall built one item at a time (amendment A43): a group, a service and an address object, a zone, a policy at position 1, moved, renamed; the zone's outbound rules and addresses; a reachability check and the zone matrix; refusals that keep the form -- an item still named elsewhere (409), a bad action, position or address (400), a dangling member (409), an unknown kind, a missing policy or zone (404), a service checked without a port -- and a removal without CSRF (403); then everything removed in order |
+| `TestFirewallPages` (`firewall_test.go`) | the mesh firewall built one item at a time (amendment A43): a group, a service and an address object, a zone, a policy at position 1, moved, renamed; the zone's outbound rules and addresses; a reachability check and the zone matrix; refusals that keep the form -- an item still named elsewhere (409), a bad action, position or address (400), a dangling member (409), an unknown kind, a missing policy or zone (404), a service checked without a port -- and a removal without CSRF (403); a schedule (amendment A44): the time zone set on the page, a policy with days and a window across midnight shown as not in force now, ticked on its edit page, a check at a time inside the window and one now naming it, a bad time and a bad zone refused (400), the zone back to the server's; then everything removed in order |
 | `TestNodeGroupsOnPages` | a node's groups from the add form and on its page; changed by the edit form; a bad group name refused (400) |
 | `TestContainerModePages` | a container-mode node from the add form: its page names the mode and subnet, offers the compose file per runtime and no exit; a host-mode node's edit form puts its containers on the mesh and takes them off; a container-mode phone is refused; the DNS page lists no names, then box's reported names with how one resolves (`web.mesh`, `web.box.mesh`) and why another is not published |
 | `TestSpokeComposeDownload` | a spoke's page offers its compose file (a server's does not); the download carries the form's backend and directory as `compose.yml`; a server (409) and a hostile directory (400) come back on the page; no download without a session |
@@ -161,7 +171,7 @@ in through the UI itself (password, then TOTP enrolment).
 `TestCompareEqualSnapshotsIsEmpty`, `TestCompareListsEveryKindOfChange`,
 `TestARenameIsAChangeNotAReplacement`: added, removed and changed nodes by field (keys as
 fingerprints), settings, DNS records and the mesh firewall (each group, object, zone and policy,
-a policy with its place); nodes are matched by id. `TestCompareSeesThroughTheMigration`: a
+a policy with its place and schedule, the schedules' zone); nodes are matched by id. `TestCompareSeesThroughTheMigration`: a
 snapshot from before the mesh firewall compares by the policies its rules became.
 
 ## `internal/server/api`
@@ -198,8 +208,9 @@ and counts transactions, so a refusal can be shown to happen before any database
 | | `TestSetSegment` | the document replaced whole: a new version, audited, every server's policy (a spoke has none); a bad value refused before the database (400), a dangling reference refused by the plan (409), a group of strangers (400), none written; the same document again changes no config |
 | | `TestEditSegment` | the web UI's edits: groups, objects, a zone and a policy at position 1; renames that follow into every reference; moves and bad positions; a zone still named refused (409), then everything removed in order; unknown kinds (400) and missing items (404); audited |
 | | `TestReach`, `TestMatrix` | one flow's verdict by node or address, with the deciding rule (system, policy, none, not mesh traffic); a service without one port and an unknown node refused before the database; the zone matrix's allow and partial cells |
+| | `TestScheduledPolicies` | a schedule and its zone reach every server's policy, days in the week's order; the check judges now or the time asked (and names the scheduled rules not in force), the view and the matrix the clock's time; a bad time refused before the database, a bad zone written nowhere; without a zone in the document the server's, then UTC; audited `segmentation.timezone` (amendment A44) |
 | | `TestNodeGroups`, `TestMoveMeshIPNotesTheFirewall` | groups at add and set, sorted, in the node list; bad names and duplicates refused before the database; a node a zone names cannot be removed until it is out of the zone; a mesh IP move names the zone that held the old address |
-| | `TestSegmentAdminRoutes` | `GET`, `PUT` and `/check` of `/admin/v1/segmentation` over the admin handler; a bad document is 400 `bad_request` |
+| | `TestSegmentAdminRoutes` | `GET`, `PUT` and `/check` (with `at`) of `/admin/v1/segmentation` over the admin handler; a bad document is 400 `bad_request` |
 | | `TestAdminErrorCodes`, `TestAdminSetClearsReferences` | every refusal of every admin write (404, 400, 409) leaves state untouched, a phone's profile included (a server, a bad, unknown or non-exit exit, an unknown field); clearing an endpoint warns |
 | `phone_test.go` | `TestPhoneProfile` | a phone added without a token; a mesh-only profile whose private key matches the public key all three servers peer with, the hub's resolver as DNS; a via-exit profile replaces the key and adds `0.0.0.0/0, ::/0` to the exit's peer; no audit row carries a private key; a hub change marks the profile out of date; the servers' reported handshake in `node list` and `node show` |
 | | `TestPhoneProfileNeedsAServer` | without a joined server with an endpoint: 409, the phone keeps no key and nothing is audited |
@@ -221,12 +232,14 @@ and counts transactions, so a refusal can be shown to happen before any database
 `server_test.go`: `TestRunServesAndShutsDown` (health, the UI on the same listener, `secret.key`
 created, a 0600 admin socket, a second server on the same data dir refused, clean shutdown; Linux
 only), `TestRunRefusesBadConfig`,
-`TestListenAdminRefusesALongPath`. `import_test.go` (Linux only, flock): `TestImportRestoresAnExport`,
+`TestListenAdminRefusesALongPath`. `zone_test.go`: `TestServerZone` (the zone the schedules default
+to: TZ's name, else where `/etc/localtime` links, else UTC for no link, a link outside a zone
+database or to an unknown zone). `import_test.go` (Linux only, flock): `TestImportRestoresAnExport`,
 `TestImportRefusesWhileTheServerRuns` (nothing created), `TestImportRefusesInvalidDocumentsUntouched`,
 `TestLockIsExclusive`. `exporter_test.go`: `TestNextExport`, `TestExportOnceSkipsUnchangedAndKeepsFourteen`
 (0600 files, no file for an unchanged night, the newest 14 kept), `TestExporterRunStopsWithItsContext`.
 `export_test.go`: `TestExportIsDeterministicAndByName` (same state, same bytes; references by name;
-no secrets), `TestReadRoundTripsAndRefusesUnknownShapes`, `TestToSnapshotRoundTrips`,
+a schedule and its zone; no secrets), `TestReadRoundTripsAndRefusesUnknownShapes`, `TestToSnapshotRoundTrips`,
 `TestToSnapshotRefusesHostileDocuments` (every field validated before an import may restore it, the extra domains and the
 mesh firewall included), `TestToSnapshotReadsAnOlderExport` (custom rules become policies above `allow-all`),
 `TestSegmentationFile` (`meshctl firewall show --yaml` and `apply`: round trip, unknown fields and bad values refused).
@@ -275,6 +288,7 @@ and `Policy.Fail`/`FailOn` inject a failure into one method, also while an agent
 | | `TestRunRefusesAnUnusableDataDir`, `TestRunIgnoresDamagedConfigFiles`, `TestRunReportsUnreadablePeerStatus`, `TestReportKeepsToTheServersLimits`, `TestDefaultSocket` | a bad data dir path, a damaged enrollment, missing keys, an unknown `--wg-backend` or an unusable socket stop Run before the host is touched, the socket even with a cached and a pending config (neither applied nor removed, no step asked); a damaged cached or pending config is ignored (the pending one removed, no rollback reported); unreadable peer status is a reported error; a report keeps at most 32 errors |
 | | `TestReportNamesTheBackend` | the heartbeat names the backend in use; a fake host stands for the kernel unless the test names userspace |
 | | `TestDNSOnAndOffStayOnTheNode`, `TestDNSSettingThatCannotBeSaved` | `POST /v1/dns` reaches the DNS step at once, is reported, is kept in `local.json` across a restart and never reaches the server; the resolver stops with the agent; a setting that cannot be saved is a 500 that applies nothing |
+| | `TestScheduleAppliesAtTheEdge` | a server's scheduled rule comes into the table when its window opens, without a new config (the agent's clock moved within the signatures' skew) |
 | | `TestDNSFailureIsReported`, `TestDriftCheckPutsBackWhatChanged` | a failing DNS step degrades the node with its error and the tunnel up; the drift check rebuilds a deleted `wg0` without a new config, after the firewall was asked to look again |
 | | `TestPrefsNeedTheServer` | `meshctl exit` with the server down is a 502 naming the call, and exit mode stays off |
 | | `TestExitThroughTheLocalAPI` | `POST /v1/prefs` reaches the server signed, the agent fetches the new config without an event, exit mode comes on, the status shows the exit and its choices; a server refusal comes back with its status |
@@ -284,11 +298,14 @@ and `Policy.Fail`/`FailOn` inject a failure into one method, also while an agent
 | `agent` (`safeapply_test.go`) | `TestSafeApplyStateMachine` | the state machine on a fake clock: a report sent before the apply does not confirm, the window, a pending config replaced keeps the confirmed one as prev, disarm |
 | | `TestSafeApplyConfirmsWhenTheServerAnswers`, `TestSafeApplyRollsBackWithoutAnAnswer`, `TestSafeApplyRecoversAPendingConfigAtBoot`, `TestSpokesDoNotArmSafeApply`, `TestSafeApplyDisarmsWhenTheServerGoesBack`, `TestSafeApplyReportsAFailedRollback` | the runner with a 1 s window on a fake clock: confirm moves the cache; no answer puts the previous config back, reports the rollback and never re-applies the rejected version, while the next version is applied and confirmed; a pending config found at boot is rolled back the same way; spokes cache at once; the server going back to the confirmed config disarms without a rollback; a rollback that fails too is reported as an error with the rollback |
 | `apply` | `TestApplyIsIdempotent` | the second apply of the same config changes nothing on the host |
+| | `TestExitModeWithoutIPv6PolicyRouting` | on a kernel with IPv6 but no IPv6 policy routing a spoke without an exit applies cleanly; with one, IPv4 exit rules only and a degraded `exit` step (amendment A45) |
+| | `TestScheduledPolicy` | a scheduled rule in the table for the time of the apply, `PolicyNext` its end; applied then, the rule is out and `PolicyNext` the next start; none without a schedule (amendment A44) |
 | | `TestMeshFirewallStep` | the mesh firewall (amendment A43): in the kernel when the firewall step runs, left alone when unchanged, replaced (re-judging flows) when changed; a config without a policy removes it after the firewall step, keeps it while that step fails (degraded firewall only), a failed removal degrades `policy`; a refused table stops the apply before the firewall step; a node without a mesh firewall refuses a policy, and one for another mesh is not applied |
 | `policy` | `TestCompileGolden` | `testdata/ruleset.golden.txt`: the table of a server, and of one with containers, in nft's spelling with where each rule comes from |
-| | `TestCompileAgreesWithDecide` | for every pair of addresses (servers, spokes, a phone, containers, the mesh's unassigned, outside), protocol and port, forwarded, received and sent: the table admits exactly what `proto.Matcher.Decide` allows, but for traffic within the node and loopback |
+| | `TestCompileAgreesWithDecide` | for every pair of addresses (servers, spokes, a phone, containers, the mesh's unassigned, outside), protocol and port, forwarded, received and sent, inside a schedule's window and outside it: the table admits exactly what `proto.Matcher.Decide` allows at that time, but for traffic within the node and loopback |
+| | `TestCompileSchedules` | a scheduled rule is in the table only inside its window; the fingerprint follows the rules, not the clock; `Next` is the next edge, zero without schedules |
 | | `TestCompileMerges` | a rule's addresses and ports merged when the config's overlap, touch or nest; tcp without ports is every port |
-| | `TestCompileRefuses`, `TestRulesetText` | a bad mesh, an address outside it for the node, bad entries, services, ports, actions; one rule in nft's spelling, the count and the fingerprint |
+| | `TestCompileRefuses`, `TestRulesetText` | a bad mesh, an address outside it for the node, bad entries, services, ports, actions, a schedule without a zone; one rule in nft's spelling, the count and the fingerprint |
 | | `TestEnforcer` | `Sync` installs once, leaves the same table alone, replaces a changed or foreign one and deletes the mesh flows' conntrack (not on a first install), removes for nil; a failed read, install or removal says which, a failed conntrack deletion does not fail the step |
 | | `TestBuildBatch`, `TestIntervalElems`, `TestExprs` (`nft_linux_test.go`) | the netlink batch: the six chains, the base ones accepting by default; every set added before the rule that looks it up; the fingerprint on the first rule only; interval elements as nft sends them (an end at 0 first, none past the top), and each match's expressions |
 | | `TestKernelNeedsPrivilege`, `TestNoKernelOffLinux` | without CAP_NET_ADMIN every kernel call is refused and says so (skipped as root, where it would change the host); off Linux there is no table and one is refused |
@@ -298,6 +315,7 @@ and `Policy.Fail`/`FailOn` inject a failure into one method, also while an agent
 | | `TestExitModeThroughTheHost` | without policy routing, step 6 hands exit mode to a host that does it itself (Windows): on with an exit, off without, nothing on a repeat, a failure fatal |
 | | `TestExitModeOnSwitchOff`, `TestExitModeFailureIsFatal` | exit on installs the rules, a switch moves 0.0.0.0/0 between peers without touching them, off removes them, 0.0.0.0/0 never in the main table; a policy failure is fatal; an engine without policy routing refuses exit on |
 | `exitmode` | `TestDesiredIsWgQuicksExitRouting`, `TestSyncTurnsExitModeOnAndOff`, `TestSyncReplacesAStaleRuleOfItsOwn`, `TestSyncStopsAtTheFirstFailure`, `TestSyncReportsEachFailure` | the exact rules and routes (IPv4 and IPv6 blackhole), routes before rules on, rules before routes off, idempotent, a stale own rule replaced, exit off on a clean host touches nothing; a failure of each call stops Sync there and counts the changes before it |
+| | `TestSyncWithoutIPv6PolicyRouting` | a kernel with IPv6 but no IPv6 policy routing (amendment A45): exit off does nothing, exit on installs the IPv4 rules and route and returns `ErrIPv6Unguarded`, which says how to turn IPv6 off |
 | | `TestKernelShapes`, `TestOwnsOnlyItsPriorities`, `TestKernelPolicyWithoutPrivilege` (Linux) | the netlink rule and route each one becomes (protocol 201, inverted fwmark, blackhole); unprivileged listing works and every change is refused with what it attempted (skipped as root; the kernel path itself is e2e's) |
 | `wintun` | `TestInstall`, `TestEnsureWithoutABundle` | the Windows driver is written beside the binary once and only when it matches its pin; one there that matches is kept, a changed one replaced, a bundle that misses its pin refused; a build without the `wintun` tag has nothing bundled and says how to get a binary that has it. The Windows host itself (`wg/userspace_windows.go` with its exit mode, `routes/table_windows.go`, `dns/nrpt_windows.go`) needs an elevated prompt, the bundled DLL and the registry, so it has no unit test: it is checked on a Windows laptop (spec S10) |
 | `wg` | `TestDiffChangesOnlyWhatDiffers`, `TestDiffLeavesARoamingDialInPeerAlone`, `TestSyncIsIdempotent`, `TestSyncLinkRefusesAForeignInterface`, `TestSyncSurfacesHostFailures`, `TestParseKey`, `TestDesiredFromServerConfig` | the device diff and the interface steps (amendment A18) |
@@ -358,7 +376,7 @@ and `Policy.Fail`/`FailOn` inject a failure into one method, also while an agent
 | `TestPrintEnrollmentInTheLocalZone` (`commands_test.go`) | a join token's expiry in the local time zone; no enrollment, nothing printed |
 | `TestUserCommands` | passwords only from a terminal (a fake in tests), twice and matching, never echoed; add, passwd, reset-totp |
 | `TestImportCommand` | import then export round trip; a file with unknown fields refused (Linux only) |
-| `TestFirewallCommands` (`firewall_test.go`) | `node add --groups`; `firewall show` (policies, the rules every server enforces), `--yaml` and `--json`; `firewall apply` of a file; `firewall check` by node and address with the deciding rule, not mesh traffic, a service without one port; a bad file, a missing one and a dangling reference change nothing; `node show` lists the groups and `node set --groups` replaces them, a bad group refused |
+| `TestFirewallCommands` (`firewall_test.go`) | `node add --groups`; `firewall show` (policies, the rules every server enforces), `--yaml` and `--json`; `firewall apply` of a file; `firewall check` by node and address with the deciding rule, not mesh traffic, a service without one port; a scheduled policy's WHEN column and zone line, `check --at` inside and outside its window (naming it as not in force), a bad `--at` a usage error; a bad file, a missing one and a dangling reference change nothing; `node show` lists the groups and `node set --groups` replaces them, a bad group refused |
 
 ## End to end -- `test/e2e`
 
@@ -421,7 +439,8 @@ the namespaces from the test process (`inNS`).
 denying the laptop TCP to the NAS, an open laptop-NAS connection stops at its next packet (the
 relay deleted its connection tracking) and a new one is refused, ping still crosses (a system
 rule), `meshctl firewall check` names the policy, and vps-1 reports no error; allow-all alone
-lets new connections through again. Every other e2e test runs with the default allow-all table on
+lets new connections through again. The same deny with a schedule (UTC, amendment A44) refuses new
+connections while its window holds now, and lets them through with a window later in the day. Every other e2e test runs with the default allow-all table on
 every server.
 
 ## `internal/server/planner`

@@ -26,6 +26,9 @@ type Segmentation struct {
 	Zones     []SegZone
 	// Policies are in order.
 	Policies []SegPolicy
+	// TimeZone is the IANA zone the schedules are read in: the document's,
+	// else the server's.
+	TimeZone string
 }
 
 // SegZone is a zone: its members, and what traffic within it gets when no
@@ -36,7 +39,8 @@ type SegZone struct {
 	Members []string
 }
 
-// SegPolicy is one policy; an empty From, To or Services is any.
+// SegPolicy is one policy; an empty From, To or Services is any, a nil
+// Schedule always.
 type SegPolicy struct {
 	Name     string
 	Disabled bool
@@ -44,6 +48,7 @@ type SegPolicy struct {
 	To       []string
 	Services []string
 	Action   string
+	Schedule *proto.Schedule
 }
 
 // The reference kinds (as in store) and the roles a role: reference names.
@@ -377,7 +382,8 @@ func mergeServices(in []validate.Service) []proto.Service {
 // policies in order, then an allow within each zone whose Intra is allow;
 // what matches none is dropped. A policy whose From, To or Services
 // resolves to nothing matches nothing and is left out (Check warns), never
-// widened to any.
+// widened to any. A scheduled policy keeps its schedule, its days in the
+// canonical form, and the policy then carries the time zone.
 func (r *segResolver) compile(servers []Node) *proto.Policy {
 	pol := &proto.Policy{Mesh: r.in.MeshCIDR.String(), Rules: []proto.PolicyRule{
 		{Name: systemPrefix + "ping", Services: []proto.Service{{Proto: validate.ServiceICMP}}, Action: proto.PolicyAllow},
@@ -418,6 +424,14 @@ func (r *segResolver) compile(servers []Node) *proto.Policy {
 			r.report(true, "%s matches no traffic (its %s resolves to nothing), so it is left out", where, empty)
 			continue
 		}
+		if p.Schedule != nil {
+			w, ok := r.schedule(where, p.Schedule)
+			if !ok {
+				continue
+			}
+			rule.Schedule = &proto.Schedule{Days: w.DayNames(), Start: p.Schedule.Start, End: p.Schedule.End}
+			pol.TZ = r.seg.TimeZone
+		}
 		pol.Rules = append(pol.Rules, rule)
 	}
 	for _, z := range slices.SortedFunc(slices.Values(r.seg.Zones), func(a, b SegZone) int { return cmp.Compare(a.Name, b.Name) }) {
@@ -429,6 +443,15 @@ func (r *segResolver) compile(servers []Node) *proto.Policy {
 		}
 	}
 	return pol
+}
+
+// schedule parses a policy's schedule, reporting it when it does not.
+func (r *segResolver) schedule(where string, s *proto.Schedule) (validate.Window, bool) {
+	w, err := validate.Schedule(where+": schedule", s.Days, s.Start, s.End)
+	if err != nil {
+		r.report(false, "%v", err)
+	}
+	return w, err == nil
 }
 
 // checkSegmentation reports what is wrong with the segmentation document as
@@ -484,12 +507,22 @@ func checkSegmentation(in Input, servers []Node, errf, warnf func(node, format s
 	}
 	// Disabled policies' references must hold too: enabling one later must
 	// not be the change that fails.
+	scheduled := false
 	for _, p := range seg.Policies {
+		scheduled = scheduled || p.Schedule != nil
 		if p.Disabled {
 			where := fmt.Sprintf("policy %q (disabled)", p.Name)
 			r.refs(where+": from", p.From, policyKinds)
 			r.refs(where+": to", p.To, policyKinds)
 			r.services(where+": services", p.Services)
+			if p.Schedule != nil {
+				r.schedule(where, p.Schedule)
+			}
+		}
+	}
+	if scheduled {
+		if _, err := validate.TimeZone("the policies' time zone", seg.TimeZone); err != nil {
+			errf("", "%v; set one with `meshctl firewall apply` (timezone:) or on the Firewall page", err)
 		}
 	}
 	pol := r.compile(servers)
@@ -543,11 +576,12 @@ const (
 // Summarize is how pol treats traffic from addresses from to addresses to:
 // allowed in full, denied in full, or partly (some services, or some
 // addresses), with the indexes of the rules that decide it. It walks the
-// rules in order until one matches every address pair and every service;
-// without such a rule the default drop takes the rest. Two rules that
-// together cover the pair still read as partial: the reachability check
-// gives the exact answer for one flow.
-func Summarize(pol *proto.Policy, from, to []string) (string, []int) {
+// rules that apply (active, as proto.Matcher.Active says for a time; nil is
+// every rule) in order until one matches every address pair and every
+// service; without such a rule the default drop takes the rest. Two rules
+// that together cover the pair still read as partial: the reachability
+// check gives the exact answer for one flow.
+func Summarize(pol *proto.Policy, active []bool, from, to []string) (string, []int) {
 	a, b := parseSpans(from), parseSpans(to)
 	if len(a) == 0 || len(b) == 0 {
 		return ReachDeny, nil
@@ -558,6 +592,9 @@ func Summarize(pol *proto.Policy, from, to []string) (string, []int) {
 		full    bool
 	)
 	for i, rule := range pol.Rules {
+		if active != nil && !active[i] {
+			continue
+		}
 		rf, rt := parseSpans(rule.From), parseSpans(rule.To)
 		if (rule.From != nil && !rf.overlaps(a)) || (rule.To != nil && !rt.overlaps(b)) {
 			continue

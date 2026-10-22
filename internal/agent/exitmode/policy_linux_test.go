@@ -73,7 +73,7 @@ func TestKernelPolicyWithoutPrivilege(t *testing.T) {
 	if _, err := p.Routes(); err != nil {
 		t.Fatalf("Routes = %v", err)
 	}
-	want, routesWanted := Desired("lo", true, p.IPv6())
+	want, routesWanted := Desired("lo", true, p.IPv6() == V6Policy)
 	for _, err := range []error{p.AddRule(want[1]), p.DelRule(want[1]), p.AddRoute(routesWanted[0]), p.DelRoute(routesWanted[0])} {
 		if err == nil || (!strings.Contains(err.Error(), "table 51820") && !strings.Contains(err.Error(), "lookup 51820")) {
 			t.Errorf("an unprivileged change = %v", err)

@@ -20,4 +20,4 @@ func (otherPolicy) DelRule(Rule) error       { return errPlatform }
 func (otherPolicy) Routes() ([]Route, error) { return nil, nil }
 func (otherPolicy) AddRoute(Route) error     { return errPlatform }
 func (otherPolicy) DelRoute(Route) error     { return errPlatform }
-func (otherPolicy) IPv6() bool               { return false }
+func (otherPolicy) IPv6() V6Support          { return V6None }

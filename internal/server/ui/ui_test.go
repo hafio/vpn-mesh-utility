@@ -621,7 +621,7 @@ func TestStoreFailuresAreLoggedNotShown(t *testing.T) {
 		{http.MethodGet, "/dns"}, {http.MethodGet, "/firewall"}, {http.MethodPost, "/dns/files/remove"},
 		{http.MethodGet, "/firewall/zones"}, {http.MethodGet, "/firewall/objects"}, {http.MethodGet, "/firewall/reach"},
 		{http.MethodPost, "/firewall/policies/allow-all/remove"}, {http.MethodPost, "/firewall/zones"},
-		{http.MethodPost, "/nodes/vps-1/phone"},
+		{http.MethodPost, "/nodes/vps-1/phone"}, {http.MethodPost, "/firewall/timezone"},
 	} {
 		var form url.Values
 		if c.method == http.MethodPost {
@@ -965,15 +965,20 @@ func TestPageGoldens(t *testing.T) {
 			p.Title, p.Nav, p.Flash = "Firewall", "firewall", "Policy smb saved; config v6 is on its way to the agents"
 			rules := []proto.PolicyRule{{Name: "system: ping", Services: []proto.Service{{Proto: "icmp"}}, Action: "allow"},
 				{Name: "policy: smb", From: []string{"10.77.2.1"}, To: []string{"10.77.1.1"}, Services: []proto.Service{{Proto: "tcp", Ports: []string{"445"}}},
-					Action: "allow"},
+					Action: "allow", Schedule: &proto.Schedule{Days: []string{"mon", "tue", "wed", "thu", "fri"}, Start: "09:00", End: "17:00"}},
 				{Name: "policy: allow-all", Action: "allow"}}
+			form := newPolicyForm(2)
+			form.Zone = "Asia/Singapore"
 			p.Data = fwPage{Tab: "policies", Tabs: fwTabs, Warnings: []string{`warning: zone "lab" has no addresses`}, View: policiesView{
 				Policies: []policyRow{
-					{Pos: 1, Up: 0, Down: 2, Name: "smb", Action: "allow", From: "group:laptops", To: "node:nas", Services: "tcp/445", First: true},
+					{Pos: 1, Up: 0, Down: 2, Name: "smb", Action: "allow", From: "group:laptops", To: "node:nas", Services: "tcp/445", First: true,
+						Schedule: "mon-fri 09:00-17:00", Inactive: true},
 					{Pos: 2, Up: 1, Down: 3, Name: "allow-all", Action: "allow", From: "any", To: "any", Services: "any", Description: "Every mesh address", Last: true},
 				},
-				Rules: ruleRows(rules),
-				Form:  newPolicyForm(2),
+				Rules: ruleRows(rules, []int{1}),
+				Form:  form,
+				Zone:  "Asia/Singapore",
+				Now:   "Mon 2026-10-12 18:00 +08",
 			}}
 			return p
 		}(),

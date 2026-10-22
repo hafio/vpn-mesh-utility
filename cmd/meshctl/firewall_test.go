@@ -86,6 +86,35 @@ func TestFirewallCommands(t *testing.T) {
 		t.Errorf("check every port = %d %s", code, errOut)
 	}
 
+	// Schedules: the WHEN column, the zone they are read in, a check at a
+	// time inside and outside the window.
+	scheduled := filepath.Join(dir, "scheduled.yaml")
+	doc := strings.Replace(firewallFile, "      services: [tcp/445]\n", "      services: [tcp/445]\n      schedule:\n        days: [sat, sun]\n", 1) +
+		"  timezone: Asia/Singapore\n"
+	if err := os.WriteFile(scheduled, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code, out, errOut = runArgs("firewall", "apply", scheduled, "--data", data); code != exitOK {
+		t.Fatalf("apply a schedule: %d\n%s%s", code, out, errOut)
+	}
+	if code, out, _ = runArgs("firewall", "show", "--data", data); code != exitOK || !strings.Contains(out, "tcp/445   sat,sun") ||
+		!strings.Contains(out, "schedules are read in Asia/Singapore; now ") || !strings.Contains(out, "tcp/445 sat,sun (policy: smb)") {
+		t.Fatalf("show a schedule: %d\n%s", code, out)
+	}
+	weekend := []string{"firewall", "check", "laptop", "nas", "tcp/445", "--at", "2026-10-17T10:00:00+08:00", "--data", data}
+	if code, out, errOut = runArgs(weekend...); code != exitOK || !strings.Contains(out, "allowed (rule 2, policy: smb)") || strings.Contains(out, "not in force") {
+		t.Fatalf("check on a Saturday: %d\n%s%s", code, out, errOut)
+	}
+	weekend[6] = "2026-10-19T10:00:00+08:00" // a Monday
+	if code, out, errOut = runArgs(weekend...); code != exitOK || !strings.Contains(out, "dropped (rule 3, policy: no-nas)") ||
+		!strings.Contains(out, "at 2026-10-19T10:00:00+08:00, not in force (scheduled): policy: smb") {
+		t.Fatalf("check on a Monday: %d\n%s%s", code, out, errOut)
+	}
+	weekend[6] = "monday"
+	if code, _, errOut = runArgs(weekend...); code != exitUsage || !strings.Contains(errOut, "RFC 3339") {
+		t.Fatalf("check at a bad time: %d %s", code, errOut)
+	}
+
 	// A bad file changes nothing.
 	bad := filepath.Join(dir, "bad.yaml")
 	if err := os.WriteFile(bad, []byte(strings.Replace(firewallFile, "action: deny", "action: drop", 1)), 0o600); err != nil {

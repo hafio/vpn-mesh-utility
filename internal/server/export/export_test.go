@@ -25,7 +25,9 @@ func snapshot() store.Snapshot {
 			Groups: []store.SegGroup{{Name: "storage", Nodes: []string{"nas"}}},
 			Zones:  []store.SegZone{{Name: "home", Intra: store.SegAllow, Members: []string{"group:storage"}}},
 			Policies: []store.SegPolicy{{Name: "backup", Description: "nas backup", From: []string{"zone:home"}, To: []string{"node:vps-1"},
-				Services: []string{"tcp/9000"}, Action: store.SegAllow}, store.DefaultPolicy()},
+				Services: []string{"tcp/9000"}, Action: store.SegAllow,
+				Schedule: &store.SegSchedule{Days: []string{"sun"}, Start: "01:00", End: "05:00"}}, store.DefaultPolicy()},
+			TimeZone: "Europe/Berlin",
 		},
 	}
 }
@@ -55,7 +57,7 @@ func TestExportIsDeterministicAndByName(t *testing.T) {
 	}
 	out := a.String()
 	for _, want := range []string{"format: meshctl-export/1", "hub: vps-1", "can_exit: true", "segmentation:", "- group:storage",
-		"- tcp/9000", "name: allow-all", "mode: container", "container_subnet: " + testfix.ContainerSubnet} {
+		"- tcp/9000", "name: allow-all", "mode: container", "container_subnet: " + testfix.ContainerSubnet, "timezone: Europe/Berlin", "- sun"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("export lacks %q:\n%s", want, out)
 		}
@@ -134,6 +136,8 @@ func TestToSnapshotRefusesHostileDocuments(t *testing.T) {
 		"policy action":           func(d *Document) { d.Segmentation.Policies[0].Action = "accept" },
 		"group of a stranger":     func(d *Document) { d.Segmentation.Groups[0].Nodes = []string{"ghost"} },
 		"zone member injection":   func(d *Document) { d.Segmentation.Zones[0].Members = []string{"10.77.1.0/24\nrole: server"} },
+		"schedule injection":      func(d *Document) { d.Segmentation.Policies[0].Schedule.Days = []string{"sun\nrole: server"} },
+		"time zone injection":     func(d *Document) { d.Segmentation.TimeZone = "../../etc/passwd" },
 	}
 	for name, edit := range cases {
 		d := FromSnapshot(snapshot())

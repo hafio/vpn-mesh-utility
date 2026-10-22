@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"net/url"
 	"slices"
+	"time"
 
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
 	"github.com/hafio/vpn-mesh-utility/internal/server/planner"
@@ -24,6 +25,9 @@ import (
 // AdminSegmentation is the admin API's mesh firewall.
 const AdminSegmentation = "/admin/v1/segmentation"
 
+// ClockFormat is how the views show a time in the policies' zone.
+const ClockFormat = "Mon 2006-01-02 15:04 MST"
+
 // SegmentView is GET /admin/v1/segmentation: the document and what it
 // compiles to.
 type SegmentView struct {
@@ -36,6 +40,13 @@ type SegmentView struct {
 	// Nodes are every node's name, for the forms.
 	Nodes    []string `json:"nodes"`
 	Warnings []string `json:"warnings,omitempty"`
+	// TimeZone is the zone the schedules are read in (Config.TimeZone, else
+	// the server's) and Now the server's time there (ClockFormat);
+	// Inactive are the indexes of the Rules whose schedule does not hold
+	// now.
+	TimeZone string `json:"timezone"`
+	Now      string `json:"now"`
+	Inactive []int  `json:"inactive"`
 }
 
 // ZoneView is a zone as the policy sees it: its addresses, and the rules
@@ -54,6 +65,9 @@ type ReachRequest struct {
 	From    string `json:"from"`
 	To      string `json:"to"`
 	Service string `json:"service"`
+	// At is when, in RFC 3339 form; empty is now. Scheduled rules apply
+	// only in their window.
+	At string `json:"at,omitempty"`
 }
 
 // ReachResult is the verdict: allowed or dropped, by which rule.
@@ -66,6 +80,10 @@ type ReachResult struct {
 	// SegmentView.Rules, -1 for none.
 	Rule  string `json:"rule"`
 	Index int    `json:"index"`
+	// At is the time judged, in the policies' zone (RFC 3339); Inactive
+	// names the scheduled rules that did not apply then.
+	At       string   `json:"at"`
+	Inactive []string `json:"inactive,omitempty"`
 }
 
 // Matrix is how every zone reaches every other (Cells[from][to]).
@@ -73,6 +91,9 @@ type Matrix struct {
 	Zones []string           `json:"zones"`
 	Rules []proto.PolicyRule `json:"rules"`
 	Cells [][]MatrixCell     `json:"cells"`
+	// At is when the cells hold (ClockFormat): scheduled rules count only
+	// in their window.
+	At string `json:"at"`
 }
 
 // MatrixCell is one zone pair: planner.ReachAllow, ReachDeny or
@@ -82,9 +103,29 @@ type MatrixCell struct {
 	Rules   []int  `json:"rules,omitempty"`
 }
 
+// zoneOf is a time zone by name; one that no longer loads (a stored value
+// from another build) reads as UTC, and planner.Check says what is wrong.
+func zoneOf(name string) *time.Location {
+	loc, err := validate.TimeZone("timezone", name)
+	if err != nil {
+		return time.UTC
+	}
+	return loc
+}
+
+// activeAt is which of pol's rules apply at at; nil (every rule) when pol
+// does not parse, which planner.Check reports.
+func activeAt(pol *proto.Policy, at time.Time) []bool {
+	m, err := pol.Matcher()
+	if err != nil {
+		return nil
+	}
+	return m.Active(at)
+}
+
 // Segment returns the mesh firewall.
 func (s *Nodes) Segment(ctx context.Context) (SegmentView, error) {
-	v := SegmentView{Rules: []proto.PolicyRule{}, Zones: []ZoneView{}, Nodes: []string{}}
+	v := SegmentView{Rules: []proto.PolicyRule{}, Zones: []ZoneView{}, Nodes: []string{}, Inactive: []int{}}
 	err := s.db.Tx(ctx, func(tx *store.Tx) error {
 		in, nodes, err := LoadInput(tx)
 		if err != nil {
@@ -95,6 +136,13 @@ func (s *Nodes) Segment(ctx context.Context) (SegmentView, error) {
 		}
 		pol := planner.CompilePolicy(in)
 		v.Rules = append(v.Rules, pol.Rules...)
+		now := s.now().In(zoneOf(in.Segmentation.TimeZone))
+		v.TimeZone, v.Now = in.Segmentation.TimeZone, now.Format(ClockFormat)
+		for i, on := range activeAt(pol, now) {
+			if !on {
+				v.Inactive = append(v.Inactive, i)
+			}
+		}
 		zones := planner.ZoneAddresses(in)
 		for _, z := range v.Config.Zones {
 			zv := ZoneView{Name: z.Name, Addresses: zones[z.Name], Inbound: []int{}, Outbound: []int{}}
@@ -237,6 +285,19 @@ func (s *Nodes) SavePolicy(ctx context.Context, by Actor, old string, p store.Se
 	})
 }
 
+// SetTimeZone sets the time zone the policies' schedules are read in; ""
+// goes back to the server's.
+func (s *Nodes) SetTimeZone(ctx context.Context, by Actor, tz string) (MeshChange, error) {
+	target := tz
+	if tz == "" {
+		target = "the server's"
+	}
+	return s.EditSegment(ctx, by, "segmentation.timezone", target, func(seg *store.Segmentation) error {
+		seg.TimeZone = tz
+		return nil
+	})
+}
+
 // MovePolicy puts a policy at position (1 is first).
 func (s *Nodes) MovePolicy(ctx context.Context, by Actor, name string, position int) (MeshChange, error) {
 	return s.EditSegment(ctx, by, "segmentation.move", name, func(seg *store.Segmentation) error {
@@ -344,6 +405,12 @@ func (s *Nodes) Reach(ctx context.Context, req ReachRequest) (ReachResult, error
 	if err != nil {
 		return ReachResult{}, invalid(err)
 	}
+	var at time.Time
+	if req.At != "" {
+		if at, err = validate.Timestamp("at", req.At); err != nil {
+			return ReachResult{}, invalid(err)
+		}
+	}
 	out := ReachResult{Service: svc.String(), Index: -1}
 	err = s.db.Tx(ctx, func(tx *store.Tx) error {
 		in, nodes, err := LoadInput(tx)
@@ -364,8 +431,18 @@ func (s *Nodes) Reach(ctx context.Context, req ReachRequest) (ReachResult, error
 		if err != nil {
 			return err
 		}
+		if at.IsZero() {
+			at = s.now()
+		}
+		at = at.In(zoneOf(in.Segmentation.TimeZone))
+		out.At = at.Format(time.RFC3339)
+		for j, on := range m.Active(at) {
+			if !on {
+				out.Inactive = append(out.Inactive, pol.Rules[j].Name)
+			}
+		}
 		var i int
-		out.Allowed, i = m.Decide(src, dst, svc.Proto, svc.First)
+		out.Allowed, i = m.Decide(src, dst, svc.Proto, svc.First, at)
 		switch i {
 		case proto.RuleDefault:
 			out.Rule = "no rule matched: dropped"
@@ -407,6 +484,9 @@ func (s *Nodes) Matrix(ctx context.Context) (Matrix, error) {
 		}
 		pol := planner.CompilePolicy(in)
 		out.Rules = pol.Rules
+		now := s.now().In(zoneOf(in.Segmentation.TimeZone))
+		out.At = now.Format(ClockFormat)
+		active := activeAt(pol, now)
 		zones := planner.ZoneAddresses(in)
 		for _, z := range in.Segmentation.Zones {
 			out.Zones = append(out.Zones, z.Name)
@@ -415,7 +495,7 @@ func (s *Nodes) Matrix(ctx context.Context) (Matrix, error) {
 		for _, a := range out.Zones {
 			row := make([]MatrixCell, 0, len(out.Zones))
 			for _, b := range out.Zones {
-				v, rules := planner.Summarize(pol, zones[a], zones[b])
+				v, rules := planner.Summarize(pol, active, zones[a], zones[b])
 				row = append(row, MatrixCell{Verdict: v, Rules: rules})
 			}
 			out.Cells = append(out.Cells, row)
@@ -442,7 +522,7 @@ func (a *api) adminSetSegment(w http.ResponseWriter, r *http.Request) {
 
 func (a *api) adminReach(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	out, err := a.nodes.Reach(r.Context(), ReachRequest{From: q.Get("from"), To: q.Get("to"), Service: q.Get("service")})
+	out, err := a.nodes.Reach(r.Context(), ReachRequest{From: q.Get("from"), To: q.Get("to"), Service: q.Get("service"), At: q.Get("at")})
 	a.reply(w, r, out, err)
 }
 
@@ -463,6 +543,9 @@ func (c *AdminClient) SetSegment(ctx context.Context, doc store.Segmentation) (M
 // Reach asks what the mesh firewall does with one flow.
 func (c *AdminClient) Reach(ctx context.Context, req ReachRequest) (ReachResult, error) {
 	q := url.Values{"from": {req.From}, "to": {req.To}, "service": {req.Service}}
+	if req.At != "" {
+		q.Set("at", req.At)
+	}
 	var out ReachResult
 	err := c.do(ctx, http.MethodGet, AdminSegmentation+"/check?"+q.Encode(), nil, &out)
 	return out, err

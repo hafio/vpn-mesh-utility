@@ -13,7 +13,7 @@ import (
 )
 
 func (h *harness) nodes() *Nodes {
-	return NewNodes(Deps{DB: h.db, Hub: h.hub, Reconciler: h.rec, ServerURL: testURL, Version: "v1.0.0"})
+	return NewNodes(Deps{DB: h.db, Hub: h.hub, Reconciler: h.rec, Now: h.clock.Now, ServerURL: testURL, Version: "v1.0.0"})
 }
 
 // meshHarness is the three servers, the enrolled NAS and a laptop that has

@@ -4,15 +4,15 @@
 <p>Every server enforces these policies on mesh traffic -- what it relays between nodes, what reaches it and what it sends. The first policy that matches a packet decides; what none matches is dropped. Replies always pass. Internet traffic through an exit is not mesh traffic, and spokes keep their own firewall.</p>
 {{- with .View}}
 <table>
-<thead><tr><th>#</th><th>Name</th><th>Action</th><th>From</th><th>To</th><th>Services</th><th></th></tr></thead>
+<thead><tr><th>#</th><th>Name</th><th>Action</th><th>From</th><th>To</th><th>Services</th><th>When</th><th></th></tr></thead>
 <tbody>
 {{- range .Policies}}
-<tr><td>{{.Pos}}</td><td><a href="/firewall/policies/{{.Name}}">{{.Name}}</a>{{if .Disabled}} (disabled){{end}}{{if .Description}}<br><span class="hint">{{.Description}}</span>{{end}}</td><td><span class="state {{if eq .Action "allow"}}ok{{else}}bad{{end}}">{{.Action}}</span></td><td>{{.From}}</td><td>{{.To}}</td><td>{{.Services}}</td><td class="actions">
+<tr><td>{{.Pos}}</td><td><a href="/firewall/policies/{{.Name}}">{{.Name}}</a>{{if .Disabled}} (disabled){{end}}{{if .Description}}<br><span class="hint">{{.Description}}</span>{{end}}</td><td><span class="state {{if eq .Action "allow"}}ok{{else}}bad{{end}}">{{.Action}}</span></td><td>{{.From}}</td><td>{{.To}}</td><td>{{.Services}}</td><td>{{if .Schedule}}{{.Schedule}}{{if .Inactive}} <span class="hint">(not now)</span>{{end}}{{else}}always{{end}}</td><td class="actions">
 {{- if not .First}}<form method="post" action="/firewall/policies/{{.Name}}/move" class="inline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="position" value="{{.Up}}"><button type="submit" class="link">Up</button></form>{{end}}
 {{- if not .Last}}<form method="post" action="/firewall/policies/{{.Name}}/move" class="inline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="position" value="{{.Down}}"><button type="submit" class="link">Down</button></form>{{end}}
 <form method="post" action="/firewall/policies/{{.Name}}/remove" class="inline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit" class="link">Remove</button></form></td></tr>
 {{- else}}
-<tr><td colspan="7">No policies: between nodes only ping, DNS to the servers and Swarm between them cross the mesh.</td></tr>
+<tr><td colspan="8">No policies: between nodes only ping, DNS to the servers and Swarm between them cross the mesh.</td></tr>
 {{- end}}
 </tbody>
 </table>
@@ -25,11 +25,20 @@
 </form>
 {{- template "fwrefs"}}
 
+<h2>Schedules</h2>
+<p>A policy with a schedule applies only on its days, between its times, on the clock of {{.Zone}}{{if not .TimeZone}} (the server's time zone){{end}}: now {{.Now}}. Every server applies the change at the edge itself, so keep their clocks in sync (NTP).</p>
+<form method="post" action="/firewall/timezone" class="grid">
+<input type="hidden" name="csrf" value="{{$.CSRF}}">
+<label>Time zone <input name="timezone" value="{{.TimeZone}}" placeholder="the server's: {{.Zone}}" maxlength="64"></label>
+<button type="submit">Save time zone</button>
+</form>
+<p class="hint">An IANA name such as Europe/Berlin or Asia/Singapore; empty is the server's own.</p>
+
 <h2>What every server enforces</h2>
 <p class="hint">The system rules keep the mesh working and no policy changes them; after the policies, each zone allows traffic within it unless it says deny; then the rest is dropped.</p>
 <ol>
 {{- range .Rules}}
-<li>{{if .System}}<span class="hint">{{.Text}}</span>{{else}}<code>{{.Text}}</code>{{end}}</li>
+<li>{{if .System}}<span class="hint">{{.Text}}</span>{{else}}<code>{{.Text}}</code>{{end}}{{if .Inactive}} <span class="hint">(not now)</span>{{end}}</li>
 {{- end}}
 <li><span class="hint">drop everything else</span></li>
 </ol>

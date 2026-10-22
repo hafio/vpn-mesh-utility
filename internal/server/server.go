@@ -104,9 +104,12 @@ func Run(ctx context.Context, c Config) error {
 	hub := api.NewHub()
 	rec := api.NewReconciler(st, hub, c.Log)
 	// A new release may compute configs differently; reconcile once so the
-	// stored hashes, and the agents, follow this binary.
+	// stored hashes, and the agents, follow this binary -- and the server's
+	// time zone, which the mesh firewall's schedules default to.
+	zone := serverZone(c.Now().Location(), os.Readlink)
+	recordZone := func(tx *store.Tx, _ *api.Change) error { return tx.SetSetting(store.SettingServerTZ, zone) }
 	res, err := rec.Apply(ctx, api.Change{Actor: "system", Action: "server.start", Summary: "recomputed by meshctl " + c.Version,
-		Detail: map[string]any{"version": c.Version}}, nil)
+		Detail: map[string]any{"version": c.Version}}, recordZone)
 	var pe *api.PlanError
 	switch {
 	case errors.As(err, &pe):

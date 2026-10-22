@@ -260,8 +260,9 @@ func TestPolicyHasKernelSemantics(t *testing.T) {
 	if err1 != nil || err2 != nil || !slices.Equal(rules, []exitmode.Rule{rule}) || !slices.Equal(routes, []exitmode.Route{route}) {
 		t.Fatalf("after Install: %v %v (%v %v)", rules, routes, err1, err2)
 	}
-	if !p.IPv6() || (&Policy{NoIPv6: true}).IPv6() {
-		t.Fatal("IPv6 must follow NoIPv6")
+	if p.IPv6() != exitmode.V6Policy || (&Policy{NoIPv6: true}).IPv6() != exitmode.V6None ||
+		(&Policy{V6Unrouted: true}).IPv6() != exitmode.V6Unrouted {
+		t.Fatal("IPv6 must follow NoIPv6 and V6Unrouted")
 	}
 
 	// Fail alone fails every mutating call; with FailOn only that method,

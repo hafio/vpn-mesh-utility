@@ -56,7 +56,7 @@ func TestCompareListsEveryKindOfChange(t *testing.T) {
 	to.DNS = []store.DNSRecord{{Name: "files", NodeID: testfix.VPS2.ID}}
 	to.Segmentation = &store.Segmentation{Groups: []store.SegGroup{{Name: "storage", Nodes: []string{"nas"}}},
 		Policies: []store.SegPolicy{{Name: "backup", From: []string{"group:storage"}, To: []string{"node:vps-1"}, Services: []string{"tcp/9000"},
-			Action: store.SegAllow}, store.DefaultPolicy()}}
+			Action: store.SegAllow, Schedule: &store.SegSchedule{Days: []string{"sat"}}}, store.DefaultPolicy()}, TimeZone: "UTC"}
 
 	d := Compare(from, to)
 	want := Diff{
@@ -69,7 +69,7 @@ func TestCompareListsEveryKindOfChange(t *testing.T) {
 		}}},
 		Settings: []FieldChange{{Field: store.SettingDefaultMTU, From: "1420", To: "1400"}},
 		DNS:      []string{"- old -> 10.77.0.9"},
-		Firewall: []string{"+ group storage: nas", "+ policy 1 backup: allow group:storage -> node:vps-1 tcp/9000",
+		Firewall: []string{"+ group storage: nas", "+ policy 1 backup: allow group:storage -> node:vps-1 tcp/9000 sat", "+ schedules in UTC",
 			"- policy 1 backup: allow 10.77.1.0/24 -> role:server tcp/9000"},
 	}
 	if !reflect.DeepEqual(d, want) {

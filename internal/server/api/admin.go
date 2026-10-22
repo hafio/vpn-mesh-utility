@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/hafio/vpn-mesh-utility/deploy"
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
@@ -46,11 +47,17 @@ type Nodes struct {
 	// version is the server's build: a spoke's container runs the same
 	// release.
 	version string
+	// now is the clock the policies' schedules are judged on.
+	now func() time.Time
 }
 
 // NewNodes wires the service from the API's dependencies.
 func NewNodes(d Deps) *Nodes {
-	return &Nodes{db: d.DB, rec: d.Reconciler, hub: d.Hub, serverURL: d.ServerURL, version: d.Version}
+	now := d.Now
+	if now == nil {
+		now = time.Now
+	}
+	return &Nodes{db: d.DB, rec: d.Reconciler, hub: d.Hub, serverURL: d.ServerURL, version: d.Version, now: now}
 }
 
 // ErrorMessage is how a failure from Nodes (or the reconciler) is shown to an

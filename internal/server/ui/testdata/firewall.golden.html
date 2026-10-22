@@ -37,11 +37,11 @@
 
 <p>Every server enforces these policies on mesh traffic -- what it relays between nodes, what reaches it and what it sends. The first policy that matches a packet decides; what none matches is dropped. Replies always pass. Internet traffic through an exit is not mesh traffic, and spokes keep their own firewall.</p>
 <table>
-<thead><tr><th>#</th><th>Name</th><th>Action</th><th>From</th><th>To</th><th>Services</th><th></th></tr></thead>
+<thead><tr><th>#</th><th>Name</th><th>Action</th><th>From</th><th>To</th><th>Services</th><th>When</th><th></th></tr></thead>
 <tbody>
-<tr><td>1</td><td><a href="/firewall/policies/smb">smb</a></td><td><span class="state ok">allow</span></td><td>group:laptops</td><td>node:nas</td><td>tcp/445</td><td class="actions"><form method="post" action="/firewall/policies/smb/move" class="inline"><input type="hidden" name="csrf" value="csrf-token"><input type="hidden" name="position" value="2"><button type="submit" class="link">Down</button></form>
+<tr><td>1</td><td><a href="/firewall/policies/smb">smb</a></td><td><span class="state ok">allow</span></td><td>group:laptops</td><td>node:nas</td><td>tcp/445</td><td>mon-fri 09:00-17:00 <span class="hint">(not now)</span></td><td class="actions"><form method="post" action="/firewall/policies/smb/move" class="inline"><input type="hidden" name="csrf" value="csrf-token"><input type="hidden" name="position" value="2"><button type="submit" class="link">Down</button></form>
 <form method="post" action="/firewall/policies/smb/remove" class="inline"><input type="hidden" name="csrf" value="csrf-token"><button type="submit" class="link">Remove</button></form></td></tr>
-<tr><td>2</td><td><a href="/firewall/policies/allow-all">allow-all</a><br><span class="hint">Every mesh address</span></td><td><span class="state ok">allow</span></td><td>any</td><td>any</td><td>any</td><td class="actions"><form method="post" action="/firewall/policies/allow-all/move" class="inline"><input type="hidden" name="csrf" value="csrf-token"><input type="hidden" name="position" value="1"><button type="submit" class="link">Up</button></form>
+<tr><td>2</td><td><a href="/firewall/policies/allow-all">allow-all</a><br><span class="hint">Every mesh address</span></td><td><span class="state ok">allow</span></td><td>any</td><td>any</td><td>any</td><td>always</td><td class="actions"><form method="post" action="/firewall/policies/allow-all/move" class="inline"><input type="hidden" name="csrf" value="csrf-token"><input type="hidden" name="position" value="1"><button type="submit" class="link">Up</button></form>
 <form method="post" action="/firewall/policies/allow-all/remove" class="inline"><input type="hidden" name="csrf" value="csrf-token"><button type="submit" class="link">Remove</button></form></td></tr>
 </tbody>
 </table>
@@ -60,17 +60,38 @@
 <label>Position <input name="position" value="2" placeholder="last"></label>
 <label>Description <input name="description" value="" maxlength="200"></label>
 <label><input type="checkbox" name="disabled"> Disabled (kept, not enforced)</label>
+<fieldset class="days"><legend>Days (none: every day)</legend>
+<label><input type="checkbox" name="days" value="mon"> Mon</label>
+<label><input type="checkbox" name="days" value="tue"> Tue</label>
+<label><input type="checkbox" name="days" value="wed"> Wed</label>
+<label><input type="checkbox" name="days" value="thu"> Thu</label>
+<label><input type="checkbox" name="days" value="fri"> Fri</label>
+<label><input type="checkbox" name="days" value="sat"> Sat</label>
+<label><input type="checkbox" name="days" value="sun"> Sun</label>
+</fieldset>
+<label>Starts <input type="time" name="start" value=""></label>
+<label>Ends <input type="time" name="end" value=""></label>
+<p class="hint">No days and no times: always. Days alone are whole days; an end before the start ends the next day. Times are in Asia/Singapore.</p>
 
 <button type="submit">Add policy</button>
 </form>
 <p class="hint">From, To and members take references -- <code>zone:NAME</code> (policies only), <code>node:NAME</code>, <code>containers:NAME</code> (a node's container network), <code>group:NAME</code>, <code>role:server</code>, <code>role:spoke</code>, <code>role:phone</code>, <code>addr:NAME</code> -- and addresses: <code>10.77.1.5</code>, <code>10.77.1.0/24</code>, <code>10.77.1.5-10.77.1.20</code>. Services take <code>svc:NAME</code>, <code>tcp/22</code>, <code>udp/1000-2000</code>, <code>tcp</code> (every port) and <code>icmp</code> (ping). Separate entries with commas; empty is any.</p>
 
 
+<h2>Schedules</h2>
+<p>A policy with a schedule applies only on its days, between its times, on the clock of Asia/Singapore (the server's time zone): now Mon 2026-10-12 18:00 &#43;08. Every server applies the change at the edge itself, so keep their clocks in sync (NTP).</p>
+<form method="post" action="/firewall/timezone" class="grid">
+<input type="hidden" name="csrf" value="csrf-token">
+<label>Time zone <input name="timezone" value="" placeholder="the server's: Asia/Singapore" maxlength="64"></label>
+<button type="submit">Save time zone</button>
+</form>
+<p class="hint">An IANA name such as Europe/Berlin or Asia/Singapore; empty is the server's own.</p>
+
 <h2>What every server enforces</h2>
 <p class="hint">The system rules keep the mesh working and no policy changes them; after the policies, each zone allows traffic within it unless it says deny; then the rest is dropped.</p>
 <ol>
 <li><span class="hint">allow any -&gt; any icmp (system: ping)</span></li>
-<li><code>allow 10.77.2.1 -&gt; 10.77.1.1 tcp/445 (policy: smb)</code></li>
+<li><code>allow 10.77.2.1 -&gt; 10.77.1.1 tcp/445 mon-fri 09:00-17:00 (policy: smb)</code> <span class="hint">(not now)</span></li>
 <li><code>allow any -&gt; any any (policy: allow-all)</code></li>
 <li><span class="hint">drop everything else</span></li>
 </ol>

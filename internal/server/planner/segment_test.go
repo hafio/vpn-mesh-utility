@@ -3,6 +3,7 @@ package planner
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
 	"github.com/hafio/vpn-mesh-utility/internal/testfix"
@@ -26,6 +27,7 @@ func meshFirewall() Segmentation {
 			{Name: "later", Disabled: true, From: []string{"node:nas"}, Action: proto.PolicyDeny},
 			{Name: "allow-all", Action: proto.PolicyAllow},
 		},
+		TimeZone: "UTC",
 	}
 }
 
@@ -81,6 +83,7 @@ func TestPolicyMerges(t *testing.T) {
 }
 
 func TestCheckSegmentation(t *testing.T) {
+	mon := &proto.Schedule{Days: []string{"mon"}}
 	for _, c := range []struct {
 		name string
 		edit func(*Segmentation)
@@ -100,6 +103,9 @@ func TestCheckSegmentation(t *testing.T) {
 		{"policy action", func(s *Segmentation) { s.Policies[0].Action = "accept" }, `policy "firewall-1": action`},
 		{"a disabled policy's reference", func(s *Segmentation) { s.Policies[3].From = []string{"node:ghost"} }, `policy "later" (disabled)`},
 		{"a zone inside a zone", func(s *Segmentation) { s.Zones[0].Members = []string{"zone:home"} }, "kind one of"},
+		{"a schedule", func(s *Segmentation) { s.Policies[1].Schedule = &proto.Schedule{Start: "9:00", End: "18:00"} }, `policy "laptop-smb": schedule.start`},
+		{"a schedule without a time zone", func(s *Segmentation) { s.TimeZone, s.Policies[1].Schedule = "", mon }, "the policies' time zone"},
+		{"a disabled policy's schedule", func(s *Segmentation) { s.Policies[3].Schedule = &proto.Schedule{} }, `policy "later" (disabled): schedule`},
 	} {
 		in := topology("full")
 		in.Segmentation = meshFirewall()
@@ -140,6 +146,35 @@ func TestSegmentationWarnings(t *testing.T) {
 	}
 }
 
+// A scheduled policy keeps its schedule, its days in the week's order, and
+// the policy carries the time zone; outside the window the summary skips
+// it.
+func TestPolicySchedules(t *testing.T) {
+	in := topology("full")
+	in.Segmentation.TimeZone = "Asia/Singapore"
+	in.Segmentation.Policies[1].Schedule = &proto.Schedule{Days: []string{"fri", "mon"}, Start: "09:00", End: "18:00"}
+	if _, _, err := Compute(in); err != nil {
+		t.Fatal(err)
+	}
+	pol := CompilePolicy(in)
+	want := &proto.Schedule{Days: []string{"mon", "fri"}, Start: "09:00", End: "18:00"}
+	if pol.TZ != "Asia/Singapore" || !reflect.DeepEqual(pol.Rules[4].Schedule, want) || pol.Rules[5].Schedule != nil {
+		t.Fatalf("compiled %+v, time zone %q", pol.Rules[4], pol.TZ)
+	}
+	m, err := pol.Matcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tuesday := m.Active(time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC))
+	v, rules := Summarize(pol, tuesday, []string{testfix.Laptop.MeshIP}, ZoneAddresses(in)["home"])
+	if v != ReachAllow || !reflect.DeepEqual(rules, []int{0, 6}) {
+		t.Fatalf("the laptop to home on a Tuesday = %s %v", v, rules)
+	}
+	if bare := CompilePolicy(topology("full")); bare.TZ != "" {
+		t.Fatalf("a policy without schedules has the time zone %q", bare.TZ)
+	}
+}
+
 func TestSummarize(t *testing.T) {
 	in := topology("full")
 	pol := CompilePolicy(in)
@@ -158,7 +193,7 @@ func TestSummarize(t *testing.T) {
 		{"the phone to home", []string{testfix.Phone.MeshIP}, zones["home"], ReachPartial, []int{0, 5}},
 		{"nothing", nil, zones["home"], ReachDeny, nil},
 	} {
-		v, rules := Summarize(pol, c.from, c.to)
+		v, rules := Summarize(pol, nil, c.from, c.to)
 		if v != c.verdict || !reflect.DeepEqual(rules, c.rules) {
 			t.Errorf("%s: Summarize = %s %v, want %s %v", c.name, v, rules, c.verdict, c.rules)
 		}
@@ -166,11 +201,11 @@ func TestSummarize(t *testing.T) {
 	// Without allow-all, home reaches a server only for ping, DNS and 9100.
 	in.Segmentation.Policies = in.Segmentation.Policies[:4]
 	pol = CompilePolicy(in)
-	if v, _ := Summarize(pol, zones["home"], []string{testfix.VPS1.MeshIP}); v != ReachPartial {
+	if v, _ := Summarize(pol, nil, zones["home"], []string{testfix.VPS1.MeshIP}); v != ReachPartial {
 		t.Errorf("home to vps-1 = %s, want partial", v)
 	}
 	deny := &proto.Policy{Mesh: testfix.MeshCIDR, Rules: []proto.PolicyRule{{Name: "x", From: zones["home"], Action: "deny"}}}
-	if v, rules := Summarize(deny, zones["home"], []string{testfix.VPS1.MeshIP}); v != ReachDeny || !reflect.DeepEqual(rules, []int{0}) {
+	if v, rules := Summarize(deny, nil, zones["home"], []string{testfix.VPS1.MeshIP}); v != ReachDeny || !reflect.DeepEqual(rules, []int{0}) {
 		t.Errorf("a full deny = %s %v", v, rules)
 	}
 }

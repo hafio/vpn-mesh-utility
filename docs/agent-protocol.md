@@ -39,7 +39,7 @@ Admin socket (`<data>/admin.sock`, mode 0600, so only the server's own user reac
 | `POST /admin/v1/nodes/{name}/phone` | a phone's WireGuard profile with a new key pair; `{"exit": "<server>"}` (optional) sends its internet through that exit; the answer is the only copy of the private key (`meshctl node phone`) |
 | `GET /admin/v1/segmentation` | the mesh firewall (amendment A43): the document (groups, address and service objects, zones, policies), the rules it compiles to, each zone's addresses and inbound/outbound rules, and the plan's warnings (`meshctl firewall show`) |
 | `PUT /admin/v1/segmentation` | replace the whole document; checked against the mesh like every change (`meshctl firewall apply`) |
-| `GET /admin/v1/segmentation/check` | what the policy does with one flow: `?from=<node or IPv4>&to=<node or IPv4>&service=tcp/PORT\|udp/PORT\|icmp`; the answer names the rule that decided (`meshctl firewall check`) |
+| `GET /admin/v1/segmentation/check` | what the policy does with one flow: `?from=<node or IPv4>&to=<node or IPv4>&service=tcp/PORT\|udp/PORT\|icmp[&at=<RFC 3339>]` (default now); the answer names the rule that decided and the scheduled rules not in force then (`meshctl firewall check`) |
 
 Every admin write goes through the reconciler (below) with actor `cli` and is audited. Join
 tokens appear only in the answer to add and token, never in the audit log or the server log.
@@ -137,7 +137,12 @@ mesh firewall: `mesh` (the mesh CIDR) and `rules` in order. A rule has a `name` 
 `system: ping`, `policy: <name>`, `zone: <name>`), `from` and `to` (addresses, networks and ranges
 in canonical form, sorted and merged; absent is any), `services` (each a `proto` -- `tcp`, `udp`
 or `icmp`, which is ping -- with `ports` such as `22` or `1000-2000`; absent is every port, and
-absent services any traffic) and `action` (`allow` or `deny`). A packet between two mesh
+absent services any traffic), `action` (`allow` or `deny`) and, for a scheduled policy
+(amendment A44), `schedule`: `days` (`mon`..`sun` in the week's order; absent is every day),
+`start` and `end` (`HH:MM`; absent is the whole day, an `end` before `start` ends the next day,
+and a window belongs to the day it starts), read on the wall clock of the policy's `tz` (an IANA
+name, present only when a rule has a schedule). A scheduled rule takes part only while its window
+holds. A packet between two mesh
 addresses that the server relays, receives or sends is checked against the rules in order; the
 first that matches decides, and one none matches is dropped. Replies and ICMP errors of a flow
 that was allowed always pass; traffic with an end outside the mesh (an exit's) is not mesh
@@ -288,7 +293,13 @@ first rule's comment, `meshctl policy <fingerprint>`, by which the agent sees wh
 holds the table it installed. A different table is replaced whole in one transaction, and the
 connection tracking of flows between two mesh addresses is then deleted, so open connections
 are judged by the new policy at their next packet. The step runs at every apply and every drift
-check; an unchanged table costs one read. `nft list table ip meshctl` shows it.
+check; an unchanged table costs one read. `nft list table ip meshctl` shows it. A policy with
+schedules (amendment A44) is compiled for the time of the apply, leaving out the rules whose
+window does not hold, and the agent applies the config again when the next window starts or ends:
+a timer on that edge, with the drift check as the net when the clock is set or a
+daylight-saving gap swallows an edge. A window that closes replaces the table like any change, so
+the connections it allowed are judged again and cut. The server's clock decides: keep servers on
+NTP.
 
 **The container network** (step 10, `internal/agent/containers`). In container mode the agent is
 its containers' gateway in its own namespace: it adds `gateway` (.2) to the interface the runtime
@@ -333,6 +344,10 @@ around the tunnel; amendment A11). Every specific route of the main table still 
 own UDP carries fwmark 51820 and takes the normal path. Switching exits moves `0.0.0.0/0` between
 peers and leaves the rules alone, so no connection drops; exit off removes them. The rules and
 routes carry protocol 201, so only the agent's own are ever listed or removed (amendment A27).
+A kernel with IPv6 but without IPv6 policy routing (it refuses IPv6 rule dumps with EAFNOSUPPORT,
+as some NAS kernels built without IPV6_MULTIPLE_TABLES do) has no IPv6 rules to manage: step 6
+handles IPv4 alone, and with an exit on it is degraded (`exit`), not fatal, since IPv6 can then
+neither go through the exit nor be held back (amendment A45).
 
 **Safe apply** (server nodes, spec S6.4, amendment A15): a config the server pushes over a
 previous one is applied at once and written to `config.pending.json`; `config.json` stays the last

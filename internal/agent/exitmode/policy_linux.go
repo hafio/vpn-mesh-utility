@@ -27,9 +27,17 @@ func family(f Family) int {
 	return netlink.FAMILY_V4
 }
 
-func (netlinkPolicy) IPv6() bool {
-	_, err := os.Stat("/proc/net/if_inet6")
-	return err == nil
+// IPv6 is V6None without the IPv6 stack, V6Unrouted when the kernel
+// refuses IPv6 rule dumps (EAFNOSUPPORT: no IPV6_MULTIPLE_TABLES), else
+// V6Policy.
+func (netlinkPolicy) IPv6() V6Support {
+	if _, err := os.Stat("/proc/net/if_inet6"); err != nil {
+		return V6None
+	}
+	if _, err := netlink.RuleList(netlink.FAMILY_V6); errors.Is(err, syscall.EAFNOSUPPORT) {
+		return V6Unrouted
+	}
+	return V6Policy
 }
 
 // dump retries a netlink dump that a concurrent change interrupted.
@@ -47,7 +55,7 @@ func dump[T any](list func() ([]T, error)) ([]T, error) {
 }
 
 func (p netlinkPolicy) families() []Family {
-	if p.IPv6() {
+	if p.IPv6() == V6Policy {
 		return []Family{IPv4, IPv6}
 	}
 	return []Family{IPv4}

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
@@ -246,7 +247,14 @@ func LoadInput(tx *store.Tx) (planner.Input, []store.Node, error) {
 		return planner.Input{}, nil, err
 	}
 	in.Segmentation = plannerSegmentation(seg)
+	in.Segmentation.TimeZone = PolicyZone(seg, settings)
 	return in, nodes, nil
+}
+
+// PolicyZone is the time zone the policies' schedules are read in: the
+// document's, else the server's (written at every start), else UTC.
+func PolicyZone(seg store.Segmentation, settings map[string]string) string {
+	return cmp.Or(seg.TimeZone, settings[store.SettingServerTZ], "UTC")
 }
 
 // plannerSegmentation is the stored segmentation as the planner takes it.
@@ -265,8 +273,11 @@ func plannerSegmentation(s store.Segmentation) planner.Segmentation {
 		ps.Zones = append(ps.Zones, planner.SegZone{Name: z.Name, Intra: z.Intra, Members: z.Members})
 	}
 	for _, p := range s.Policies {
-		ps.Policies = append(ps.Policies, planner.SegPolicy{Name: p.Name, Disabled: p.Disabled, From: p.From, To: p.To,
-			Services: p.Services, Action: p.Action})
+		sp := planner.SegPolicy{Name: p.Name, Disabled: p.Disabled, From: p.From, To: p.To, Services: p.Services, Action: p.Action}
+		if w := p.Schedule; w != nil {
+			sp.Schedule = &proto.Schedule{Days: w.Days, Start: w.Start, End: w.End}
+		}
+		ps.Policies = append(ps.Policies, sp)
 	}
 	return ps
 }

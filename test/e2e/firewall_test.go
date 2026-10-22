@@ -63,7 +63,8 @@ func (l *lab) applyFirewall(doc string) {
 // The mesh firewall (amendment A43) in the kernel: every server holds the
 // table with allow-all; a policy denying the laptop TCP to the NAS stops a
 // connection that is open (the relay judges it again) and new ones, while
-// ping still crosses; allowing again lets new connections through.
+// ping still crosses; allowing again lets new connections through. The
+// same deny with a schedule refuses inside its window only.
 func TestMeshFirewall(t *testing.T) {
 	l := newLab(t)
 	l.addHost(laptop)
@@ -112,4 +113,30 @@ func TestMeshFirewall(t *testing.T) {
       action: allow
 `)
 	eventually(t, 20*time.Second, "new connections to the NAS again", func() bool { return l.connects(laptop.ns, nas.meshIP+":7000") })
+
+	// A schedule (amendment A44): the deny is in force inside its window
+	// and not outside it, read in UTC whatever the hosts' zones.
+	now := time.Now().UTC()
+	scheduled := func(from, to time.Time) string {
+		return fmt.Sprintf(`segmentation:
+  policies:
+    - name: no-nas-tcp
+      from: [node:laptop]
+      to: [node:nas]
+      services: [tcp]
+      action: deny
+      schedule:
+        start: "%s"
+        end: "%s"
+    - name: allow-all
+      action: allow
+  timezone: UTC
+`, from.Format("15:04"), to.Format("15:04"))
+	}
+	l.applyFirewall(scheduled(now.Add(-time.Hour), now.Add(time.Hour)))
+	l.waitOrDump(20*time.Second, "a new laptop-NAS connection to be refused inside the window", "a", func() bool {
+		return !l.connects(laptop.ns, nas.meshIP+":7000")
+	})
+	l.applyFirewall(scheduled(now.Add(time.Hour), now.Add(2*time.Hour)))
+	eventually(t, 20*time.Second, "new connections to the NAS outside the window", func() bool { return l.connects(laptop.ns, nas.meshIP+":7000") })
 }

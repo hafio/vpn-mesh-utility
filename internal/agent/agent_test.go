@@ -923,6 +923,31 @@ func TestDriftCheckPutsBackWhatChanged(t *testing.T) {
 	eventually(t, "the firewall to look again", func() bool { return r.fw.Rechecked() > 0 })
 }
 
+// A scheduled rule of the mesh firewall comes in when its window opens,
+// without a new config: the agent applies again at the edge. The agent's
+// clock is moved (by under 30 s, inside the signatures' skew) so the
+// window opens 3 s after the start.
+func TestScheduleAppliesAtTheEdge(t *testing.T) {
+	now := time.Now().UTC()
+	edge := now.Add(3 * time.Second).Round(time.Minute)
+	off := edge.Add(-3 * time.Second).Sub(now)
+	cfg := testfix.ServerConfig()
+	cfg.Policy = testfix.Policy()
+	cfg.Policy.TZ = "UTC"
+	cfg.Policy.Rules[3].Schedule = &proto.Schedule{Start: edge.Format("15:04"), End: edge.Add(time.Hour).Format("15:04")}
+	dir, _ := joinedTo(t, cfg)
+	r := startWith(t, dir, "", func(d *Deps) { d.Now, d.PollEvery = func() time.Time { return time.Now().Add(off) }, time.Hour })
+	scheduled := func() (bool, bool) {
+		table, _ := r.kernel.Holds()
+		return table != nil, table != nil && strings.Contains(table.Text(), "policy: laptop-smb")
+	}
+	eventually(t, "the first table", func() bool { in, _ := scheduled(); return in })
+	if _, has := scheduled(); has {
+		t.Fatal("the scheduled rule is in before its window")
+	}
+	eventually(t, "the scheduled rule when its window opens", func() bool { _, has := scheduled(); return has })
+}
+
 // The setting cannot be saved: nothing changes, and the CLI hears why.
 func TestDNSSettingThatCannotBeSaved(t *testing.T) {
 	dir, _ := joinedTo(t, withDNS(testfix.ServerConfig()))

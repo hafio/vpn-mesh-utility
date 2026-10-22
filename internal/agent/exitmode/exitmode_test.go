@@ -65,6 +65,26 @@ func TestSyncTurnsExitModeOnAndOff(t *testing.T) {
 	}
 }
 
+// A kernel with IPv6 but no IPv6 policy routing (amendment A45): exit off
+// has nothing to do; exit on puts IPv4 in place and says that IPv6 is not
+// held back.
+func TestSyncWithoutIPv6PolicyRouting(t *testing.T) {
+	p := &agentfake.Policy{V6Unrouted: true}
+	if n, err := exitmode.Sync(p, "wg0", false); n != 0 || err != nil {
+		t.Fatalf("exit off = %d, %v", n, err)
+	}
+	n, err := exitmode.Sync(p, "wg0", true)
+	rules, _ := p.Rules()
+	routes, _ := p.Routes()
+	wantRules, wantRoutes := exitmode.Desired("wg0", true, false)
+	if !errors.Is(err, exitmode.ErrIPv6Unguarded) || n != 3 || !slices.Equal(rules, wantRules) || !slices.Equal(routes, wantRoutes) {
+		t.Fatalf("exit on = %d, %v; rules %v, routes %v", n, err, rules, routes)
+	}
+	if !strings.Contains(err.Error(), "disable_ipv6") {
+		t.Fatalf("the error does not say what to do: %v", err)
+	}
+}
+
 func TestSyncReplacesAStaleRuleOfItsOwn(t *testing.T) {
 	p := &agentfake.Policy{NoIPv6: true}
 	stale := exitmode.Rule{Family: exitmode.IPv4, Priority: 100, Table: 51820, SuppressPrefixlen: -1, NotMark: 51820}

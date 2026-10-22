@@ -31,6 +31,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
 	"github.com/hafio/vpn-mesh-utility/internal/validate"
@@ -64,6 +65,9 @@ type Ruleset struct {
 	// Mesh is the mesh CIDR: whose flows a new policy judges again.
 	Mesh   netip.Prefix
 	Chains []Chain
+	// Next is when a scheduled rule starts or ends, so the policy must be
+	// compiled again; zero when none has a schedule. Not part of Text.
+	Next time.Time
 }
 
 // Chain is a base chain (Hook set; it accepts what no rule decides) or one
@@ -205,15 +209,29 @@ const (
 	chainMeshOutput  = "mesh_output"
 )
 
-// Compile turns a server's policy into its table. It refuses a policy that
+// Compile turns a server's policy into its table at the time at: the rules
+// whose schedule does not hold then are left out. It refuses a policy that
 // does not parse, as the config's validation did already.
-func Compile(p proto.Policy, l Local) (*Ruleset, error) {
+func Compile(p proto.Policy, l Local, at time.Time) (*Ruleset, error) {
 	m, err := validate.Prefix4("policy.mesh", p.Mesh)
 	if err != nil {
 		return nil, err
 	}
 	if !l.Self.Is4() || !m.Contains(l.Self) {
 		return nil, fmt.Errorf("mesh firewall: this node's address %s is outside the mesh %s", l.Self, m)
+	}
+	// Only a policy with schedules needs its clock read; proto.Matcher
+	// parses those.
+	active, next := make([]bool, len(p.Rules)), time.Time{}
+	for i := range active {
+		active[i] = true
+	}
+	if slices.ContainsFunc(p.Rules, func(r proto.PolicyRule) bool { return r.Schedule != nil }) {
+		matcher, err := p.Matcher()
+		if err != nil {
+			return nil, err
+		}
+		active, next = matcher.Active(at), matcher.Next(at)
 	}
 	mesh, self := []Range{prefixRange(m)}, u32(l.Self)
 	var own []Range
@@ -238,6 +256,9 @@ func Compile(p proto.Policy, l Local) (*Ruleset, error) {
 	mi := Chain{Name: chainMeshInput, Rules: []Rule{invalid}}
 	mo := Chain{Name: chainMeshOutput, Rules: []Rule{invalid}}
 	for i, r := range p.Rules {
+		if !active[i] {
+			continue
+		}
 		field := fmt.Sprintf("policy.rules[%d]", i)
 		from, err := addrs(field+".from", r.From)
 		if err != nil {
@@ -278,7 +299,7 @@ func Compile(p proto.Policy, l Local) (*Ruleset, error) {
 	}
 	rest := Rule{Verdict: Drop, Why: "no rule matched"}
 	mf.Rules, mi.Rules, mo.Rules = append(mf.Rules, rest), append(mi.Rules, rest), append(mo.Rules, rest)
-	return &Ruleset{Mesh: m, Chains: []Chain{fwd, in, out, mf, mi, mo}}, nil
+	return &Ruleset{Mesh: m, Chains: []Chain{fwd, in, out, mf, mi, mo}, Next: next}, nil
 }
 
 // Count is the number of rules.

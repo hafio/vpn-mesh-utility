@@ -24,6 +24,9 @@ type Segmentation struct {
 	Zones     []SegZone   `json:"zones,omitempty" yaml:"zones,omitempty"`
 	// Policies are in order: the first that matches a packet decides.
 	Policies []SegPolicy `json:"policies,omitempty" yaml:"policies,omitempty"`
+	// TimeZone is the IANA time zone the policies' schedules are read in;
+	// empty is the server's (SettingServerTZ).
+	TimeZone string `json:"timezone,omitempty" yaml:"timezone,omitempty"`
 }
 
 // SegGroup is a set of nodes, by name; a node may be in several.
@@ -62,6 +65,28 @@ type SegPolicy struct {
 	To          []string `json:"to,omitempty" yaml:"to,omitempty"`
 	Services    []string `json:"services,omitempty" yaml:"services,omitempty"`
 	Action      string   `json:"action" yaml:"action"`
+	// Schedule limits the policy to times of the week; nil is always.
+	Schedule *SegSchedule `json:"schedule,omitempty" yaml:"schedule,omitempty"`
+}
+
+// SegSchedule is when a policy applies (validate.Schedule), on the wall
+// clock of the document's time zone: on Days (every day when empty), from
+// Start to End, "HH:MM", an End before Start ending the next day; without
+// Start and End, the whole of each day.
+type SegSchedule struct {
+	Days  []string `json:"days,omitempty" yaml:"days,omitempty"`
+	Start string   `json:"start,omitempty" yaml:"start,omitempty"`
+	End   string   `json:"end,omitempty" yaml:"end,omitempty"`
+}
+
+// String is the schedule as people read it, "mon-fri 09:00-18:00"; one that
+// does not parse (Validate says why) reads as it is stored.
+func (s SegSchedule) String() string {
+	w, err := validate.Schedule("schedule", s.Days, s.Start, s.End)
+	if err != nil {
+		return strings.TrimSpace(strings.Join(s.Days, ",") + " " + s.Start + "-" + s.End)
+	}
+	return w.String()
 }
 
 // FirewallRule is a custom firewall rule from before segmentation: a port
@@ -141,11 +166,12 @@ const (
 
 // Empty reports a document with nothing in it.
 func (s Segmentation) Empty() bool {
-	return len(s.Groups)+len(s.Addresses)+len(s.Services)+len(s.Zones)+len(s.Policies) == 0
+	return len(s.Groups)+len(s.Addresses)+len(s.Services)+len(s.Zones)+len(s.Policies) == 0 && s.TimeZone == ""
 }
 
 // Validate checks every value against its grammar and the limits: names,
-// descriptions, entries, references and actions, each name once per kind.
+// descriptions, entries, references, actions, schedules and the time zone,
+// each name once per kind.
 // Whether a reference names something that exists, and whether an address
 // is inside the mesh, the planner checks with the rest of the mesh.
 func (s Segmentation) Validate() error {
@@ -272,6 +298,14 @@ func (s Segmentation) Validate() error {
 			_, err := validate.ServiceEntry(sf, v)
 			bad(err)
 		}
+		if w := p.Schedule; w != nil {
+			_, err := validate.Schedule(f+".schedule", w.Days, w.Start, w.End)
+			bad(err)
+		}
+	}
+	if s.TimeZone != "" {
+		_, err := validate.TimeZone("timezone", s.TimeZone)
+		bad(err)
 	}
 	return errors.Join(errs...)
 }
@@ -342,7 +376,8 @@ func (t *Tx) Segmentation() (Segmentation, error) {
 	}); err != nil {
 		return Segmentation{}, err
 	}
-	rows, err = t.query(`SELECT name, description, disabled, from_refs, to_refs, services, action FROM seg_policies ORDER BY position`)
+	rows, err = t.query(`SELECT name, description, disabled, from_refs, to_refs, services, action, days, start_time, end_time
+		FROM seg_policies ORDER BY position`)
 	if err != nil {
 		return Segmentation{}, fmt.Errorf("read policies: %w", err)
 	}
@@ -351,17 +386,27 @@ func (t *Tx) Segmentation() (Segmentation, error) {
 			p              SegPolicy
 			disabled       int
 			from, to, svcs string
+			days, startAt  string
+			endAt          string
 		)
-		if err := r.Scan(&p.Name, &p.Description, &disabled, &from, &to, &svcs, &p.Action); err != nil {
+		if err := r.Scan(&p.Name, &p.Description, &disabled, &from, &to, &svcs, &p.Action, &days, &startAt, &endAt); err != nil {
 			return err
 		}
 		p.Disabled = disabled == 1
 		p.From, p.To, p.Services = splitList(from), splitList(to), splitList(svcs)
+		if days != "" || startAt != "" || endAt != "" {
+			p.Schedule = &SegSchedule{Days: splitList(days), Start: startAt, End: endAt}
+		}
 		s.Policies = append(s.Policies, p)
 		return nil
 	}); err != nil {
 		return Segmentation{}, err
 	}
+	tz, err := t.Setting(SettingPolicyTZ)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return Segmentation{}, err
+	}
+	s.TimeZone = tz
 	return s, nil
 }
 
@@ -448,13 +493,20 @@ func (t *Tx) SetSegmentation(s Segmentation) error {
 		}
 	}
 	for i, p := range s.Policies {
-		if _, err := t.exec(`INSERT INTO seg_policies (position, name, description, disabled, from_refs, to_refs, services, action)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, i+1, p.Name, p.Description, boolInt(p.Disabled),
-			joinList(p.From), joinList(p.To), joinList(p.Services), p.Action); err != nil {
+		var when SegSchedule
+		if p.Schedule != nil {
+			when = *p.Schedule
+		}
+		if _, err := t.exec(`INSERT INTO seg_policies (position, name, description, disabled, from_refs, to_refs, services, action,
+			days, start_time, end_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, i+1, p.Name, p.Description, boolInt(p.Disabled),
+			joinList(p.From), joinList(p.To), joinList(p.Services), p.Action, joinList(when.Days), when.Start, when.End); err != nil {
 			return fmt.Errorf("insert policy %q: %w", p.Name, err)
 		}
 	}
-	return nil
+	if s.TimeZone == "" {
+		return t.DeleteSetting(SettingPolicyTZ)
+	}
+	return t.SetSetting(SettingPolicyTZ, s.TimeZone)
 }
 
 func (t *Tx) insertGroup(name, description string) (int64, error) {

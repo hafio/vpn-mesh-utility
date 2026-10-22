@@ -476,8 +476,9 @@ type Policy struct {
 	mu     sync.Mutex
 	rules  []exitmode.Rule
 	routes []exitmode.Route
-	// NoIPv6 is a host without IPv6.
-	NoIPv6 bool
+	// NoIPv6 is a host without IPv6; V6Unrouted one whose kernel has
+	// IPv6 but no IPv6 policy routing.
+	NoIPv6, V6Unrouted bool
 	// Calls lists the mutating calls in order ("add IPv4 rule 32764: ...").
 	Calls []string
 	// Fail makes every mutating call fail, or with FailOn only the named
@@ -512,7 +513,15 @@ func (p *Policy) Routes() ([]exitmode.Route, error) {
 	return slices.Clone(p.routes), nil
 }
 
-func (p *Policy) IPv6() bool { return !p.NoIPv6 }
+func (p *Policy) IPv6() exitmode.V6Support {
+	switch {
+	case p.NoIPv6:
+		return exitmode.V6None
+	case p.V6Unrouted:
+		return exitmode.V6Unrouted
+	}
+	return exitmode.V6Policy
+}
 
 // entry is a rule or a route.
 type entry interface {

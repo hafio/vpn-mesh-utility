@@ -77,8 +77,8 @@ func TestOpenAppliesMigrations(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if v != 6 {
-			t.Errorf("schema version = %d, want 6", v)
+		if v != 7 {
+			t.Errorf("schema version = %d, want 7", v)
 		}
 		cidr, err := t2.Setting(SettingMeshCIDR)
 		if err != nil {
@@ -159,8 +159,8 @@ func TestOpenIsIdempotent(t *testing.T) {
 	defer s2.Close()
 	tx(t, s2, func(t2 *Tx) error {
 		v, err := t2.SchemaVersion()
-		if v != 6 {
-			t.Errorf("schema version after reopen = %d, want 6", v)
+		if v != 7 {
+			t.Errorf("schema version after reopen = %d, want 7", v)
 		}
 		return err
 	})

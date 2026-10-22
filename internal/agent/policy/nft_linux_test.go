@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/nftables"
 	"github.com/google/nftables/expr"
@@ -21,7 +22,7 @@ import (
 // default), every rule in order with its anonymous sets before it, and the
 // fingerprint on the first rule only.
 func TestBuildBatch(t *testing.T) {
-	rs, err := Compile(*testfix.Policy(), Local{Self: netip.MustParseAddr(testfix.VPS1.MeshIP)})
+	rs, err := Compile(*testfix.Policy(), Local{Self: netip.MustParseAddr(testfix.VPS1.MeshIP)}, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +148,7 @@ func TestKernelNeedsPrivilege(t *testing.T) {
 		t.Skip("as root this would change the host's nftables (the e2e tests cover it)")
 	}
 	k := NewKernel()
-	rs, err := Compile(*testfix.Policy(), Local{Self: netip.MustParseAddr(testfix.VPS1.MeshIP)})
+	rs, err := Compile(*testfix.Policy(), Local{Self: netip.MustParseAddr(testfix.VPS1.MeshIP)}, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}

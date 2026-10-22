@@ -63,6 +63,22 @@ func TestFirewallPages(t *testing.T) {
 	page("/firewall/zones", `href="/firewall/zones/office"`, "10.77.0.1, 10.77.5.0/24")
 	page("/firewall/reach?from=vps-1&to=vps-2&service=tcp/80", "<strong>allowed</strong>", "rule 4: policy: allow-all", "<th>office</th>")
 
+	// Schedules: days and times on the form, read in the zone set on the
+	// page (the clock reads Monday 08:00 UTC, 16:00 in Singapore).
+	ok(post("/firewall/timezone", url.Values{"timezone": {"Asia/Singapore"}}), "Schedules now follow Asia/Singapore time",
+		`value="Asia/Singapore"`)
+	ok(post("/firewall/policies", url.Values{"name": {"nights"}, "action": {"deny"}, "from": {"zone:office"}, "days": {"sat", "sun"},
+		"start": {"22:00"}, "end": {"06:00"}, "position": {"1"}}), "Policy nights saved", "sat,sun 22:00-06:00", "(not now)")
+	page("/firewall/policies/nights", `value="sat" checked`, `value="mon">`, `value="22:00"`, "Times are in Asia/Singapore")
+	page("/firewall/reach?from=vps-1&to=vps-2&service=tcp/80&at=2026-10-17T23:00:00%2B08:00", "<strong>dropped</strong>",
+		"at 2026-10-17T23:00:00&#43;08:00", "rule 4: policy: nights") // html/template writes + as &#43;
+	page("/firewall/reach?from=vps-1&to=vps-2&service=tcp/80", "Not in force then (scheduled): policy: nights")
+	refusedWith(post("/firewall/policies", url.Values{"name": {"x"}, "action": {"allow"}, "start": {"9am"}, "end": {"18:00"}}),
+		http.StatusBadRequest, "schedule.start", `value="9am"`)
+	refusedWith(post("/firewall/timezone", url.Values{"timezone": {"Mars/Olympus"}}), http.StatusBadRequest, "timezone")
+	ok(post("/firewall/policies/nights/remove", url.Values{}), "Policy nights removed")
+	ok(post("/firewall/timezone", url.Values{"timezone": {""}}), "Schedules now follow the server&#39;s time", `placeholder="the server's: UTC"`)
+
 	// Refusals keep the form and change nothing.
 	refusedWith(post("/firewall/zones/office/remove", url.Values{}), http.StatusConflict, `there is no zone &#34;office&#34;`)
 	refusedWith(post("/firewall/objects/service/web/remove", url.Values{}), http.StatusConflict, `there is no service object &#34;web&#34;`)

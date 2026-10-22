@@ -23,10 +23,12 @@ func testSegmentation() Segmentation {
 		Services:  []SegObject{{Name: "smb", Entries: []string{"tcp/445", "tcp/139"}}},
 		Zones:     []SegZone{{Name: "home", Intra: SegAllow, Members: []string{"group:storage", "addr:printers"}}},
 		Policies: []SegPolicy{
-			{Name: "laptop-smb", From: []string{"group:laptops"}, To: []string{"zone:home"}, Services: []string{"svc:smb"}, Action: SegAllow},
-			{Name: "old", Disabled: true, From: []string{"10.77.2.0/24"}, Action: SegDeny},
+			{Name: "laptop-smb", From: []string{"group:laptops"}, To: []string{"zone:home"}, Services: []string{"svc:smb"}, Action: SegAllow,
+				Schedule: &SegSchedule{Days: []string{"mon", "tue", "wed", "thu", "fri"}, Start: "08:00", End: "19:00"}},
+			{Name: "old", Disabled: true, From: []string{"10.77.2.0/24"}, Action: SegDeny, Schedule: &SegSchedule{Days: []string{"sat"}}},
 			DefaultPolicy(),
 		},
+		TimeZone: "Asia/Singapore",
 	}
 }
 
@@ -67,6 +69,21 @@ func TestSegmentationRoundTrip(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+func TestSegScheduleString(t *testing.T) {
+	for _, c := range []struct {
+		s    SegSchedule
+		want string
+	}{
+		{SegSchedule{Days: []string{"mon", "tue", "wed", "thu", "fri"}, Start: "08:00", End: "19:00"}, "mon-fri 08:00-19:00"},
+		{SegSchedule{Days: []string{"sat"}}, "sat"},
+		{SegSchedule{Start: "8am", End: "19:00"}, "8am-19:00"},
+	} {
+		if got := c.s.String(); got != c.want {
+			t.Errorf("%+v reads %q, want %q", c.s, got, c.want)
+		}
+	}
 }
 
 // A group naming a node that does not exist is refused, and nothing of the
@@ -148,6 +165,9 @@ func TestSegmentationValidate(t *testing.T) {
 		"service in from":        {func(s *Segmentation) { s.Policies[0].From = []string{"svc:smb"} }, "policies[laptop-smb].from[0]"},
 		"policy service":         {func(s *Segmentation) { s.Policies[0].Services = []string{"addr:printers"} }, "policies[laptop-smb].services[0]"},
 		"description newline":    {func(s *Segmentation) { s.Groups[1].Description = "a\nb" }, "groups[storage].description"},
+		"schedule day":           {func(s *Segmentation) { s.Policies[0].Schedule.Days = []string{"funday"} }, "policies[laptop-smb].schedule.days[0]"},
+		"schedule window":        {func(s *Segmentation) { s.Policies[0].Schedule.Start = "8am" }, "policies[laptop-smb].schedule.start"},
+		"time zone":              {func(s *Segmentation) { s.TimeZone = "Mars/Olympus" }, "timezone"},
 		"too many refs": {func(s *Segmentation) {
 			for len(s.Policies[0].To) <= MaxSegRefs {
 				s.Policies[0].To = append(s.Policies[0].To, "zone:home")

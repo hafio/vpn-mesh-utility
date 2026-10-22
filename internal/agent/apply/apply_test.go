@@ -293,6 +293,36 @@ func TestMeshFirewallStep(t *testing.T) {
 	}
 }
 
+// A scheduled rule is in the table for the time of the apply, and the
+// result says when to apply again; applying then installs what applies
+// then. A config without a schedule has no next time.
+func TestScheduledPolicy(t *testing.T) {
+	r := newRig(t)
+	now := time.Date(2026, 10, 19, 10, 0, 0, 0, time.UTC) // a Monday
+	e := apply.New(apply.Deps{Host: r.h, Routes: r.r, Exit: r.p, Sysctl: r.s, MeshFirewall: &policy.Enforcer{K: r.k}, Iface: "wg0", Key: r.key,
+		Now: func() time.Time { return now }})
+	ctx := context.Background()
+	cfg := testfix.ServerConfig()
+	cfg.Policy = testfix.Policy()
+	cfg.Policy.TZ = "UTC"
+	cfg.Policy.Rules[3].Schedule = &proto.Schedule{Start: "09:00", End: "18:00"}
+	res, err := e.Apply(ctx, cfg)
+	table, _ := r.k.Holds()
+	if err != nil || table == nil || !strings.Contains(table.Text(), "policy: laptop-smb") || !res.PolicyNext.Equal(now.Add(8*time.Hour)) {
+		t.Fatalf("in the window = %+v, %v", res, err)
+	}
+	now = res.PolicyNext
+	res, err = e.Apply(ctx, cfg)
+	table, _ = r.k.Holds()
+	if err != nil || res.Changes == 0 || strings.Contains(table.Text(), "policy: laptop-smb") ||
+		!res.PolicyNext.Equal(time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)) {
+		t.Fatalf("after the window = %+v, %v", res, err)
+	}
+	if res, err := e.Apply(ctx, testfix.ServerConfig()); err != nil || !res.PolicyNext.IsZero() {
+		t.Fatalf("no policy = %+v, %v", res, err)
+	}
+}
+
 func isStep(err error, step string) bool {
 	s, ok := apply.IsStepError(err)
 	return ok && s == step
@@ -401,6 +431,22 @@ func TestExitModeFailureIsFatal(t *testing.T) {
 	}
 	if _, err := e.Apply(context.Background(), testfix.SpokeConfig("")); err != nil {
 		t.Fatalf("exit off without a policy = %v", err)
+	}
+}
+
+// A kernel with IPv6 but no IPv6 policy routing (amendment A45): a spoke
+// without an exit applies as usual; with one, exit mode carries IPv4 and the
+// apply is degraded, not refused.
+func TestExitModeWithoutIPv6PolicyRouting(t *testing.T) {
+	r := newRig(t)
+	r.p.V6Unrouted = true
+	if res, err := r.e.Apply(context.Background(), testfix.SpokeConfig("")); err != nil || len(res.Degraded) != 0 {
+		t.Fatalf("no exit = %+v, %v", res, err)
+	}
+	res, err := r.e.Apply(context.Background(), testfix.SpokeConfig("vps-2"))
+	rules, _ := r.p.Rules()
+	if err != nil || !slices.Equal(res.Degraded, []string{apply.StepExit}) || !strings.Contains(res.Errors[0], "IPv4 only") || len(rules) != 2 {
+		t.Fatalf("exit on = %+v, %v; rules %v", res, err, rules)
 	}
 }
 

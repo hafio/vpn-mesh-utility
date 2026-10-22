@@ -249,6 +249,16 @@ kernel: the agent's rules carry addresses, ports and verdicts only. Literal addr
 the mesh, since the firewall only sees mesh traffic: traffic to or from outside the mesh (an exit's
 internet traffic) is not filtered by it.
 
+A scheduled policy (amendment A44) is in force only inside its window, on the wall clock of one
+time zone, and each server judges the window by its own clock: a server whose clock is wrong
+enforces the wrong window, so servers belong on NTP (their agents' signatures already need clocks
+within a minute of the control plane's). Days, times and the zone name are positive grammars
+(`validate.Schedule`, `validate.TimeZone`: an IANA name, never `Local`, never a path) checked on
+the way in and again by the agent; the zone database is the host's or the one built into the
+binary. Outside a window the next rule decides -- an allow out of hours falls to what follows it,
+and a deny out of hours lets it through -- and a window that closes cuts the connections it
+allowed, as any policy change does.
+
 ## DNS
 
 Each node's resolver (`internal/agent/dns`) listens on its mesh IP (and its containers' gateway)
@@ -343,6 +353,9 @@ machine other people log in to, run the agent with `--ui-listen off`.
   with no IPv6 peer behind them, so IPv6 cannot leak around the exit (amendment A11). The
   tunnel's own packets are bound to the interface of the host's default route, so they never
   loop into the tunnel; the agent rebinds them when that route moves.
+- **Exit mode on a Linux kernel without IPv6 policy routing** (amendment A45) cannot hold IPv6
+  back: the node carries IPv4 through the exit and reports `degraded exit` until IPv6 is turned
+  off on the host; the leak is reported, never silent.
 - **wintun.dll** (amendment A34) is the one binary meshctl ships that it does not build. The
   build fetches the wintun 0.14.1 release, refuses it unless the zip and the DLL match their
   SHA-256 pins (`internal/agent/wintun`), and embeds the DLL; it is never committed. At every

@@ -20,6 +20,14 @@
 <label>Position <input name="position" value="{{.Position}}" placeholder="last"></label>
 <label>Description <input name="description" value="{{.Description}}" maxlength="200"></label>
 <label><input type="checkbox" name="disabled"{{if .Disabled}} checked{{end}}> Disabled (kept, not enforced)</label>
+<fieldset class="days"><legend>Days (none: every day)</legend>
+{{- range .DayBoxes}}
+<label><input type="checkbox" name="days" value="{{.Value}}"{{if .Checked}} checked{{end}}> {{.Label}}</label>
+{{- end}}
+</fieldset>
+<label>Starts <input type="time" name="start" value="{{.Start}}"></label>
+<label>Ends <input type="time" name="end" value="{{.End}}"></label>
+<p class="hint">No days and no times: always. Days alone are whole days; an end before the start ends the next day.{{if .Zone}} Times are in {{.Zone}}.{{end}}</p>
 {{end}}
 
 {{define "fwzonefields"}}

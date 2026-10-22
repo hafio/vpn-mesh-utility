@@ -19,6 +19,14 @@ const (
 	// SettingDNSExtraDomains are the extra domains every node resolves
 	// (amendment A39), comma separated.
 	SettingDNSExtraDomains = "dns_extra_domains"
+	// SettingPolicyTZ is the time zone the mesh firewall's schedules are
+	// read in (amendment A43): Segmentation.TimeZone, so part of the
+	// segmentation document, not of DesiredSettings. Unset is
+	// SettingServerTZ.
+	SettingPolicyTZ = "policy_tz"
+	// SettingServerTZ is the server's own time zone, written at every
+	// start: a deployment setting, never in a snapshot.
+	SettingServerTZ = "server_tz"
 )
 
 // DesiredSettings are the settings that shape computed configs. They are

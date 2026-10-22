@@ -15,7 +15,8 @@
 // readable while the server is down; the containers' names in it are what
 // the resolver answers (amendment A38). Where the containers are on the
 // mesh, the agent reports what the container runtime calls them
-// (names.go).
+// (names.go). On a server whose mesh firewall has schedules, the config is
+// applied again whenever one starts or ends (scheduleLoop).
 package agent
 
 import (
@@ -195,6 +196,8 @@ type runner struct {
 	// meshKick asks for the mesh view, namesKick for the containers' names.
 	meshKick  chan struct{}
 	namesKick chan struct{}
+	// scheduleKick says policyNext changed.
+	scheduleKick chan struct{}
 
 	// cfgMu orders the config transitions -- apply, confirm, rollback -- and
 	// the files that record them.
@@ -217,6 +220,9 @@ type runner struct {
 	rejectedHash string
 	// rollback is reported until a newer config is confirmed.
 	rollback *proto.Rollback
+	// policyNext is when a schedule of the applied config's policy starts
+	// or ends; zero without one.
+	policyNext time.Time
 
 	// meshMu guards the mesh view and serialises asking for it;
 	// meshStale is set by a new config, which means the mesh changed, and
@@ -288,9 +294,9 @@ func Run(ctx context.Context, d Deps) error {
 		d: d, dir: dir, enr: enr, cl: cl, backend: backend,
 		log:      d.Log.With("node", enr.Name),
 		syncKick: make(chan struct{}, 1), statusKick: make(chan struct{}, 1),
-		meshKick: make(chan struct{}, 1), namesKick: make(chan struct{}, 1),
+		meshKick: make(chan struct{}, 1), namesKick: make(chan struct{}, 1), scheduleKick: make(chan struct{}, 1),
 		engine: apply.New(apply.Deps{Host: host, Routes: d.Routes, Exit: d.Exit, Sysctl: d.Sysctl, MeshFirewall: d.MeshFirewall,
-			Firewall: d.Firewall, DNS: d.DNS, Containers: d.Containers, Iface: Interface, Key: wg.Key(keys.WG), Log: d.Log}),
+			Firewall: d.Firewall, DNS: d.DNS, Containers: d.Containers, Iface: Interface, Key: wg.Key(keys.WG), Log: d.Log, Now: d.Now}),
 	}
 	r.engine.SetDNSOff(local.DNSOff)
 	if r.mesh, err = dir.Mesh(); err != nil {
@@ -352,7 +358,7 @@ func Run(ctx context.Context, d Deps) error {
 	r.log.Info("meshctl agent running", "server", enr.Server, "node_id", enr.NodeID, "version", d.Version, "wg_backend", backend)
 
 	for _, loop := range []func(context.Context){r.syncLoop, r.eventsLoop, r.pollLoop, r.statusLoop, r.safeLoop, r.reassertLoop, r.meshLoop,
-		r.namesLoop} {
+		r.namesLoop, r.scheduleLoop} {
 		loops.Add(1)
 		go func() {
 			defer loops.Done()
@@ -482,6 +488,7 @@ func (r *runner) apply(ctx context.Context, cfg proto.NodeConfig, source string)
 	c := cfg
 	r.applied, r.appliedHash, r.appliedAt = &c, res.Hash, r.d.Now()
 	r.failedHash, r.degraded, r.errs, r.dnsState = "", res.Degraded, res.Errors, res.DNS
+	r.setPolicyNext(res.PolicyNext)
 	if source == "server" {
 		r.rejectedHash = "" // the server moved on from the rejected config
 		r.meshStale.Store(true)
@@ -617,6 +624,7 @@ func (r *runner) rollBack(ctx context.Context, p pendingApply) {
 		prev := p.prev
 		r.applied, r.appliedHash, r.appliedAt = &prev, res.Hash, r.d.Now()
 		r.degraded, r.errs, r.dnsState = res.Degraded, res.Errors, res.DNS
+		r.setPolicyNext(res.PolicyNext)
 	}
 	r.mu.Unlock()
 	if cerr := r.dir.ClearPending(); cerr != nil {
@@ -653,6 +661,7 @@ func (r *runner) reapply(ctx context.Context, run func(context.Context, proto.No
 		r.errs = []string{err.Error()}
 	} else {
 		r.degraded, r.errs, r.dnsState = res.Degraded, res.Errors, res.DNS
+		r.setPolicyNext(res.PolicyNext)
 	}
 	r.mu.Unlock()
 	if err != nil || res.Changes > 0 {
@@ -698,6 +707,59 @@ func (r *runner) reassertLoop(ctx context.Context) {
 			r.log.Error("drift check: the config could not be put back; the next check tries again", "err", err)
 		case res.Changes > 0:
 			r.log.Warn("drift check: put back what changed on the host since the last apply", "changes", res.Changes, "degraded", res.Degraded)
+		}
+	}
+}
+
+// setPolicyNext records when the policy's schedules next change and wakes
+// scheduleLoop when that moved. The caller holds mu.
+func (r *runner) setPolicyNext(next time.Time) {
+	if !next.Equal(r.policyNext) {
+		r.policyNext = next
+		kick(r.scheduleKick)
+	}
+}
+
+// scheduleLoop applies the config again when a schedule of the mesh
+// firewall's policy starts or ends (amendment A43), so a server enforces
+// the rules that apply now. A timer fires on the monotonic clock: when the
+// wall clock is set, or a daylight-saving gap swallows an edge, the drift
+// check catches up within its period. A pass that fails is not retried
+// here; the drift check retries it.
+func (r *runner) scheduleLoop(ctx context.Context) {
+	t := time.NewTimer(time.Hour)
+	t.Stop()
+	defer t.Stop()
+	var tried time.Time
+	for {
+		r.mu.Lock()
+		next := r.policyNext
+		r.mu.Unlock()
+		var fire <-chan time.Time
+		if !next.IsZero() && !next.Equal(tried) {
+			t.Reset(max(next.Sub(r.d.Now()), 0))
+			fire = t.C
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-r.scheduleKick:
+			t.Stop()
+			continue
+		case <-fire:
+		}
+		if r.d.Now().Before(next) {
+			continue // early on the wall clock: wait the rest
+		}
+		tried = next
+		res, err := r.reapply(ctx, r.engine.Apply)
+		switch {
+		case ctx.Err() != nil:
+			return
+		case err != nil:
+			r.log.Error("schedule: the mesh firewall could not follow its schedules; the drift check tries again", "err", err)
+		case res.Changes > 0:
+			r.log.Info("schedule: the mesh firewall now enforces the rules that apply", "changes", res.Changes, "next", res.PolicyNext)
 		}
 	}
 }

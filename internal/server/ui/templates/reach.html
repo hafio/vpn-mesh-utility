@@ -7,6 +7,7 @@
 <label>From <input name="from" value="{{.From}}" list="fw-nodes" placeholder="node or IPv4" required></label>
 <label>To <input name="to" value="{{.To}}" list="fw-nodes" placeholder="node or IPv4" required></label>
 <label>Service <input name="service" value="{{.Service}}" placeholder="tcp/22, udp/53 or icmp" required></label>
+<label>At <input name="at" value="{{.At}}" placeholder="now, or 2026-10-23T09:30:00+08:00"></label>
 <button type="submit">Check</button>
 </form>
 <datalist id="fw-nodes">
@@ -16,12 +17,15 @@
 </datalist>
 {{- $n := .RuleN}}
 {{- with .Result}}
-<p class="{{if .Allowed}}flash{{else}}error{{end}}">{{.From}} to {{.To}} on {{.Service}}: <strong>{{if .Allowed}}allowed{{else}}dropped{{end}}</strong> -- {{if $n}}rule {{$n}}: {{end}}{{.Rule}}.</p>
+<p class="{{if .Allowed}}flash{{else}}error{{end}}">{{.From}} to {{.To}} on {{.Service}} at {{.At}}: <strong>{{if .Allowed}}allowed{{else}}dropped{{end}}</strong> -- {{if $n}}rule {{$n}}: {{end}}{{.Rule}}.</p>
+{{- if .Inactive}}
+<p class="hint">Not in force then (scheduled): {{range $i, $r := .Inactive}}{{if $i}}, {{end}}{{$r}}{{end}}.</p>
+{{- end}}
 {{- end}}
 
 <h2>Zone to zone</h2>
 {{- if .Zones}}
-<p class="hint">Each cell is how the row's zone reaches the column's: allow (everything), deny (nothing) or partial (some services or addresses), with the numbers of the rules that decide it (the Policies tab lists them). Check one flow above for the exact answer.</p>
+<p class="hint">As of {{.MatrixAt}}. Each cell is how the row's zone reaches the column's: allow (everything), deny (nothing) or partial (some services or addresses), with the numbers of the rules that decide it (the Policies tab lists them). Check one flow above for the exact answer.</p>
 <table>
 <thead><tr><th>From \ To</th>{{range .Zones}}<th>{{.}}</th>{{end}}</tr></thead>
 <tbody>

@@ -12,6 +12,9 @@
 // Reassert is the drift check: it applies a config again after the steps
 // that remember what they found on the host (Rechecker) forget it, so a
 // change made underneath the agent is put back.
+//
+// A policy with schedules is compiled for the time of the apply; the
+// Result says when a schedule next starts or ends, the time to apply again.
 package apply
 
 import (
@@ -101,6 +104,8 @@ type Deps struct {
 	// Key is the node's WireGuard private key.
 	Key wg.Key
 	Log *slog.Logger
+	// Now is the clock a policy's schedules are read on; nil is time.Now.
+	Now func() time.Time
 }
 
 // Result is one successful apply.
@@ -115,6 +120,9 @@ type Result struct {
 	Errors   []string
 	// DNS is the DNS step's state (proto.DNSStates); empty without one.
 	DNS string
+	// PolicyNext is when a schedule of the policy starts or ends, so the
+	// config must be applied again; zero without one.
+	PolicyNext time.Time
 }
 
 // StepError is a fatal step's failure.
@@ -138,6 +146,9 @@ type Engine struct {
 func New(d Deps) *Engine {
 	if d.Log == nil {
 		d.Log = slog.New(slog.DiscardHandler)
+	}
+	if d.Now == nil {
+		d.Now = time.Now
 	}
 	return &Engine{d: d}
 }
@@ -178,9 +189,10 @@ func (e *Engine) Apply(ctx context.Context, cfg proto.NodeConfig) (Result, error
 		if cfg.Containers != nil {
 			local.Containers, _ = netip.ParsePrefix(cfg.Containers.Subnet) // validated above
 		}
-		if rules, err = policy.Compile(*cfg.Policy, local); err != nil {
+		if rules, err = policy.Compile(*cfg.Policy, local, e.d.Now()); err != nil {
 			return fail(StepValidate, err)
 		}
+		res.PolicyNext = rules.Next
 	}
 
 	// 2-5. Interface, address, WireGuard, routes.
@@ -209,7 +221,13 @@ func (e *Engine) Apply(ctx context.Context, cfg proto.NodeConfig) (Result, error
 	case e.d.Exit != nil:
 		n, err := exitmode.Sync(e.d.Exit, e.d.Iface, exitOn)
 		res.Changes += n
-		if err != nil {
+		switch {
+		case errors.Is(err, exitmode.ErrIPv6Unguarded):
+			// IPv4 is in place; only the host's IPv6 is not (amendment A45).
+			res.Degraded = append(res.Degraded, StepExit)
+			res.Errors = append(res.Errors, err.Error())
+			e.d.Log.Warn("exit mode carries IPv4 only", "err", err)
+		case err != nil:
 			return fail(StepExit, err)
 		}
 	case ok:

@@ -11,7 +11,9 @@
 // route; the second sends what is left to table 51820, unless it carries the
 // interface's fwmark -- WireGuard's own UDP, which must take the normal path.
 // IPv6 gets the same two rules and a blackhole default in table 51820, so
-// exit mode never leaks IPv6 around the tunnel (amendment A11).
+// exit mode never leaks IPv6 around the tunnel (amendment A11). A kernel
+// with IPv6 but without IPv6 policy routing (some NAS kernels) has no rules
+// to manage: exit mode then carries IPv4 only and says so (amendment A45).
 //
 // Switching exits only moves 0.0.0.0/0 between peers; the rules stay, so
 // nothing reconnects. Every rule and route here carries protocol 201, like
@@ -20,6 +22,7 @@
 package exitmode
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 
@@ -92,10 +95,30 @@ type Policy interface {
 	Routes() ([]Route, error)
 	AddRoute(r Route) error
 	DelRoute(r Route) error
-	// IPv6 reports whether the host has IPv6 at all; without it nothing
-	// can leak and there is nothing to add.
-	IPv6() bool
+	// IPv6 is what the host has of IPv6.
+	IPv6() V6Support
 }
+
+// V6Support is what exit mode can do about a host's IPv6.
+type V6Support int
+
+const (
+	// V6None is a host without IPv6: nothing can leak, nothing to add.
+	V6None V6Support = iota
+	// V6Unrouted is IPv6 without IPv6 policy routing (a kernel built
+	// without IPV6_MULTIPLE_TABLES): there are no rules to list or add,
+	// and exit mode can neither send IPv6 through the tunnel nor hold it
+	// back.
+	V6Unrouted
+	// V6Policy is IPv6 with policy routing: exit mode blackholes it.
+	V6Policy
+)
+
+// ErrIPv6Unguarded is exit mode on a V6Unrouted host: IPv4 goes through the
+// exit, IPv6 is neither sent through it nor held back. The apply reports it
+// as degraded; the rest of exit mode is in place.
+var ErrIPv6Unguarded = errors.New("exit mode carries IPv4 only: this kernel has IPv6 but no IPv6 policy routing, so IPv6 traffic " +
+	"bypasses the exit; turn IPv6 off on this host (sysctl net.ipv6.conf.all.disable_ipv6=1) to keep it from leaking")
 
 // Desired is what exit mode through link needs; nothing when on is false.
 func Desired(link string, on, ipv6 bool) ([]Rule, []Route) {
@@ -122,9 +145,11 @@ func Desired(link string, on, ipv6 bool) ([]Rule, []Route) {
 // Sync makes the agent's rules and table routes exactly what exit mode needs.
 // Routes are added before rules, so the table is ready when traffic is sent
 // to it, and rules are removed before routes. It returns how many changes it
-// made.
+// made, and ErrIPv6Unguarded once IPv4 is in place on a host whose IPv6 it
+// cannot hold back.
 func Sync(p Policy, link string, on bool) (int, error) {
-	wantRules, wantRoutes := Desired(link, on, p.IPv6())
+	v6 := p.IPv6()
+	wantRules, wantRoutes := Desired(link, on, v6 == V6Policy)
 	haveRules, err := p.Rules()
 	if err != nil {
 		return 0, err
@@ -165,6 +190,9 @@ func Sync(p Policy, link string, on bool) (int, error) {
 			}
 			n++
 		}
+	}
+	if on && v6 == V6Unrouted {
+		return n, ErrIPv6Unguarded
 	}
 	return n, nil
 }

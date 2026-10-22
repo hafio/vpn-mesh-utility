@@ -163,6 +163,10 @@ network: such a binary refuses to start WireGuard with a message saying so. To u
 change `Version`, `ZipURL`, `ZipSHA256` and the DLL pins together, from the hashes wintun.net
 publishes, and replace `docs/third-party/wintun-LICENSE.txt`.
 
+Every binary embeds Go's time zone database (`time/tzdata`, imported by `internal/validate`), so the
+mesh firewall's schedules (amendment A44) name IANA zones on the distroless image and on Windows,
+which carry none; a host's own database, when it has one, is read first.
+
 To update htmx: download the release tarball from the npm registry, check it against the
 registry's `dist.integrity`, copy `dist/htmx.min.js` to `internal/server/ui/static/`, update
 `HTMXSHA256` in `render.go` and `docs/third-party/htmx-LICENSE.txt`, and re-run the gates.

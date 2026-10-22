@@ -90,31 +90,68 @@ type policyRow struct {
 	Pos, Up, Down                                 int
 	Name, Action, From, To, Services, Description string
 	Disabled, First, Last                         bool
+	// Schedule is when it applies, "" for always; Inactive says its
+	// schedule does not hold now.
+	Schedule string
+	Inactive bool
 }
 
 type ruleRow struct {
-	N      int
-	Text   string
-	System bool
+	N        int
+	Text     string
+	System   bool
+	Inactive bool
 }
 
 type policyForm struct {
 	Old, Name, Action, From, To, Services, Description, Position string
 	Disabled                                                     bool
+	// Days, Start and End are the schedule; Zone is the time zone it is
+	// read in, for the hint.
+	Days             []string
+	Start, End, Zone string
+}
+
+// dayBox is one day's checkbox of the schedule.
+type dayBox struct {
+	Value, Label string
+	Checked      bool
+}
+
+// DayBoxes are the week's checkboxes, Monday first, the form's days ticked.
+func (f policyForm) DayBoxes() []dayBox {
+	out := make([]dayBox, 0, len(validate.Weekdays))
+	for _, d := range validate.Weekdays {
+		out = append(out, dayBox{Value: d, Label: title(d), Checked: slices.Contains(f.Days, d)})
+	}
+	return out
 }
 
 type policiesView struct {
 	Policies []policyRow
 	Rules    []ruleRow
 	Form     policyForm
+	// TimeZone is the document's zone ("" is the server's), Zone the one
+	// in use and Now the time there.
+	TimeZone, Zone, Now string
 }
 
-func ruleRows(rules []proto.PolicyRule) []ruleRow {
+// ruleRows lists what every server enforces; inactive are the indexes of
+// the rules whose schedule does not hold now.
+func ruleRows(rules []proto.PolicyRule, inactive []int) []ruleRow {
 	out := make([]ruleRow, 0, len(rules))
 	for i, r := range rules {
-		out = append(out, ruleRow{N: i + 1, Text: r.String(), System: strings.HasPrefix(r.Name, "system: ")})
+		out = append(out, ruleRow{N: i + 1, Text: r.String(), System: strings.HasPrefix(r.Name, "system: "), Inactive: slices.Contains(inactive, i)})
 	}
 	return out
+}
+
+// scheduleText is a policy's schedule as people read it, "" for none.
+func scheduleText(s *store.SegSchedule) string {
+	if s == nil {
+		return ""
+	}
+	return s.String()
 }
 
 // newPolicyForm goes just above the last policy (allow-all, at first), so
@@ -133,28 +170,42 @@ func (u *ui) renderPolicies(w http.ResponseWriter, r *http.Request, s auth.Sessi
 		u.fail(w, r, s, err)
 		return
 	}
-	pv := policiesView{Rules: ruleRows(v.Rules), Form: newPolicyForm(len(v.Config.Policies))}
+	pv := policiesView{Rules: ruleRows(v.Rules, v.Inactive), Form: newPolicyForm(len(v.Config.Policies)), TimeZone: v.Config.TimeZone,
+		Zone: v.TimeZone, Now: v.Now}
+	inactive := map[string]bool{}
+	for _, i := range v.Inactive {
+		inactive[v.Rules[i].Name] = true
+	}
 	for i, pol := range v.Config.Policies {
 		pv.Policies = append(pv.Policies, policyRow{Pos: i + 1, Up: i, Down: i + 2, Name: pol.Name, Action: pol.Action, From: anyText(pol.From),
 			To: anyText(pol.To), Services: anyText(pol.Services), Description: pol.Description, Disabled: pol.Disabled,
-			First: i == 0, Last: i == len(v.Config.Policies)-1})
+			First: i == 0, Last: i == len(v.Config.Policies)-1, Schedule: scheduleText(pol.Schedule), Inactive: inactive["policy: "+pol.Name]})
 	}
 	if f != nil {
 		pv.Form = *f
 	}
+	pv.Form.Zone = v.TimeZone
 	u.showFirewall(w, r, s, status, "firewall", "policies", "Firewall", p, v.Warnings, pv)
 }
 
 func readPolicyForm(r *http.Request) policyForm {
-	return policyForm{Old: r.PathValue("name"), Name: strings.TrimSpace(r.PostFormValue("name")), Action: r.PostFormValue("action"),
+	f := policyForm{Old: r.PathValue("name"), Name: strings.TrimSpace(r.PostFormValue("name")), Action: r.PostFormValue("action"),
 		From: r.PostFormValue("from"), To: r.PostFormValue("to"), Services: r.PostFormValue("services"),
 		Description: strings.TrimSpace(r.PostFormValue("description")), Position: strings.TrimSpace(r.PostFormValue("position")),
-		Disabled: r.PostFormValue("disabled") != ""}
+		Disabled: r.PostFormValue("disabled") != "", Start: strings.TrimSpace(r.PostFormValue("start")),
+		End: strings.TrimSpace(r.PostFormValue("end"))}
+	f.Days = r.PostForm["days"] // parsed by the PostFormValue calls above
+	return f
 }
 
+// policy is the form as a policy: no days and no times is no schedule.
 func (f policyForm) policy() store.SegPolicy {
-	return store.SegPolicy{Name: f.Name, Description: f.Description, Disabled: f.Disabled, From: listOf(f.From), To: listOf(f.To),
+	p := store.SegPolicy{Name: f.Name, Description: f.Description, Disabled: f.Disabled, From: listOf(f.From), To: listOf(f.To),
 		Services: listOf(f.Services), Action: f.Action}
+	if len(f.Days) > 0 || f.Start != "" || f.End != "" {
+		p.Schedule = &store.SegSchedule{Days: f.Days, Start: f.Start, End: f.End}
+	}
+	return p
 }
 
 // savePolicy adds a policy (POST /firewall/policies) or changes one (POST
@@ -207,9 +258,13 @@ func (u *ui) renderPolicy(w http.ResponseWriter, r *http.Request, s auth.Session
 	pv := policyView{Count: len(v.Config.Policies), Form: policyForm{Old: name, Name: pol.Name, Action: pol.Action, From: listText(pol.From),
 		To: listText(pol.To), Services: listText(pol.Services), Description: pol.Description, Disabled: pol.Disabled,
 		Position: strconv.Itoa(i + 1)}}
+	if pol.Schedule != nil {
+		pv.Form.Days, pv.Form.Start, pv.Form.End = pol.Schedule.Days, pol.Schedule.Start, pol.Schedule.End
+	}
 	if f != nil {
 		pv.Form = *f
 	}
+	pv.Form.Zone = v.TimeZone
 	u.showFirewall(w, r, s, status, "policy", "policies", "Policy "+name, p, nil, pv)
 }
 
@@ -230,6 +285,22 @@ func (u *ui) movePolicy(w http.ResponseWriter, r *http.Request, s auth.Session) 
 
 func (u *ui) removePolicy(w http.ResponseWriter, r *http.Request, s auth.Session) {
 	u.removeItem(w, r, s, api.SegPolicy, func(status int, p page) { u.renderPolicies(w, r, s, status, p, nil) })
+}
+
+// saveTimeZone sets the time zone the schedules are read in (POST
+// /firewall/timezone); empty is the server's.
+func (u *ui) saveTimeZone(w http.ResponseWriter, r *http.Request, s auth.Session) {
+	tz := strings.TrimSpace(r.PostFormValue("timezone"))
+	ch, err := u.Nodes.SetTimeZone(r.Context(), actor(s), tz)
+	if err != nil {
+		status, msg := u.refusal(r, err)
+		u.renderPolicies(w, r, s, status, page{Error: msg}, nil)
+		return
+	}
+	if tz == "" {
+		tz = "the server's"
+	}
+	u.renderPolicies(w, r, s, http.StatusOK, page{Flash: meshChanged("Schedules now follow "+tz+" time", ch)}, nil)
 }
 
 // --- zones -----------------------------------------------------------------
@@ -316,7 +387,7 @@ func (u *ui) renderZone(w http.ResponseWriter, r *http.Request, s auth.Session, 
 		u.renderZones(w, r, s, http.StatusNotFound, page{Error: fmt.Sprintf("there is no zone %q; the list below has them all", name)}, nil)
 		return
 	}
-	z, rules := v.Config.Zones[i], ruleRows(v.Rules)
+	z, rules := v.Config.Zones[i], ruleRows(v.Rules, v.Inactive)
 	zv := zoneView{Form: zoneForm{Old: name, Name: z.Name, Intra: z.Intra, Members: listText(z.Members), Description: z.Description},
 		Addresses: listText(v.Zones[i].Addresses)}
 	for _, n := range v.Zones[i].Inbound {
@@ -437,13 +508,15 @@ type matrixCell struct {
 }
 
 type reachView struct {
-	From, To, Service string
-	Nodes             []string
-	Result            *api.ReachResult
+	From, To, Service, At string
+	Nodes                 []string
+	Result                *api.ReachResult
 	// RuleN is the deciding rule's number, 0 for none.
 	RuleN int
 	Zones []string
 	Rows  []matrixRow
+	// MatrixAt is when the matrix holds.
+	MatrixAt string
 }
 
 // reachPage shows how every zone reaches every other, and the verdict for
@@ -451,10 +524,11 @@ type reachView struct {
 // /firewall/reach?from=&to=&service=).
 func (u *ui) reachPage(w http.ResponseWriter, r *http.Request, s auth.Session) {
 	q := r.URL.Query()
-	rv := reachView{From: strings.TrimSpace(q.Get("from")), To: strings.TrimSpace(q.Get("to")), Service: strings.TrimSpace(q.Get("service"))}
+	rv := reachView{From: strings.TrimSpace(q.Get("from")), To: strings.TrimSpace(q.Get("to")), Service: strings.TrimSpace(q.Get("service")),
+		At: strings.TrimSpace(q.Get("at"))}
 	p, status := page{}, http.StatusOK
 	if rv.From != "" || rv.To != "" || rv.Service != "" {
-		res, err := u.Nodes.Reach(r.Context(), api.ReachRequest{From: rv.From, To: rv.To, Service: rv.Service})
+		res, err := u.Nodes.Reach(r.Context(), api.ReachRequest{From: rv.From, To: rv.To, Service: rv.Service, At: rv.At})
 		if err != nil {
 			status, p.Error = u.refusal(r, err)
 		} else {
@@ -471,7 +545,7 @@ func (u *ui) reachPage(w http.ResponseWriter, r *http.Request, s auth.Session) {
 		u.fail(w, r, s, err)
 		return
 	}
-	rv.Nodes, rv.Zones = v.Nodes, m.Zones
+	rv.Nodes, rv.Zones, rv.MatrixAt = v.Nodes, m.Zones, m.At
 	class := map[string]string{planner.ReachAllow: "ok", planner.ReachDeny: "bad", planner.ReachPartial: "warn"}
 	for i, z := range m.Zones {
 		row := matrixRow{Zone: z}

@@ -183,10 +183,16 @@ func describeSegmentation(s store.Segmentation) []string {
 	}
 	for i, p := range s.Policies {
 		line := fmt.Sprintf("policy %d %s: %s %s -> %s %s", i+1, p.Name, p.Action, list(p.From), list(p.To), list(p.Services))
+		if p.Schedule != nil {
+			line += " " + p.Schedule.String()
+		}
 		if p.Disabled {
 			line += " (disabled)"
 		}
 		out = append(out, line)
+	}
+	if s.TimeZone != "" {
+		out = append(out, "schedules in "+s.TimeZone)
 	}
 	return out
 }

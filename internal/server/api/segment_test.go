@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
 	"github.com/hafio/vpn-mesh-utility/internal/server/store"
@@ -34,7 +35,8 @@ func TestSegmentView(t *testing.T) {
 	s, ctx := h.nodes(), context.Background()
 	v, err := s.Segment(ctx)
 	if err != nil || len(v.Config.Policies) != 1 || v.Config.Policies[0].Name != "allow-all" || len(v.Rules) != 4 ||
-		v.Rules[3].Name != "policy: allow-all" || !slices.Equal(v.Nodes, []string{"laptop", "nas", "vps-1", "vps-2", "vps-3"}) {
+		v.Rules[3].Name != "policy: allow-all" || !slices.Equal(v.Nodes, []string{"laptop", "nas", "vps-1", "vps-2", "vps-3"}) ||
+		v.TimeZone != "UTC" || v.Now != "Mon 2026-10-12 08:00 UTC" || len(v.Inactive) != 0 {
 		t.Fatalf("a new mesh's firewall = %+v, %v", v, err)
 	}
 	if _, err := s.SetSegment(ctx, cli(), officeFirewall()); err != nil {
@@ -287,6 +289,71 @@ func TestMatrix(t *testing.T) {
 	}
 }
 
+// Scheduled policies (the harness's clock reads Monday 08:00 UTC, 16:00 in
+// Singapore): every server gets the schedule and the zone; the views, the
+// check and the matrix judge the time asked about, and say which rules
+// sleep then. The zone falls back to the server's, then UTC.
+func TestScheduledPolicies(t *testing.T) {
+	h := meshHarness(t)
+	s, ctx, by := h.nodes(), context.Background(), Actor{Name: "user:ops", UserID: 1}
+	seg := officeFirewall()
+	seg.Policies[0].Schedule = &store.SegSchedule{Days: []string{"fri", "mon", "tue", "wed", "thu"}, Start: "09:00", End: "17:00"}
+	seg.TimeZone = "Asia/Singapore"
+	if _, err := s.SetSegment(ctx, cli(), seg); err != nil {
+		t.Fatal(err)
+	}
+	pol := h.config(t, "vps-1").Policy
+	want := &proto.Schedule{Days: []string{"mon", "tue", "wed", "thu", "fri"}, Start: "09:00", End: "17:00"}
+	if pol.TZ != "Asia/Singapore" || !reflect.DeepEqual(pol.Rules[3].Schedule, want) {
+		t.Fatalf("vps-1's policy = %+v", pol)
+	}
+	smb := ReachRequest{From: "laptop", To: "nas", Service: "tcp/445"}
+	if r, err := s.Reach(ctx, smb); err != nil || !r.Allowed || r.Rule != "policy: smb" || r.At != "2026-10-12T16:00:00+08:00" || r.Inactive != nil {
+		t.Fatalf("SMB now = %+v, %v", r, err)
+	}
+	smb.At = "2026-10-12T18:00:00+08:00"
+	if r, err := s.Reach(ctx, smb); err != nil || r.Allowed || r.Rule != "policy: no-home" || !slices.Equal(r.Inactive, []string{"policy: smb"}) {
+		t.Fatalf("SMB after hours = %+v, %v", r, err)
+	}
+
+	h.clock.Advance(2 * time.Hour) // 18:00 in Singapore
+	v, err := s.Segment(ctx)
+	if err != nil || v.TimeZone != "Asia/Singapore" || v.Now != "Mon 2026-10-12 18:00 +08" || !slices.Equal(v.Inactive, []int{3}) {
+		t.Fatalf("the view after hours = %+v, %v", v, err)
+	}
+	m, err := s.Matrix(ctx)
+	if err != nil || m.At != v.Now || !slices.Equal(m.Cells[1][0].Rules, []int{0, 4}) {
+		t.Fatalf("the matrix after hours = %+v, %v", m, err)
+	}
+
+	// A bad time is refused before the database; so is a bad zone.
+	h.db.n.Store(0)
+	_, err = s.Reach(ctx, ReachRequest{From: "laptop", To: "nas", Service: "tcp/445", At: "18:00"})
+	refused(t, err, http.StatusBadRequest, "RFC 3339")
+	if n := h.db.n.Load(); n != 0 {
+		t.Fatalf("a refused check ran %d transactions", n)
+	}
+	version := h.latestVersion(t)
+	_, err = s.SetTimeZone(ctx, by, "Mars/Olympus")
+	refused(t, err, http.StatusBadRequest, "timezone")
+	if h.latestVersion(t) != version {
+		t.Fatal("a refused time zone was written")
+	}
+	// The server's zone, then UTC.
+	if _, err := s.SetTimeZone(ctx, by, ""); err != nil || h.audits(t, "segmentation.timezone") != 1 {
+		t.Fatalf("SetTimeZone = %v", err)
+	}
+	if v, err = s.Segment(ctx); err != nil || v.TimeZone != "UTC" || h.config(t, "vps-1").Policy.TZ != "UTC" {
+		t.Fatalf("without a zone: %q, %v", v.TimeZone, err)
+	}
+	if err := h.st.Tx(ctx, func(tx *store.Tx) error { return tx.SetSetting(store.SettingServerTZ, "Europe/Berlin") }); err != nil {
+		t.Fatal(err)
+	}
+	if v, err = s.Segment(ctx); err != nil || v.TimeZone != "Europe/Berlin" || v.Config.TimeZone != "" {
+		t.Fatalf("the server's zone: %q, %v", v.TimeZone, err)
+	}
+}
+
 func TestNodeGroups(t *testing.T) {
 	h := meshHarness(t)
 	s, ctx := h.nodes(), context.Background()
@@ -368,6 +435,11 @@ func TestSegmentAdminRoutes(t *testing.T) {
 	if code, _ := adminCall(t, h, http.MethodGet, AdminSegmentation+"/check?"+q.Encode(), nil, &r); code != http.StatusOK || !r.Allowed ||
 		r.Rule != "policy: smb" || r.Index != 3 {
 		t.Fatalf("check = %d %+v", code, r)
+	}
+	q.Set("at", "2026-10-12T09:00:00Z")
+	if code, _ := adminCall(t, h, http.MethodGet, AdminSegmentation+"/check?"+q.Encode(), nil, &r); code != http.StatusOK ||
+		r.At != "2026-10-12T09:00:00Z" {
+		t.Fatalf("check at = %d %+v", code, r)
 	}
 	bad := officeFirewall()
 	bad.Zones[0].Intra = "maybe"

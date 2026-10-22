@@ -163,7 +163,10 @@ internet. Then, on the laptop (root, or a member of group `meshctl`):
 The command goes through the local agent to the server, which owns every peer list, so it needs
 the server; it returns once the laptop has applied the new config. An operator does the same with
 `node set laptop --exit vps-2` (`--exit off`). In exit mode the LAN and the mesh still go direct,
-and IPv6 to the internet is blocked rather than sent around the tunnel.
+and IPv6 to the internet is blocked rather than sent around the tunnel -- except on a kernel with
+IPv6 but no IPv6 policy routing (some NAS kernels), where the node reports `degraded exit`
+("carries IPv4 only"): turn IPv6 off there (`sysctl net.ipv6.conf.all.disable_ipv6=1`) before
+using it as an exit client.
 
 **Phones.** A phone runs the WireGuard app, not an agent. Add it, then make its profile:
 
@@ -387,11 +390,11 @@ every container name and how it resolves.
 
 ## 7. Firewall
 
-On servers the agent owns firewalld's `mesh` zone on wg0 (target DROP) and what it opened in the
-public zone: udp/51820, the Swarm ports from the other servers, DNS from the mesh, and the custom
-rules of the web UI's Firewall page -- a port from a source network, on one server or on every
-server. That page shows each server's rules with where each comes from. Rules you make yourself
-elsewhere are never touched; to change what the mesh allows, use the page, not firewall-cmd.
+On servers the agent owns firewalld's `mesh` zone on wg0 (target DROP, one rule accepting the mesh
+CIDR) and what it opened in the public zone (udp/51820); what crosses the mesh is the mesh
+firewall's to decide (section 8, "The mesh firewall"), in a table of the agent's own. Rules you
+make yourself elsewhere are never touched; to change what the mesh allows, use the Firewall page
+or `meshctl firewall`, not firewall-cmd.
 Spokes keep their own firewall: on the NAS, allow your apps' ports from the mesh CIDR in its
 firewall settings.
 
@@ -414,7 +417,7 @@ docker exec -it <container> /app/meshctl user add admin
 | Dashboard | every node with its state (green in sync, amber applying / degraded / late, red silent or rolled back, grey disabled or not joined; a phone green while its tunnel is on, amber when its profile is out of date, grey idle), applied and current version, agent, last heartbeat (a phone's last handshake), handshake age per peer and exit; refreshes every 10 s |
 | Nodes | add a node (the join command is shown once), open one to see its computed config, peers and DNS state, edit it, disable / enable, issue a new token, make a phone's profile (a QR code, shown once), remove it |
 | DNS | the mesh zone: one name per node and the custom records (add, remove); the upstream resolvers |
-| Firewall | the mesh firewall (below): policies in order (add, edit, move, remove), zones with their inbound and outbound rules, objects (groups, addresses, services), and Reachability: check one flow, see how every zone reaches every other |
+| Firewall | the mesh firewall (below): policies in order (add, edit, move, remove; each optionally scheduled) and the time zone of the schedules, zones with their inbound and outbound rules, objects (groups, addresses, services), and Reachability: check one flow, now or at a time, see how every zone reaches every other |
 | Versions | every config version with what it changed; roll back to one (a new version; a rollback that adds or removes nodes asks for confirmation) |
 | Audit | who changed what, newest first |
 | Settings | default MTU, default hub, upstream DNS; the mesh CIDR only while the mesh is empty; download the export |
@@ -442,6 +445,12 @@ mesh. A mesh starts with one policy, `allow-all`; narrow it from there:
    `udp/1000-2000`, `tcp`, `icmp` or `svc:<object>`; empty is any.
 4. Change or remove `allow-all` (last) when the policies above it say everything that should pass:
    what no rule allows is dropped.
+5. Optionally give a policy a **schedule** (amendment A44): days (none is every day) and a window,
+   `09:00`-`18:00`, or `22:00`-`06:00` across midnight (none is the whole day). Outside it the
+   policy is not in force and the next one decides. Schedules are read in one time zone, the
+   server's unless the Firewall page (or `timezone:` in the YAML) names another, such as
+   `Europe/Berlin`. Each server switches at the edge by its own clock, with the control plane down
+   too, and a window that closes cuts the connections it allowed -- so keep the servers on NTP.
 
 Ping across the mesh, DNS to the servers and Swarm between them always pass (system rules). Check
 before and after: Firewall, Reachability (one flow, or the zone matrix), or
@@ -452,6 +461,28 @@ docker exec <container> /app/meshctl firewall show
 docker exec <container> /app/meshctl firewall show --yaml > firewall.yaml   # edit, then
 docker exec -i <container> /app/meshctl firewall apply /dev/stdin < firewall.yaml
 ```
+
+In the YAML a schedule reads:
+
+```
+segmentation:
+  policies:
+    - name: office-smb
+      from: [group:laptops]
+      to: [node:nas]
+      services: [tcp/445]
+      action: allow
+      schedule:
+        days: [mon, tue, wed, thu, fri]
+        start: "08:00"
+        end: "19:00"
+    - name: allow-all
+      action: allow
+  timezone: Asia/Singapore
+```
+
+`firewall check ... --at 2026-10-24T10:00:00+08:00` answers for that time, and names the
+scheduled policies not in force then.
 
 A change applies to new connections at once; the servers re-check existing mesh connections too.
 On a server, `nft list table ip meshctl` shows what it enforces (the first rule's comment carries

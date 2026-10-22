@@ -125,7 +125,7 @@ meshctl firewall apply <file> [flags]
 
 ## meshctl firewall check
 
-Say what the mesh firewall does with one flow (from and to: nodes or IPv4 addresses; service: tcp/PORT, udp/PORT or icmp).
+Say what the mesh firewall does with one flow, now or --at a time (from and to: nodes or IPv4 addresses; service: tcp/PORT, udp/PORT or icmp).
 
 ```
 meshctl firewall check <from> <to> <service> [flags]
@@ -133,6 +133,7 @@ meshctl firewall check <from> <to> <service> [flags]
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
+| `--at` |  | judge the flow at this time, in RFC 3339 form such as 2026-10-23T09:30:00+08:00 (default now) |
 | `--data` | `/data` | the server's data directory (holds admin.sock) |
 | `--json` | `false` | print the server's answer as JSON |
 

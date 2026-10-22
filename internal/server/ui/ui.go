@@ -95,6 +95,7 @@ func New(d Deps) (http.Handler, error) {
 		"POST /firewall/policies/{name}":              u.savePolicy,
 		"POST /firewall/policies/{name}/move":         u.movePolicy,
 		"POST /firewall/policies/{name}/remove":       u.removePolicy,
+		"POST /firewall/timezone":                     u.saveTimeZone,
 		"GET /firewall/zones":                         u.zonesPage,
 		"POST /firewall/zones":                        u.saveZone,
 		"GET /firewall/zones/{name}":                  u.zonePage,
