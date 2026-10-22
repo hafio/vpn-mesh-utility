@@ -287,6 +287,15 @@ type Sysctl struct {
 	Values map[string]string
 	Writes int
 	Err    error
+	// NoIPv6 is a host that cannot use IPv6 (M8).
+	NoIPv6 bool
+}
+
+// IPv6 reports whether the host can use IPv6 (apply.IPv6Host).
+func (s *Sysctl) IPv6() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.NoIPv6
 }
 
 func (s *Sysctl) Apply(params []proto.Sysctl) (int, error) {

@@ -17,6 +17,7 @@ meshctl agent install [flags]
 | --- | --- | --- |
 | `--data` | `/var/lib/meshctl` | agent data directory |
 | `--endpoint` |  | servers only: public IPv4:port, when auto-detection would be wrong |
+| `--endpoint6` |  | servers only: public [IPv6]:port, when auto-detection would be wrong |
 | `--name` |  | the node name the token must belong to (a safety check) |
 | `--server` |  | server origin, e.g. https://mesh.example.com |
 | `--token` |  | one-time join token (or set MESHCTL_TOKEN, which keeps it out of the process list) |
@@ -33,6 +34,7 @@ meshctl agent join [flags]
 | --- | --- | --- |
 | `--data` | `/var/lib/meshctl` | agent data directory |
 | `--endpoint` |  | servers only: public IPv4:port, when auto-detection would be wrong |
+| `--endpoint6` |  | servers only: public [IPv6]:port, when auto-detection would be wrong |
 | `--name` |  | the node name the token must belong to (a safety check) |
 | `--no-service` | `false` | do not install and start the system service |
 | `--server` |  | server origin, e.g. https://mesh.example.com |
@@ -188,6 +190,19 @@ meshctl import <file> [flags]
 | --- | --- | --- |
 | `--data` | `/data` | the server's data directory (the server must be stopped) |
 
+## meshctl ipv6
+
+Show or set the mesh's IPv6 prefix on the running server: a /48 to /64, auto (a random unique local /64) or off.
+
+```
+meshctl ipv6 [<prefix>|auto|off] [flags]
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--data` | `/data` | the server's data directory (holds admin.sock) |
+| `--json` | `false` | print the server's answer as JSON |
+
 ## meshctl logs
 
 Print this node's recent agent log; -f keeps following it.
@@ -215,11 +230,15 @@ meshctl node add <name> [flags]
 | `--always-on` | `false` | spokes: allocate from the always-on block (NAS) |
 | `--can-exit` | `false` | servers: may be chosen as an internet exit |
 | `--containers` | `false` | host mode: put the node's containers on the mesh too (container mode always does) |
+| `--containers6` | `false` | put the containers' IPv6 on the mesh too (needs --containers or container mode) |
 | `--data` | `/data` | the server's data directory (holds admin.sock) |
 | `--endpoint` |  | servers: public IPv4:port (default: what the agent detects at join) |
+| `--endpoint6` |  | servers: public [IPv6]:port (spokes dial it when IPv4 does not work) |
+| `--family` |  | dual (default: IPv4 and, once the mesh has an IPv6 prefix, IPv6), ipv4 or ipv6: the node's mesh addresses and the endpoints it dials |
 | `--groups` |  | comma-separated firewall groups to put the node in (a new name makes a new group) |
 | `--hub` |  | spokes and phones: the server that relays for it (default: the default hub) |
 | `--ip` |  | fixed mesh IP (default: the lowest free one in the role's block) |
+| `--ip6` |  | fixed IPv6 mesh address (default: the lowest free one in the role's block, when the mesh has an IPv6 prefix) |
 | `--json` | `false` | print the server's answer as JSON |
 | `--keepalive` | `0` | spokes and phones: PersistentKeepalive seconds (default 25) |
 | `--listen-port` | `0` | servers: WireGuard UDP port (default 51820) |
@@ -336,15 +355,19 @@ meshctl node set <name> [flags]
 | --- | --- | --- |
 | `--can-exit` | `false` | servers: may be chosen as an internet exit (--can-exit=false to revoke) |
 | `--containers` | `false` | host mode: put the node's containers on the mesh (--containers=false takes them off) |
+| `--containers6` | `false` | put the containers' IPv6 on the mesh (--containers6=false takes it off) |
 | `--data` | `/data` | the server's data directory (holds admin.sock) |
 | `--endpoint` |  | servers: public IPv4:port, or none to clear it |
+| `--endpoint6` |  | servers: public [IPv6]:port, or none to clear it |
 | `--exit` |  | spokes: exit server, or off |
+| `--family` |  | dual, ipv4 or ipv6: allocates the address a family adds, drops the one it takes away |
 | `--groups` |  | the node's firewall groups, comma separated, replacing the ones it is in ("" takes it out of all) |
 | `--hub` |  | spokes and phones: relay server, or default for the default hub |
 | `--json` | `false` | print the server's answer as JSON |
 | `--keepalive` | `0` | PersistentKeepalive seconds (0 turns it off) |
 | `--listen-port` | `0` | servers: WireGuard UDP port |
 | `--mesh-ip` |  | move the node to another mesh IP in the mesh (its peers, DNS name and agent follow) |
+| `--mesh-ip6` |  | move the node to another IPv6 mesh address in the mesh's IPv6 prefix |
 | `--mtu` | `0` | interface MTU |
 
 ## meshctl node show

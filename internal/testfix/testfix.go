@@ -63,31 +63,39 @@ func (c *Clock) Advance(d time.Duration) {
 }
 
 // Node is one node of the reference topology. Key is the n passed to WGKey
-// and IdentityKey, so every node has distinct, reproducible keys.
+// and IdentityKey, so every node has distinct, reproducible keys. MeshIP6
+// is its address in MeshCIDR6 for the dual-stack fixtures (M8); only vps-2
+// has a public IPv6 endpoint.
 type Node struct {
-	ID       int64
-	Name     string
-	Role     proto.Role
-	MeshIP   string
-	Endpoint string
-	Key      byte
+	ID        int64
+	Name      string
+	Role      proto.Role
+	MeshIP    string
+	MeshIP6   string
+	Endpoint  string
+	Endpoint6 string
+	Key       byte
 }
 
 // The reference topology (spec S1 and S4).
 var (
-	VPS1   = Node{ID: 1, Name: "vps-1", Role: proto.RoleServer, MeshIP: "10.77.0.1", Endpoint: "203.0.113.10:51820", Key: 1}
-	VPS2   = Node{ID: 2, Name: "vps-2", Role: proto.RoleServer, MeshIP: "10.77.0.2", Endpoint: "203.0.113.11:51820", Key: 2}
-	VPS3   = Node{ID: 3, Name: "vps-3", Role: proto.RoleServer, MeshIP: "10.77.0.3", Endpoint: "203.0.113.12:51820", Key: 3}
-	NAS    = Node{ID: 4, Name: "nas", Role: proto.RoleSpoke, MeshIP: "10.77.1.1", Key: 4}
-	Laptop = Node{ID: 5, Name: "laptop", Role: proto.RoleSpoke, MeshIP: "10.77.2.1", Key: 5}
-	Phone  = Node{ID: 6, Name: "phone", Role: proto.RolePhone, MeshIP: "10.77.3.1", Key: 6}
+	VPS1   = Node{ID: 1, Name: "vps-1", Role: proto.RoleServer, MeshIP: "10.77.0.1", MeshIP6: "fd10:77::1", Endpoint: "203.0.113.10:51820", Key: 1}
+	VPS2   = Node{ID: 2, Name: "vps-2", Role: proto.RoleServer, MeshIP: "10.77.0.2", MeshIP6: "fd10:77::2", Endpoint: "203.0.113.11:51820", Endpoint6: "[2001:db8::11]:51820", Key: 2}
+	VPS3   = Node{ID: 3, Name: "vps-3", Role: proto.RoleServer, MeshIP: "10.77.0.3", MeshIP6: "fd10:77::3", Endpoint: "203.0.113.12:51820", Key: 3}
+	NAS    = Node{ID: 4, Name: "nas", Role: proto.RoleSpoke, MeshIP: "10.77.1.1", MeshIP6: "fd10:77::1:1", Key: 4}
+	Laptop = Node{ID: 5, Name: "laptop", Role: proto.RoleSpoke, MeshIP: "10.77.2.1", MeshIP6: "fd10:77::2:1", Key: 5}
+	Phone  = Node{ID: 6, Name: "phone", Role: proto.RolePhone, MeshIP: "10.77.3.1", MeshIP6: "fd10:77::3:1", Key: 6}
 )
 
 // Servers is the three-VPS Swarm base.
 var Servers = []Node{VPS1, VPS2, VPS3}
 
-// MeshCIDR is the default mesh range.
-const MeshCIDR = "10.77.0.0/16"
+// MeshCIDR is the default mesh range; MeshCIDR6 the dual-stack fixtures'
+// IPv6 prefix (M8).
+const (
+	MeshCIDR  = "10.77.0.0/16"
+	MeshCIDR6 = "fd10:77::/64"
+)
 
 // Token is a well-formed join token (43 base64url chars).
 const Token = "dGVzdC10b2tlbi10ZXN0LXRva2VuLXRlc3QtdG9rZW4"
@@ -197,6 +205,41 @@ func Containers(mode string) *proto.Containers {
 	}
 	return &proto.Containers{Mode: mode, Subnet: ContainerSubnet, Network: MeshCIDR, Range: "10.77.128.128/25",
 		Bridge: "10.77.128.1", Gateway: gateway}
+}
+
+// DualSpokeConfig is SpokeConfig on the dual-stack mesh (M8): both mesh
+// addresses, every peer routing both, vps-2 with its IPv6 endpoint as the
+// fallback; an exit adds 0.0.0.0/0, and ::/0 when the exit is vps-2 (the
+// one with public IPv6).
+func DualSpokeConfig(exit string) proto.NodeConfig {
+	c := SpokeConfig(exit)
+	c.Interface.Address6 = Laptop.MeshIP6 + "/128"
+	for i, n := range []Node{VPS1, VPS2, VPS3} {
+		p := &c.Peers[i]
+		p.AllowedIPs = append(p.AllowedIPs, n.MeshIP6+"/128")
+		if n.Name == VPS1.Name {
+			p.AllowedIPs = append(p.AllowedIPs, NAS.MeshIP6+"/128")
+		}
+		if n.Name == exit && n.Endpoint6 != "" {
+			p.AllowedIPs = append(p.AllowedIPs, "::/0")
+		}
+		p.Fallback = n.Endpoint6
+	}
+	return c
+}
+
+// ContainerSubnet6 is the first container /112 of MeshCIDR6 (M8).
+const ContainerSubnet6 = "fd10:77::8000:0/112"
+
+// Containers6 is Containers with the IPv6 side (M8).
+func Containers6(mode string) *proto.Containers {
+	k := Containers(mode)
+	k.Subnet6, k.Network6, k.Range6, k.Bridge6 = ContainerSubnet6, MeshCIDR6, "fd10:77::8000:8000/113", "fd10:77::8000:1"
+	k.Gateway6 = k.Bridge6
+	if mode == proto.ModeContainer {
+		k.Gateway6 = "fd10:77::8000:2"
+	}
+	return k
 }
 
 // ContainerSpokeConfig is the laptop's config in container mode: no exit,

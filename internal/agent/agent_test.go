@@ -711,7 +711,8 @@ func TestJoin(t *testing.T) {
 	var out strings.Builder
 	opts := JoinOptions{DataDir: data, Server: srv.URL, Token: testfix.Token, Version: "v1.0.0", Service: svc, Out: &out,
 		Hostname: func() (string, error) { return "My_VPS.Example.COM", nil }, Backend: func() string { return "kernel" },
-		PublicIPv4: func() (netip.Addr, bool) { return netip.MustParseAddr("198.51.100.7"), true }}
+		PublicIPv4: func() (netip.Addr, bool) { return netip.MustParseAddr("198.51.100.7"), true },
+		PublicIPv6: func() (netip.Addr, bool) { return netip.MustParseAddr("2001:db8::7"), true }, Endpoint6: "[2001:db8::70]:51820"}
 	if _, err := Join(context.Background(), opts); err != nil {
 		t.Fatal(err)
 	}
@@ -722,13 +723,14 @@ func TestJoin(t *testing.T) {
 	}
 	wgPub, _ := keys.WGPublic()
 	if got.Token != testfix.Token || got.WGPublicKey != wgPub || got.IdentityPublicKey != keys.IdentityPublic() ||
-		got.Hostname != "my-vps.example.com" || got.PublicIP != "198.51.100.7" || got.WGBackend != "kernel" {
+		got.Hostname != "my-vps.example.com" || got.PublicIP != "198.51.100.7" || got.WGBackend != "kernel" ||
+		got.PublicIP6 != "2001:db8::7" || got.Endpoint6 != "[2001:db8::70]:51820" {
 		t.Fatalf("join request %+v", got)
 	}
 	if e, err := dir.Enrollment(); err != nil || e.NodeID != 7 || e.Server != srv.URL {
 		t.Fatalf("enrollment %+v, %v", e, err)
 	}
-	if !svc.installed || !strings.Contains(out.String(), "installed and started") {
+	if !svc.installed || !strings.Contains(out.String(), "installed and started") || !strings.Contains(out.String(), "(server, mesh IP 10.77.0.1, node id 7)") {
 		t.Fatalf("service not installed: %s", out.String())
 	}
 
@@ -758,12 +760,14 @@ func TestJoinValidatesBeforeCallingTheServer(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
 	defer srv.Close()
 	base := JoinOptions{DataDir: filepath.Join(t.TempDir(), "data"), Server: srv.URL, Token: testfix.Token, Version: "v1",
-		NoService: true, Backend: func() string { return "kernel" }, PublicIPv4: func() (netip.Addr, bool) { return netip.Addr{}, false }}
+		NoService: true, Backend: func() string { return "kernel" }, PublicIPv4: func() (netip.Addr, bool) { return netip.Addr{}, false },
+		PublicIPv6: func() (netip.Addr, bool) { return netip.Addr{}, false }}
 	for name, edit := range map[string]func(*JoinOptions){
 		"http to a public server": func(o *JoinOptions) { o.Server = "http://mesh.example.com" },
 		"short token":             func(o *JoinOptions) { o.Token = "abc" },
 		"bad name":                func(o *JoinOptions) { o.Name = "VPS 1" },
 		"endpoint with a host":    func(o *JoinOptions) { o.Endpoint = "vps.example:51820" },
+		"endpoint6 is IPv4":       func(o *JoinOptions) { o.Endpoint6 = "203.0.113.10:51820" },
 	} {
 		o := base
 		edit(&o)
@@ -773,6 +777,18 @@ func TestJoinValidatesBeforeCallingTheServer(t *testing.T) {
 	}
 	if called {
 		t.Fatal("an invalid join reached the server")
+	}
+}
+
+func TestMeshAddresses(t *testing.T) {
+	for want, r := range map[string]proto.JoinResponse{
+		"IP 10.77.0.1":                {MeshIP: "10.77.0.1"},
+		"IP 10.77.0.1 and fd10:77::1": {MeshIP: "10.77.0.1", MeshIP6: "fd10:77::1"},
+		"IPv6 fd10:77::2:1":           {MeshIP6: "fd10:77::2:1"},
+	} {
+		if got := meshAddresses(r); got != want {
+			t.Errorf("meshAddresses(%+v) = %q, want %q", r, got, want)
+		}
 	}
 }
 
@@ -844,6 +860,17 @@ func TestIsPublic(t *testing.T) {
 	}
 	if ip, ok := PublicIPv4(); ok && !isPublic(ip) {
 		t.Fatalf("PublicIPv4 returned a non-public address %s", ip)
+	}
+	for s, want := range map[string]bool{
+		"2001:db8::10": true, "2a01:4f8::1": true, "fd10:77::1": false, "fe80::1": false, "::1": false, "::ffff:203.0.113.10": false,
+		"ff02::1": false, "203.0.113.10": false,
+	} {
+		if got := isPublic6(netip.MustParseAddr(s)); got != want {
+			t.Errorf("isPublic6(%s) = %v", s, got)
+		}
+	}
+	if ip, ok := PublicIPv6(); ok && !isPublic6(ip) {
+		t.Fatalf("PublicIPv6 returned a non-global address %s", ip)
 	}
 }
 
@@ -1338,5 +1365,21 @@ func TestOpenRuntime(t *testing.T) {
 	auto.openRuntime()
 	if auto.d.Runtime != nil && !slices.Contains(names.Sockets(), auto.d.Runtime.(*names.Runtime).Socket()) {
 		t.Fatalf("auto picked %v", auto.d.Runtime)
+	}
+}
+
+// The heartbeat says which address families the host can use (M8), from
+// the apply; the server plans the node by it.
+func TestReportsTheHostFamilies(t *testing.T) {
+	for _, c := range []struct {
+		noIPv6 bool
+		want   string
+	}{{false, "ipv4,ipv6"}, {true, "ipv4"}} {
+		dir, f := joinedTo(t, testfix.ServerConfig())
+		startWith(t, dir, filepath.Join(dir.Path, "agent.sock"), func(d *Deps) { d.Sysctl = &agentfake.Sysctl{NoIPv6: c.noIPv6} })
+		eventually(t, "the families "+c.want+" in a report", func() bool {
+			rep, ok := f.lastReport()
+			return ok && strings.Join(rep.Families, ",") == c.want
+		})
 	}
 }

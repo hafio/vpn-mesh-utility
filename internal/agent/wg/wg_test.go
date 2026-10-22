@@ -106,7 +106,7 @@ func TestSyncIsIdempotent(t *testing.T) {
 	addr := netip.MustParsePrefix("10.77.0.1/32")
 	steps := func() int {
 		n1, err1 := wg.SyncLink(h, "wg0", 1420)
-		n2, err2 := wg.SyncAddr(h, "wg0", addr)
+		n2, err2 := wg.SyncAddrs(h, "wg0", []netip.Prefix{addr})
 		n3, err3 := wg.SyncDevice(h, "wg0", desired)
 		if err := errors.Join(err1, err2, err3); err != nil {
 			t.Fatal(err)
@@ -128,9 +128,29 @@ func TestSyncIsIdempotent(t *testing.T) {
 	if err := h.AddAddr("wg0", netip.MustParsePrefix("10.99.0.1/32")); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := wg.SyncAddr(h, "wg0", addr); err != nil || n != 1 {
-		t.Fatalf("SyncAddr = %d, %v", n, err)
+	if n, err := wg.SyncAddrs(h, "wg0", []netip.Prefix{addr}); err != nil || n != 1 {
+		t.Fatalf("SyncAddrs = %d, %v", n, err)
 	}
+	// Dual stack (M8): the IPv6 address beside the IPv4 one, then alone.
+	addr6 := netip.MustParsePrefix("fd10:77::1/128")
+	if n, err := wg.SyncAddrs(h, "wg0", []netip.Prefix{addr, addr6}); err != nil || n != 1 {
+		t.Fatalf("SyncAddrs(IPv4, IPv6) = %d, %v", n, err)
+	}
+	if n, err := wg.SyncAddrs(h, "wg0", []netip.Prefix{addr6}); err != nil || n != 1 {
+		t.Fatalf("SyncAddrs(IPv6) = %d, %v", n, err)
+	}
+	if l, _ := h.Link("wg0"); len(l.Addrs) != 1 || l.Addrs[0] != addr6 {
+		t.Fatalf("addresses %v, want only %s", l.Addrs, addr6)
+	}
+	h.Fail = "AddAddr"
+	if _, err := wg.SyncAddrs(h, "wg0", []netip.Prefix{addr}); err == nil {
+		t.Fatal("a failed AddAddr was not reported")
+	}
+	h.Fail = "DelAddr"
+	if _, err := wg.SyncAddrs(h, "wg0", nil); err == nil {
+		t.Fatal("a failed DelAddr was not reported")
+	}
+	h.Fail = ""
 	if n, err := wg.SyncLink(h, "wg0", 1380); err != nil || n != 1 {
 		t.Fatalf("SyncLink with a new MTU = %d, %v", n, err)
 	}

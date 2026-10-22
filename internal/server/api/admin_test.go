@@ -414,6 +414,17 @@ func TestAdminClientOverTheSocket(t *testing.T) {
 	if p, err := c.Phone(ctx, "phone", ""); err != nil || !strings.HasPrefix(p.Profile, "[Interface]\nPrivateKey = ") {
 		t.Fatalf("Phone = %+v, %v", p, err)
 	}
+	if v, err := c.SetIPv6(ctx, IPv6Request{Prefix: testfix.MeshCIDR6}); err != nil || v.Prefix != testfix.MeshCIDR6 || v.Addressed != 5 {
+		t.Fatalf("SetIPv6 = %+v, %v", v, err)
+	}
+	if v, err := c.IPv6(ctx); err != nil || v.Prefix != testfix.MeshCIDR6 {
+		t.Fatalf("IPv6 = %+v, %v", v, err)
+	}
+	if _, err := c.SetIPv6(ctx, IPv6Request{Prefix: "fd10::/40"}); err == nil {
+		t.Fatal("SetIPv6 of a /40 succeeded")
+	} else if ae, ok := err.(*AdminError); !ok || ae.Code != proto.CodeBadRequest {
+		t.Fatalf("SetIPv6(/40) = %#v", err)
+	}
 	for _, step := range []func() (NodeChange, error){
 		func() (NodeChange, error) { return c.Set(ctx, "laptop", NodeSetRequest{Keepalive: ptr(15)}) },
 		func() (NodeChange, error) { return c.Token(ctx, "laptop") },

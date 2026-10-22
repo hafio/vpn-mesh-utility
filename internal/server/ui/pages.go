@@ -2,6 +2,7 @@ package ui
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -86,7 +87,7 @@ func (u *ui) dashboardData(r *http.Request) (dashboardData, error) {
 	now := u.Now()
 	d := dashboardData{Warnings: list.Warnings}
 	for _, n := range list.Nodes {
-		row := nodeRow{Name: n.Name, Role: n.Role, MeshIP: n.MeshIP, Endpoint: n.Endpoint, Exit: n.Exit,
+		row := nodeRow{Name: n.Name, Role: n.Role, MeshIP: cmp.Or(n.MeshIP, n.MeshIP6), Endpoint: cmp.Or(n.Endpoint, n.Endpoint6), Exit: n.Exit,
 			Versions: fmt.Sprintf("v%d / v%d", n.AppliedVersion, n.ConfigVersion), Agent: n.AgentVersion, Seen: ago(n.Seen(), now)}
 		row.Class, row.State = api.Health(n, now)
 		for _, p := range peers[n.ID] {
@@ -131,12 +132,17 @@ type nodeForm struct {
 	Groups                   string
 	CanExit, AlwaysOn        bool
 	Containers               bool
+	// The IPv6 side (M8).
+	Family, IP6, Endpoint6 string
+	Containers6            bool
 }
 
 type nodesData struct {
 	Rows    []nodeRow
 	Servers []string
 	Form    nodeForm
+	// IPv6 says the mesh has an IPv6 prefix (M8).
+	IPv6 bool
 }
 
 func (u *ui) nodesView(r *http.Request, form nodeForm) (nodesData, error) {
@@ -145,6 +151,9 @@ func (u *ui) nodesView(r *http.Request, form nodeForm) (nodesData, error) {
 		return nodesData{}, err
 	}
 	out := nodesData{Rows: d.Rows, Form: form}
+	if out.IPv6, err = u.meshHasIPv6(r); err != nil {
+		return nodesData{}, err
+	}
 	for _, row := range d.Rows {
 		if row.Role == string(proto.RoleServer) {
 			out.Servers = append(out.Servers, row.Name)
@@ -160,6 +169,13 @@ func (u *ui) nodesPage(w http.ResponseWriter, r *http.Request, s auth.Session) {
 		return
 	}
 	u.show(w, r, s, http.StatusOK, "nodes", "nodes", "Nodes", page{Data: d})
+}
+
+// meshHasIPv6 reports whether the mesh has an IPv6 prefix (M8): the forms
+// offer IPv6 addresses only then.
+func (u *ui) meshHasIPv6(r *http.Request) (bool, error) {
+	v, err := u.Nodes.IPv6(r.Context())
+	return v.Prefix != "", err
 }
 
 // atoi parses an optional number field; "" is 0 (the default).
@@ -181,9 +197,12 @@ func (u *ui) addNode(w http.ResponseWriter, r *http.Request, s auth.Session) {
 		Keepalive: r.PostFormValue("keepalive"), MTU: r.PostFormValue("mtu"), Mode: r.PostFormValue("mode"),
 		CanExit: r.PostFormValue("can_exit") != "", AlwaysOn: r.PostFormValue("always_on") != "",
 		Containers: r.PostFormValue("containers") != "", Groups: strings.TrimSpace(r.PostFormValue("groups")),
+		Family: r.PostFormValue("ip_family"), IP6: strings.TrimSpace(r.PostFormValue("ip6")),
+		Endpoint6: strings.TrimSpace(r.PostFormValue("endpoint6")), Containers6: r.PostFormValue("containers6") != "",
 	}
 	req := api.NodeAddRequest{Name: f.Name, Role: f.Role, IP: f.IP, Endpoint: f.Endpoint, Hub: f.Hub, CanExit: f.CanExit, AlwaysOn: f.AlwaysOn,
-		Mode: f.Mode, Containers: f.Containers, Groups: listOf(f.Groups)}
+		Mode: f.Mode, Containers: f.Containers, Groups: listOf(f.Groups), Family: f.Family, IP6: f.IP6, Endpoint6: f.Endpoint6,
+		Containers6: f.Containers6}
 	var err error
 	if req.ListenPort, err = atoi("listen_port", f.ListenPort); err == nil {
 		if req.Keepalive, err = atoi("keepalive", f.Keepalive); err == nil {
@@ -245,6 +264,8 @@ type nodeData struct {
 	IsPhone  bool
 	// InContainer is a container-mode node (amendment A37).
 	InContainer bool
+	// IPv6 says the mesh has an IPv6 prefix (M8).
+	IPv6 bool
 	// Networks are, for a host-mode node with a container network, the
 	// commands that create it per runtime; Service attaches a service, and
 	// SwarmService a Swarm service, which resolves through the servers.
@@ -282,6 +303,9 @@ func (u *ui) nodeView(r *http.Request, name string) (nodeData, error) {
 		InContainer: d.Node.Mode == proto.ModeContainer}
 	out.Class, out.State = api.Health(d.Node, now)
 	out.DNS = dnsState(d.Node.DNS)
+	if out.IPv6, err = u.meshHasIPv6(r); err != nil {
+		return nodeData{}, err
+	}
 	if out.IsPhone {
 		out.Profile = phoneState(d.Node)
 	}
@@ -370,10 +394,26 @@ func (u *ui) editNode(w http.ResponseWriter, r *http.Request, s auth.Session) {
 	if ip := strings.TrimSpace(r.PostFormValue("mesh_ip")); ip != "" && ip != cur.Node.MeshIP {
 		req.MeshIP = &ip
 	}
+	// The IPv6 fields are on the form when the mesh has an IPv6 prefix (M8).
+	if r.PostFormValue("ipv6_form") != "" {
+		family := r.PostFormValue("ip_family")
+		if family != "" && family != cur.Node.Family {
+			req.Family = &family
+		}
+		if ip6 := strings.TrimSpace(r.PostFormValue("mesh_ip6")); ip6 != "" && ip6 != cur.Node.MeshIP6 && family != proto.FamilyIPv4 {
+			req.MeshIP6 = &ip6
+		}
+		// Going IPv4 only takes the containers' IPv6 too, ticked or not.
+		if cur.Node.Role != string(proto.RolePhone) {
+			containers6 := r.PostFormValue("containers6") != "" && family != proto.FamilyIPv4
+			req.Containers6 = &containers6
+		}
+	}
 	if cur.Node.Role == string(proto.RoleServer) {
 		endpoint := strings.TrimSpace(r.PostFormValue("endpoint"))
+		endpoint6 := strings.TrimSpace(r.PostFormValue("endpoint6"))
 		canExit := r.PostFormValue("can_exit") != ""
-		req.Endpoint, req.CanExit = &endpoint, &canExit
+		req.Endpoint, req.Endpoint6, req.CanExit = &endpoint, &endpoint6, &canExit
 		if err == nil {
 			var port int
 			port, err = atoi("listen_port", r.PostFormValue("listen_port"))
@@ -656,6 +696,10 @@ type settingsData struct {
 	// ExtraDomains are the extra DNS domains, as the form shows them.
 	ExtraDomains string
 	Servers      []string
+	// IPv6Prefix is the mesh's IPv6 prefix, "" for none, and IPv6Addressed
+	// how many nodes have an IPv6 mesh address (M8).
+	IPv6Prefix    string
+	IPv6Addressed int
 }
 
 func (u *ui) settingsView(r *http.Request) (settingsData, error) {
@@ -696,6 +740,12 @@ func (u *ui) renderSettings(w http.ResponseWriter, r *http.Request, s auth.Sessi
 		u.fail(w, r, s, err)
 		return
 	}
+	v6, err := u.Nodes.IPv6(r.Context())
+	if err != nil {
+		u.fail(w, r, s, err)
+		return
+	}
+	d.IPv6Prefix, d.IPv6Addressed = v6.Prefix, v6.Addressed
 	p.Data = d
 	u.show(w, r, s, status, "settings", "settings", "Settings", p)
 }
@@ -713,13 +763,13 @@ func (u *ui) saveSettings(w http.ResponseWriter, r *http.Request, s auth.Session
 		if f = strings.TrimSpace(f); f == "" {
 			continue
 		}
-		if _, verr := validate.IPv4("upstream_dns", f); verr != nil && err == nil {
+		if _, verr := validate.IP("upstream_dns", f); verr != nil && err == nil {
 			err = verr
 		}
 		upstream = append(upstream, f)
 	}
 	if err == nil && (len(upstream) == 0 || len(upstream) > 4) {
-		err = &validate.Error{Field: "upstream_dns", Reason: "give one to four IPv4 addresses, comma separated"}
+		err = &validate.Error{Field: "upstream_dns", Reason: "give one to four IPv4 or IPv6 addresses, comma separated"}
 	}
 	hub, cidr := r.PostFormValue("default_hub"), strings.TrimSpace(r.PostFormValue("mesh_cidr"))
 	// The zone stays as it is when the form leaves it out, and so do the
@@ -801,6 +851,22 @@ func (u *ui) saveSettings(w http.ResponseWriter, r *http.Request, s auth.Session
 		return
 	}
 	u.renderSettings(w, r, s, http.StatusOK, page{Flash: changed("Settings saved", api.NodeChange{Version: res.Version})})
+}
+
+// saveIPv6 sets, generates or gives up the mesh's IPv6 prefix (POST
+// /settings/ipv6, M8); setting it gives every dual node an IPv6 address.
+func (u *ui) saveIPv6(w http.ResponseWriter, r *http.Request, s auth.Session) {
+	v, err := u.Nodes.SetIPv6(r.Context(), actor(s), api.IPv6Request{Prefix: r.PostFormValue("ipv6_prefix")})
+	if err != nil {
+		status, msg := message(err)
+		u.renderSettings(w, r, s, status, page{Error: msg})
+		return
+	}
+	what := "IPv6 given up"
+	if v.Prefix != "" {
+		what = fmt.Sprintf("IPv6 prefix %s; %d node(s) have an IPv6 mesh address", v.Prefix, v.Addressed)
+	}
+	u.renderSettings(w, r, s, http.StatusOK, page{Flash: changed(what, api.NodeChange{Version: v.Version})})
 }
 
 type userRow struct {

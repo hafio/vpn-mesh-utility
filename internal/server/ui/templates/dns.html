@@ -9,7 +9,7 @@
 <thead><tr><th>Name</th><th>Address</th><th>Follows</th><th></th></tr></thead>
 <tbody>
 {{- range .Records}}
-<tr><td>{{.Name}}.{{$.Data.View.Zone}}</td><td>{{.IP}}{{if not .Live}} (not on the mesh yet){{end}}</td><td>{{if .Node}}{{.Node}}{{else}}-{{end}}</td><td>{{if .Custom}}<form method="post" action="/dns/{{.Name}}/remove" class="inline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit" class="link">Remove</button></form>{{else}}automatic{{end}}</td></tr>
+<tr><td>{{.Name}}.{{$.Data.View.Zone}}</td><td>{{.IP}}{{if and .IP .IP6}}, {{end}}{{.IP6}}{{if not .Live}} (not on the mesh yet){{end}}</td><td>{{if .Node}}{{.Node}}{{else}}-{{end}}</td><td>{{if .Custom}}<form method="post" action="/dns/{{.Name}}/remove" class="inline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit" class="link">Remove</button></form>{{else}}automatic{{end}}</td></tr>
 {{- end}}
 </tbody>
 </table>
@@ -42,6 +42,9 @@
 {{- end}}
 </select></label>
 <label>or a fixed mesh IP <input name="ip" value="{{.IP}}" placeholder="10.77.1.200"></label>
+{{- if $.Data.View.IPv6}}
+<label>and/or a fixed mesh IPv6 <input name="ip6" value="{{.IP6}}" placeholder="optional"></label>
+{{- end}}
 {{- end}}
 <button type="submit">Add record</button>
 </form>

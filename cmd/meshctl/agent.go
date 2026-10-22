@@ -34,6 +34,7 @@ func joinFlags(fs *flag.FlagSet, e *env) func() (agent.JoinOptions, error) {
 	token := fs.String("token", "", "one-time join token (or set MESHCTL_TOKEN, which keeps it out of the process list)")
 	name := fs.String("name", "", "the node name the token must belong to (a safety check)")
 	endpoint := fs.String("endpoint", "", "servers only: public IPv4:port, when auto-detection would be wrong")
+	endpoint6 := fs.String("endpoint6", "", "servers only: public [IPv6]:port, when auto-detection would be wrong")
 	data := fs.String("data", defaultAgentData(e), "agent data directory")
 	return func() (agent.JoinOptions, error) {
 		tok := *token
@@ -44,7 +45,7 @@ func joinFlags(fs *flag.FlagSet, e *env) func() (agent.JoinOptions, error) {
 			return agent.JoinOptions{}, usagef("--server and --token (or MESHCTL_TOKEN) are required; `meshctl node add` prints both")
 		}
 		return agent.JoinOptions{DataDir: *data, Server: *srv, Token: tok, Name: *name, Endpoint: *endpoint, Version: e.version,
-			Out: e.stdout, Now: e.now}, nil
+			Out: e.stdout, Now: e.now, Endpoint6: *endpoint6}, nil
 	}
 }
 

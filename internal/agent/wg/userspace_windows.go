@@ -66,15 +66,16 @@ func (u *userspace) Link(name string) (Link, error) {
 	if err != nil {
 		return Link{}, fmt.Errorf("read adapter %s: %w", name, err)
 	}
-	rows, err := winipcfg.GetUnicastIPAddressTable(windows.AF_INET)
+	rows, err := winipcfg.GetUnicastIPAddressTable(windows.AF_UNSPEC)
 	if err != nil {
 		return Link{}, fmt.Errorf("read the addresses of adapter %s: %w", name, err)
 	}
 	// A wintun adapter is up while its session is open, that is, always.
 	l := Link{Exists: true, Ours: true, Up: true, MTU: int(ipif.NLMTU)}
 	for i := range rows {
-		if rows[i].InterfaceLUID == u.luid {
-			l.Addrs = append(l.Addrs, netip.PrefixFrom(rows[i].Address.Addr(), int(rows[i].OnLinkPrefixLength)))
+		// Windows gives the adapter an IPv6 link-local address of its own.
+		if a := rows[i].Address.Addr(); rows[i].InterfaceLUID == u.luid && !a.IsLinkLocalUnicast() {
+			l.Addrs = append(l.Addrs, netip.PrefixFrom(a, int(rows[i].OnLinkPrefixLength)))
 		}
 	}
 	return l, nil
@@ -115,7 +116,8 @@ func (u *userspace) adapter(name string) (winipcfg.LUID, *tun.NativeTun, error) 
 	return u.luid, u.tun, nil
 }
 
-// SetMTU sets the adapter's IPv4 MTU and the size wireguard-go packs to.
+// SetMTU sets the adapter's MTU, IPv4 and IPv6 (where the host has IPv6),
+// and the size wireguard-go packs to.
 func (u *userspace) SetMTU(name string, mtu int) error {
 	luid, nt, err := u.adapter(name)
 	if err != nil {
@@ -128,6 +130,12 @@ func (u *userspace) SetMTU(name string, mtu int) error {
 	}
 	if err != nil {
 		return fmt.Errorf("set the MTU of adapter %s to %d: %w", name, mtu, err)
+	}
+	if ipif6, err := luid.IPInterface(windows.AF_INET6); err == nil {
+		ipif6.NLMTU = uint32(mtu)
+		if err := ipif6.Set(); err != nil {
+			return fmt.Errorf("set the IPv6 MTU of adapter %s to %d: %w", name, mtu, err)
+		}
 	}
 	nt.ForceMTU(mtu)
 	return nil

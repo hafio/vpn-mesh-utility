@@ -9,12 +9,13 @@ import (
 	"net/netip"
 
 	"github.com/vishvananda/netlink"
+	"golang.org/x/sys/unix"
 
 	"github.com/hafio/vpn-mesh-utility/internal/agent/netconv"
 )
 
 // links is the netlink half of both Linux backends: whether the interface
-// exists and is ours, its MTU, state and IPv4 addresses. kind is the link
+// exists and is ours, its MTU, state and addresses of both families. kind is the link
 // type the backend creates: "wireguard" in the kernel, "tuntap" for
 // wireguard-go.
 type links struct{ kind string }
@@ -41,7 +42,7 @@ func (n links) Link(name string) (Link, error) {
 	var addrs []netlink.Addr
 	for try := 0; try < 3; try++ {
 		// A dump interrupted by a concurrent change is retried.
-		if addrs, err = netlink.AddrList(l, netlink.FAMILY_V4); err == nil {
+		if addrs, err = netlink.AddrList(l, netlink.FAMILY_ALL); err == nil {
 			break
 		}
 	}
@@ -52,7 +53,8 @@ func (n links) Link(name string) (Link, error) {
 		if ad.IPNet == nil {
 			continue
 		}
-		if p, ok := netconv.Prefix(*ad.IPNet); ok {
+		// The host's own IPv6 link-local address is not the agent's.
+		if p, ok := netconv.Prefix(*ad.IPNet); ok && !p.Addr().IsLinkLocalUnicast() {
 			out.Addrs = append(out.Addrs, p)
 		}
 	}
@@ -87,7 +89,13 @@ func (links) AddAddr(name string, p netip.Prefix) error {
 		return err
 	}
 	n := netconv.IPNet(p)
-	if err := netlink.AddrAdd(l, &netlink.Addr{IPNet: &n}); err != nil {
+	a := &netlink.Addr{IPNet: &n}
+	if p.Addr().Is6() {
+		// No duplicate address detection: the address is the mesh's own, and
+		// a tentative one could not be bound by the resolver at once.
+		a.Flags = unix.IFA_F_NODAD
+	}
+	if err := netlink.AddrAdd(l, a); err != nil {
 		return fmt.Errorf("add address %s to %s: %w", p, name, err)
 	}
 	return nil

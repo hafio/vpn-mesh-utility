@@ -45,9 +45,14 @@ func newZone(d *proto.DNS, upstreamPort int) (*zone, error) {
 	apex := d.Zone + "."
 	z := &zone{apex: apex, names: map[string]netip.Addr{apex: {}}, split: d.Split}
 	for _, r := range d.Records {
-		ip, err := netip.ParseAddr(r.IP)
-		if err != nil || !ip.Is4() {
-			return nil, fmt.Errorf("dns: record %q: %q is not an IPv4 address", r.Name, r.IP)
+		// A name without an IPv4 address (an IPv6-only node, M8) has no A
+		// record: it answers like the names above it.
+		var ip netip.Addr
+		if r.IP != "" {
+			var err error
+			if ip, err = netip.ParseAddr(r.IP); err != nil || !ip.Is4() {
+				return nil, fmt.Errorf("dns: record %q: %q is not an IPv4 address", r.Name, r.IP)
+			}
 		}
 		name := strings.ToLower(r.Name) + "." + apex
 		z.names[name] = ip

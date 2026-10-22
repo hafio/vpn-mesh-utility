@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
@@ -114,8 +116,12 @@ func (a *api) join(w http.ResponseWriter, r *http.Request) {
 		n.WGPubKey, n.IdentityPubKey = req.WGPublicKey, req.IdentityPublicKey
 		n.OS, n.Arch, n.Hostname, n.WGBackend, n.AgentVersion = req.OS, req.Arch, req.Hostname, req.WGBackend, req.AgentVersion
 		n.Enrolled = true
-		if n.Role == string(proto.RoleServer) {
+		// A family the node does not use is left as it is (M8).
+		if n.Role == string(proto.RoleServer) && n.Family != proto.FamilyIPv6 {
 			n.Endpoint = pickEndpoint(req, n.Endpoint, ip, n.ListenPort)
+		}
+		if n.Role == string(proto.RoleServer) && n.Family != proto.FamilyIPv4 {
+			n.Endpoint6 = pickEndpoint6(req, n.Endpoint6, ip, n.ListenPort)
 		}
 		if err := tx.UpdateNode(n); err != nil {
 			if errors.Is(err, store.ErrConflict) {
@@ -126,8 +132,12 @@ func (a *api) join(w http.ResponseWriter, r *http.Request) {
 		}
 		c.Actor = "node:" + strconv.FormatInt(n.ID, 10)
 		c.Target = n.Name
-		c.Detail = map[string]any{"hostname": n.Hostname, "os": n.OS, "arch": n.Arch, "wg_backend": n.WGBackend,
+		detail := map[string]any{"hostname": n.Hostname, "os": n.OS, "arch": n.Arch, "wg_backend": n.WGBackend,
 			"endpoint": n.Endpoint, "agent_version": n.AgentVersion, "rejoin": rejoin, "from": ip.String()}
+		if n.Endpoint6 != "" {
+			detail["endpoint6"] = n.Endpoint6
+		}
+		c.Detail = detail
 		return nil
 	})
 	if err != nil {
@@ -145,7 +155,7 @@ func (a *api) join(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, proto.JoinResponse{
 		NodeID: n.ID, Name: n.Name, Role: proto.Role(n.Role), MeshIP: n.MeshIP,
-		ConfigVersion: n.ConfigVersion, ServerTime: a.Now().Unix(),
+		ConfigVersion: n.ConfigVersion, ServerTime: a.Now().Unix(), MeshIP6: n.MeshIP6,
 	})
 }
 
@@ -168,6 +178,31 @@ func pickEndpoint(req proto.JoinRequest, current string, observed netip.Addr, po
 		return netip.AddrPortFrom(observed, uint16(port)).String()
 	}
 	return ""
+}
+
+// pickEndpoint6 chooses a server's public IPv6 endpoint (M8) as
+// pickEndpoint does the IPv4 one: the agent's --endpoint6, else the public
+// IPv6 it found, else the operator's, else the address the request came
+// from when that is a public IPv6.
+func pickEndpoint6(req proto.JoinRequest, current string, observed netip.Addr, port int) string {
+	detected, _ := netip.ParseAddr(req.PublicIP6)
+	switch {
+	case req.Endpoint6 != "":
+		return req.Endpoint6
+	case public6(detected):
+		return netip.AddrPortFrom(detected, uint16(port)).String()
+	case current != "":
+		return current
+	case public6(observed):
+		return netip.AddrPortFrom(observed, uint16(port)).String()
+	}
+	return ""
+}
+
+// public6 is a global IPv6 address: not unique local, link local or an
+// IPv4 one in disguise.
+func public6(a netip.Addr) bool {
+	return a.Is6() && !a.Is4In6() && a.IsGlobalUnicast() && !a.IsPrivate()
 }
 
 // config returns the node's full desired state. If-None-Match with the
@@ -302,6 +337,17 @@ func (a *api) status(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, invalid(err))
 		return
 	}
+	// The families the host can use change the plan (M8), so a new set goes
+	// through the reconciler; the heartbeat itself does not.
+	if fams := hostFamilies(rep.Families); fams != node.HostFamilies {
+		actor := "node:" + strconv.FormatInt(node.ID, 10)
+		ch := Change{Actor: actor, Action: "node.families", Target: node.Name, Detail: map[string]any{"families": fams}}
+		set := func(tx *store.Tx, _ *Change) error { return tx.SetHostFamilies(node.ID, fams) }
+		if _, err := a.Reconciler.Apply(r.Context(), ch, set); err != nil {
+			a.fail(w, r, err)
+			return
+		}
+	}
 	detail, err := json.Marshal(statusDetail{Errors: rep.Errors, Degraded: rep.Degraded, Rollback: rep.Rollback, DNS: rep.DNS})
 	if err != nil {
 		a.fail(w, r, err)
@@ -350,6 +396,14 @@ func (a *api) status(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// hostFamilies is a reported family list as it is stored: "ipv4", "ipv6",
+// "ipv4,ipv6", or "" when the agent did not say.
+func hostFamilies(fs []string) string {
+	sorted := slices.Clone(fs)
+	slices.Sort(sorted) // ipv4 before ipv6
+	return strings.Join(sorted, ",")
 }
 
 // sameRollback reports whether the node's previous heartbeat already carried

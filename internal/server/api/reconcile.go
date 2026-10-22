@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -213,6 +214,11 @@ func LoadInput(tx *store.Tx) (planner.Input, []store.Node, error) {
 		return planner.Input{}, nil, fmt.Errorf("setting %s = %q is not a CIDR: %w", store.SettingMeshCIDR, settings[store.SettingMeshCIDR], err)
 	}
 	in := planner.Input{MeshCIDR: mesh, Zone: settings[store.SettingDNSZone], Domains: store.SplitDomains(settings[store.SettingDNSExtraDomains])}
+	if s := settings[store.SettingMeshCIDR6]; s != "" {
+		if in.MeshCIDR6, err = netip.ParsePrefix(s); err != nil {
+			return planner.Input{}, nil, fmt.Errorf("setting %s = %q is not a CIDR: %w", store.SettingMeshCIDR6, s, err)
+		}
+	}
 	if s := settings[store.SettingDefaultHub]; s != "" {
 		if in.DefaultHub, err = strconv.ParseInt(s, 10, 64); err != nil {
 			return planner.Input{}, nil, fmt.Errorf("setting %s = %q is not a node id: %w", store.SettingDefaultHub, s, err)
@@ -239,6 +245,9 @@ func LoadInput(tx *store.Tx) (planner.Input, []store.Node, error) {
 		pr := planner.Record{Name: r.Name, Node: r.NodeID}
 		if r.IP != "" {
 			pr.IP, _ = netip.ParseAddr(r.IP)
+		}
+		if r.IP6 != "" {
+			pr.IP6, _ = netip.ParseAddr(r.IP6)
 		}
 		in.Records = append(in.Records, pr)
 	}
@@ -298,7 +307,18 @@ func plannerNode(n store.Node) planner.Node {
 	if k, err := netip.ParsePrefix(n.ContainerSubnet); err == nil {
 		p.Containers = k
 	}
+	// The IPv6 side (M8); a value that does not parse is the zero value,
+	// which Check reports or treats as none.
+	p.Family = n.Family
+	p.MeshIP6, _ = netip.ParseAddr(n.MeshIP6)
+	p.Endpoint6, _ = netip.ParseAddrPort(n.Endpoint6)
+	p.Containers6, _ = netip.ParsePrefix(n.ContainerSubnet6)
 	p.Down = n.Role == string(proto.RoleServer) && n.DownSince > 0
+	// A family the agent reported its host cannot use; "" is not said.
+	if n.HostFamilies != "" {
+		fams := strings.Split(n.HostFamilies, ",")
+		p.NoIPv4, p.NoIPv6 = !slices.Contains(fams, proto.FamilyIPv4), !slices.Contains(fams, proto.FamilyIPv6)
+	}
 	return p
 }
 

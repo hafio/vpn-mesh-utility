@@ -80,6 +80,86 @@ func TestApplyIsIdempotent(t *testing.T) {
 	}
 }
 
+// Dual stack (M8): both addresses and every route of both families but the
+// defaults; on a host that cannot use IPv6, the IPv4 side alone, reported.
+func TestDualStack(t *testing.T) {
+	r := newRig(t)
+	cfg := testfix.DualSpokeConfig(testfix.VPS2.Name)
+	cfg.Sysctl = []proto.Sysctl{{Key: proto.SysctlSrcValidMark, Value: "1"}, {Key: proto.SysctlIPv6Forward, Value: "1"}}
+	want, _ := cfg.Hash()
+	res, err := r.e.Apply(context.Background(), cfg)
+	if err != nil || strings.Join(res.Families, ",") != "ipv4,ipv6" || res.Hash != want {
+		t.Fatalf("dual apply = %+v, %v", res, err)
+	}
+	addr4, addr6 := netip.MustParsePrefix(testfix.Laptop.MeshIP+"/32"), netip.MustParsePrefix(testfix.Laptop.MeshIP6+"/128")
+	if l, _ := r.h.Link("wg0"); !slices.Equal(l.Addrs, []netip.Prefix{addr4, addr6}) {
+		t.Errorf("addresses %v", l.Addrs)
+	}
+	got, _ := r.r.List("wg0")
+	if !slices.Contains(got, netip.MustParsePrefix(testfix.NAS.MeshIP6+"/128")) || slices.Contains(got, netip.MustParsePrefix("::/0")) {
+		t.Errorf("routes %v: the nas's IPv6, never ::/0", got)
+	}
+	if _, ok := r.s.Values[proto.SysctlIPv6Forward]; !ok {
+		t.Error("the IPv6 sysctl was not set on a host with IPv6")
+	}
+	before := r.mutations()
+	if res, err := r.e.Apply(context.Background(), cfg); err != nil || res.Changes != 0 || r.mutations() != before {
+		t.Fatalf("second dual apply = %+v, %v", res, err)
+	}
+
+	// The same config on a host that cannot use IPv6; vps-2 is reached on
+	// its IPv4 endpoint where its IPv6 one comes first.
+	r = newRig(t)
+	r.s.NoIPv6 = true
+	cfg.Peers[1].Endpoint, cfg.Peers[1].Fallback = testfix.VPS2.Endpoint6, testfix.VPS2.Endpoint
+	want, _ = cfg.Hash()
+	res, err = r.e.Apply(context.Background(), cfg)
+	if err != nil || strings.Join(res.Families, ",") != "ipv4" || res.Hash != want {
+		t.Fatalf("apply without IPv6 = %+v, %v", res, err)
+	}
+	if l, _ := r.h.Link("wg0"); !slices.Equal(l.Addrs, []netip.Prefix{addr4}) {
+		t.Errorf("addresses without IPv6: %v", l.Addrs)
+	}
+	got, _ = r.r.List("wg0")
+	dev, _ := r.h.DeviceOf("wg0")
+	for _, p := range got {
+		if p.Addr().Is6() {
+			t.Errorf("an IPv6 route without IPv6: %s", p)
+		}
+	}
+	for _, p := range dev.Peers {
+		for _, a := range p.AllowedIPs {
+			if a.Addr().Is6() {
+				t.Errorf("peer %s carries %s without IPv6", p.PublicKey, a)
+			}
+		}
+		if p.Endpoint.IsValid() && p.Endpoint.Addr().Is6() {
+			t.Errorf("peer %s dials %s without IPv6", p.PublicKey, p.Endpoint)
+		}
+	}
+	if k, _ := wg.ParseKey(testfix.WGKey(testfix.VPS2.Key)); !slices.ContainsFunc(dev.Peers, func(p wg.Peer) bool {
+		return p.PublicKey == k && p.Endpoint.String() == testfix.VPS2.Endpoint
+	}) {
+		t.Errorf("vps-2 is not dialled on its IPv4 endpoint: %+v", dev.Peers)
+	}
+	if _, ok := r.s.Values[proto.SysctlIPv6Forward]; ok || r.s.Values[proto.SysctlSrcValidMark] != "1" {
+		t.Errorf("sysctls without IPv6: %v", r.s.Values)
+	}
+	if cfg.Interface.Address6 == "" || !slices.Contains(cfg.Peers[0].AllowedIPs, testfix.VPS1.MeshIP6+"/128") || len(cfg.Sysctl) != 2 {
+		t.Error("Apply changed the caller's config")
+	}
+
+	// An IPv6-only node cannot run there at all; nothing is touched.
+	r = newRig(t)
+	r.s.NoIPv6 = true
+	cfg.Interface.Address = ""
+	if _, err := r.e.Apply(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "IPv6 only") {
+		t.Fatalf("an IPv6-only node without IPv6 = %v", err)
+	} else if step, _ := apply.IsStepError(err); step != apply.StepValidate || r.mutations() != 0 {
+		t.Fatalf("step %q, %d host changes", step, r.mutations())
+	}
+}
+
 func TestDNSFailureOnlyDegrades(t *testing.T) {
 	r := newRig(t)
 	r.dns.Err = errors.New("dns: answer on 10.77.0.1:53: address already in use")

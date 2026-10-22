@@ -52,6 +52,16 @@ type NodeInfo struct {
 	DownSince int64 `json:"down_since,omitempty"`
 	// Groups are the segmentation groups the node is in (amendment A43).
 	Groups []string `json:"groups,omitempty"`
+	// The IPv6 side (M8): the node's IPv6 mesh address, its address
+	// families (dual, ipv4 or ipv6), a server's IPv6 endpoint and its
+	// containers' IPv6 /112.
+	MeshIP6          string `json:"mesh_ip6,omitempty"`
+	Family           string `json:"ip_family"`
+	Endpoint6        string `json:"endpoint6,omitempty"`
+	ContainerSubnet6 string `json:"container_subnet6,omitempty"`
+	// HostFamilies are the families its agent reported the host can use;
+	// empty when it has not said.
+	HostFamilies []string `json:"host_families,omitempty"`
 }
 
 // NodeList is GET /admin/v1/nodes.
@@ -84,6 +94,14 @@ type NodeAddRequest struct {
 	// Groups puts the node in these segmentation groups, creating one that
 	// does not exist yet (amendment A43).
 	Groups []string `json:"groups,omitempty"`
+	// The IPv6 side (M8): Family is dual (the default), ipv4 or ipv6; IP6 a
+	// fixed IPv6 mesh address, empty to allocate one when the mesh has an
+	// IPv6 prefix and the family is not ipv4; Endpoint6 a server's public
+	// [IPv6]:port; Containers6 puts the containers' IPv6 on the mesh too.
+	Family      string `json:"ip_family,omitempty"`
+	IP6         string `json:"ip6,omitempty"`
+	Endpoint6   string `json:"endpoint6,omitempty"`
+	Containers6 bool   `json:"containers6,omitempty"`
 }
 
 // NodeSetRequest is PATCH /admin/v1/nodes/{name}: only non-nil fields
@@ -105,6 +123,14 @@ type NodeSetRequest struct {
 	// Groups replaces the node's segmentation groups; empty takes it out
 	// of every group (amendment A43).
 	Groups *[]string `json:"groups,omitempty"`
+	// The IPv6 side (M8): a new Family allocates the address it adds and
+	// drops the one it takes away; MeshIP6 moves the IPv6 address;
+	// Endpoint6 sets a server's IPv6 endpoint ("" clears it); Containers6
+	// puts the containers' IPv6 on the mesh or takes it off.
+	Family      *string `json:"ip_family,omitempty"`
+	MeshIP6     *string `json:"mesh_ip6,omitempty"`
+	Endpoint6   *string `json:"endpoint6,omitempty"`
+	Containers6 *bool   `json:"containers6,omitempty"`
 }
 
 // Enrollment is a freshly issued join token and the commands that use it.

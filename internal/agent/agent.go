@@ -20,6 +20,7 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -213,6 +214,7 @@ type runner struct {
 	degraded    []string
 	errs        []string
 	dnsState    string
+	families    []string
 	failedHash  string
 	failedAt    time.Time
 	// rejectedHash is a config safe apply rolled back; it is not applied
@@ -487,7 +489,7 @@ func (r *runner) apply(ctx context.Context, cfg proto.NodeConfig, source string)
 	prev, prevHash := r.applied, r.appliedHash
 	c := cfg
 	r.applied, r.appliedHash, r.appliedAt = &c, res.Hash, r.d.Now()
-	r.failedHash, r.degraded, r.errs, r.dnsState = "", res.Degraded, res.Errors, res.DNS
+	r.failedHash, r.degraded, r.errs, r.dnsState, r.families = "", res.Degraded, res.Errors, res.DNS, res.Families
 	r.setPolicyNext(res.PolicyNext)
 	if source == "server" {
 		r.rejectedHash = "" // the server moved on from the rejected config
@@ -623,7 +625,7 @@ func (r *runner) rollBack(ctx context.Context, p pendingApply) {
 	} else {
 		prev := p.prev
 		r.applied, r.appliedHash, r.appliedAt = &prev, res.Hash, r.d.Now()
-		r.degraded, r.errs, r.dnsState = res.Degraded, res.Errors, res.DNS
+		r.degraded, r.errs, r.dnsState, r.families = res.Degraded, res.Errors, res.DNS, res.Families
 		r.setPolicyNext(res.PolicyNext)
 	}
 	r.mu.Unlock()
@@ -660,7 +662,7 @@ func (r *runner) reapply(ctx context.Context, run func(context.Context, proto.No
 	if err != nil {
 		r.errs = []string{err.Error()}
 	} else {
-		r.degraded, r.errs, r.dnsState = res.Degraded, res.Errors, res.DNS
+		r.degraded, r.errs, r.dnsState, r.families = res.Degraded, res.Errors, res.DNS, res.Families
 		r.setPolicyNext(res.PolicyNext)
 	}
 	r.mu.Unlock()
@@ -933,7 +935,7 @@ func (r *runner) statusLoop(ctx context.Context) {
 func (r *runner) report() proto.StatusReport {
 	r.mu.Lock()
 	rep := proto.StatusReport{AgentVersion: r.d.Version, WGBackend: r.backend, Peers: []proto.PeerStatus{},
-		Errors: slices.Clone(r.errs), Degraded: slices.Clone(r.degraded), DNS: r.dnsState}
+		Errors: slices.Clone(r.errs), Degraded: slices.Clone(r.degraded), DNS: r.dnsState, Families: slices.Clone(r.families)}
 	if r.rollback != nil {
 		rb := *r.rollback
 		rep.Rollback = &rb
@@ -999,8 +1001,9 @@ func (r *runner) localStatus(context.Context) (proto.LocalStatus, error) {
 	}
 	if r.applied != nil {
 		st.MTU = r.applied.Interface.MTU
-		// The node's address is the config's: it moves (amendment A41).
-		if p, err := netip.ParsePrefix(r.applied.Interface.Address); err == nil {
+		// The node's address is the config's: it moves (amendment A41). An
+		// IPv6-only node shows its IPv6 one (M8).
+		if p, err := netip.ParsePrefix(cmp.Or(r.applied.Interface.Address, r.applied.Interface.Address6)); err == nil {
 			st.MeshIP = p.Addr().String()
 		}
 		if r.applied.DNS != nil {

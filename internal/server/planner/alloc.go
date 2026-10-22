@@ -113,3 +113,85 @@ func CheckRequested(mesh netip.Prefix, ip netip.Addr, used map[netip.Addr]bool) 
 	}
 	return nil
 }
+
+// The IPv6 address plan (M8). The mesh's IPv6 prefix is a /48 to /64, and
+// only the low 32 bits of an address are planned: block r is the /112
+// <prefix>::r:0, so the roles keep their IPv4 block numbers (servers
+// <prefix>::1, always-on spokes <prefix>::1:1, laptops <prefix>::2:1,
+// phones <prefix>::3:1) and container networks take the blocks from
+// 0x8000 on, the upper half, as they do in IPv4. A node's IPv6 address is
+// allocated on its own; it does not follow its IPv4 one.
+
+// containerBlock6 is the first IPv6 block of the container networks.
+const containerBlock6 = 0x8000
+
+// CheckMeshCIDR6 enforces the supported IPv6 prefixes: a /48 to /64,
+// without host bits; a unique local (fd00::/8) prefix is the usual choice.
+func CheckMeshCIDR6(p netip.Prefix) error {
+	if !p.IsValid() || !p.Addr().Is6() || p.Addr().Is4In6() || p.Bits() < 48 || p.Bits() > 64 || p.Masked() != p {
+		return fmt.Errorf("IPv6 mesh prefix %s must be an IPv6 /48 to /64 network, such as a unique local fdXX:XXXX:XXXX::/64", p)
+	}
+	return nil
+}
+
+// Block6 returns IPv6 block r (a /112) of mesh6.
+func Block6(mesh6 netip.Prefix, r int) netip.Prefix {
+	a := mesh6.Addr().As16()
+	binary.BigEndian.PutUint16(a[12:14], uint16(r))
+	a[14], a[15] = 0, 0
+	return netip.PrefixFrom(netip.AddrFrom16(a), 112)
+}
+
+// containers6 is the part of mesh6 the container networks take.
+func containers6(mesh6 netip.Prefix) netip.Prefix {
+	return netip.PrefixFrom(Block6(mesh6, containerBlock6).Addr(), 97)
+}
+
+// Allocate6 returns the lowest free IPv6 address (host 1 to 65534) in block
+// r of mesh6.
+func Allocate6(mesh6 netip.Prefix, r Range, used map[netip.Addr]bool) (netip.Addr, error) {
+	if err := CheckMeshCIDR6(mesh6); err != nil {
+		return netip.Addr{}, err
+	}
+	block := Block6(mesh6, int(r))
+	a := block.Addr().As16()
+	for host := 1; host <= 65534; host++ {
+		binary.BigEndian.PutUint16(a[14:16], uint16(host))
+		ip := netip.AddrFrom16(a)
+		if !used[ip] {
+			return ip, nil
+		}
+	}
+	return netip.Addr{}, fmt.Errorf("IPv6 address block %s is full; pass a fixed IPv6 address elsewhere in %s", block, mesh6)
+}
+
+// AllocateContainers6 returns the lowest free /112 for a node's containers'
+// IPv6 (M8) from the container blocks of mesh6.
+func AllocateContainers6(mesh6 netip.Prefix, used map[netip.Prefix]bool) (netip.Prefix, error) {
+	if err := CheckMeshCIDR6(mesh6); err != nil {
+		return netip.Prefix{}, err
+	}
+	for r := containerBlock6; r <= 0xffff; r++ {
+		if b := Block6(mesh6, r); !used[b] {
+			return b, nil
+		}
+	}
+	return netip.Prefix{}, fmt.Errorf("every container /112 of %s is taken", mesh6)
+}
+
+// CheckRequested6 validates an operator-chosen IPv6 mesh address: inside
+// mesh6, not the prefix's own (subnet-router) address, outside the
+// container networks' part, and not taken.
+func CheckRequested6(mesh6 netip.Prefix, ip netip.Addr, used map[netip.Addr]bool) error {
+	switch {
+	case !mesh6.Contains(ip):
+		return fmt.Errorf("IPv6 mesh address %s is outside the mesh %s", ip, mesh6)
+	case ip == mesh6.Addr():
+		return fmt.Errorf("IPv6 mesh address %s is the prefix's own address; pick a host in it", ip)
+	case containers6(mesh6).Contains(ip):
+		return fmt.Errorf("IPv6 mesh address %s is in %s, where the container networks are", ip, containers6(mesh6))
+	case used[ip]:
+		return fmt.Errorf("IPv6 mesh address %s is already assigned to another node", ip)
+	}
+	return nil
+}

@@ -27,9 +27,9 @@ Admin socket (`<data>/admin.sock`, mode 0600, so only the server's own user reac
 | Route | Purpose |
 | --- | --- |
 | `GET /admin/v1/nodes` | list nodes and the mesh plan's warnings |
-| `POST /admin/v1/nodes` | add a node; the answer carries its first join token, shown once (a phone gets none) |
+| `POST /admin/v1/nodes` | add a node (`ip_family`, `ip6`, `endpoint6` and `containers6` are the IPv6 side, amendment A46); the answer carries its first join token, shown once (a phone gets none) |
 | `GET /admin/v1/nodes/{name}` | one node, its computed config and its last peer report |
-| `PATCH /admin/v1/nodes/{name}` | change endpoint, listen port, hub, exit capability, exit, keepalive, MTU, a host-mode node's container network (`containers`), the mesh IP (`mesh_ip`, amendment A41; the answer's `notes` say what the move does not reach) and the segmentation groups (`groups`, amendment A43) |
+| `PATCH /admin/v1/nodes/{name}` | change endpoint, listen port, hub, exit capability, exit, keepalive, MTU, a host-mode node's container network (`containers`), the mesh IP (`mesh_ip`, amendment A41; the answer's `notes` say what the move does not reach) the segmentation groups (`groups`, amendment A43) and the IPv6 side (`ip_family`, which allocates the address a family adds and drops the one it takes away; `mesh_ip6`; `endpoint6`; `containers6`; amendment A46) |
 | `DELETE /admin/v1/nodes/{name}` | remove a node |
 | `POST /admin/v1/nodes/{name}/disable` | take a node out of every peer list; its stream is closed |
 | `POST /admin/v1/nodes/{name}/enable` | put it back |
@@ -39,6 +39,8 @@ Admin socket (`<data>/admin.sock`, mode 0600, so only the server's own user reac
 | `POST /admin/v1/nodes/{name}/phone` | a phone's WireGuard profile with a new key pair; `{"exit": "<server>"}` (optional) sends its internet through that exit; the answer is the only copy of the private key (`meshctl node phone`) |
 | `GET /admin/v1/segmentation` | the mesh firewall (amendment A43): the document (groups, address and service objects, zones, policies), the rules it compiles to, each zone's addresses and inbound/outbound rules, and the plan's warnings (`meshctl firewall show`) |
 | `PUT /admin/v1/segmentation` | replace the whole document; checked against the mesh like every change (`meshctl firewall apply`) |
+| `GET /admin/v1/ipv6` | the mesh's IPv6 prefix (empty for none) and how many nodes have an IPv6 mesh address (`meshctl ipv6`, amendment A46) |
+| `PUT /admin/v1/ipv6` | `{"prefix": "<IPv6 /48 to /64>\|auto\|off"}`: a prefix gives every node whose `ip_family` allows IPv6 an address in its role's block; `auto` keeps the prefix there is or draws a random unique local /64; `off` (or empty) takes every IPv6 mesh address and container /112 away, refused while a node is IPv6 only; a prefix that holds addresses is not swapped for another (`meshctl ipv6 <prefix>\|auto\|off`) |
 | `GET /admin/v1/segmentation/check` | what the policy does with one flow: `?from=<node or IPv4>&to=<node or IPv4>&service=tcp/PORT\|udp/PORT\|icmp[&at=<RFC 3339>]` (default now); the answer names the rule that decided and the scheduled rules not in force then (`meshctl firewall check`) |
 
 Every admin write goes through the reconciler (below) with actor `cli` and is audited. Join
@@ -109,9 +111,13 @@ token usable. Phones cannot join this way; they enroll by QR code (M4).
 A server node's endpoint is `endpoint` (from `--endpoint`), else `public_ip` (the first public
 IPv4 on the agent's interfaces) with the node's listen port, else the endpoint set with
 `meshctl node add --endpoint`, else the address the request came from if it is public
-(amendment A17). Spokes ignore all of these.
+(amendment A17). Its IPv6 endpoint is chosen the same way from `endpoint6` (`--endpoint6`),
+`public_ip6` (the first global IPv6 on its interfaces), `node add --endpoint6` and a global IPv6
+source address (amendment A46); an IPv4-only server keeps none, an IPv6-only one no IPv4
+endpoint. Spokes ignore all of these.
 
-The answer: `{"node_id", "name", "role", "mesh_ip", "config_version", "server_time"}`.
+The answer: `{"node_id", "name", "role", "mesh_ip", "config_version", "server_time"}`, and
+`mesh_ip6` when the node has one.
 
 ## Config and events
 
@@ -119,6 +125,20 @@ The answer: `{"node_id", "name", "role", "mesh_ip", "config_version", "server_ti
 with `ETag: "<hash>"`, where the hash is the SHA-256 of the canonical encoding with `version`
 zeroed. An agent sends `If-None-Match` with its applied config's ETag and gets 304 when nothing
 changed.
+
+**Dual stack** (M8). A mesh with an IPv6 prefix (the setting `mesh_cidr6`) gives a node an IPv6
+mesh address beside its IPv4 one, or instead of it: `interface.address6` (a /128) next to
+`interface.address` (a /32), either of them absent. Every peer's `allowed_ips` holds the families
+both ends have, a relay is chosen per family, and a server peer's `endpoint` is in a family the
+node's ip_family lets it dial, IPv4 first, with the other family's endpoint as `fallback`. An exit
+peer carries `::/0` as well as `0.0.0.0/0` when both ends have IPv6 and the exit has an IPv6
+endpoint; a server that is such an exit has `firewall.exit6`, the IPv6 prefix it masquerades
+(firewalld's policy masquerade is IPv4 only). A record has `ip`, `ip6` or both. Containers whose
+IPv6 is on the mesh add `subnet6` (a /112), `network6`, `range6`, `bridge6` and `gateway6` to the
+`containers` section, and `sysctl` asks for `net.ipv6.conf.all.forwarding` (and
+`net.ipv6.conf.all.proxy_ndp` for a container-mode gateway). Every one of these is absent in an
+IPv4-only mesh, whose configs hash as before. The prefix is set by `PUT /admin/v1/ipv6` (above),
+a node's families and IPv6 addresses by node add and set; amendment A46.
 
 Its `dns` section (servers and spokes; spec S7.4, amendment A12) is the whole mesh zone: `records`
 holds one name per enrolled, enabled node and the custom records (an alias of a node that is not
@@ -188,9 +208,15 @@ WireGuard backend in use (`kernel` or `userspace`), per-peer `last_handshake`, `
 `tx_bytes` and `endpoint`, the last errors, the degraded steps, any rollback and `dns`: `on` (the
 host sends .mesh lookups to the node's resolver), `off` (`meshctl dns off` on the node) or
 `unavailable` (the resolver answers on the mesh IP, but there is no systemd-resolved to register
-with). The server keeps it as operational state (never part of a config version)
+with), and `families`, the address families the host can use (`ipv4`, `ipv6`; absent when the
+agent does not say). The server keeps it as operational state (never part of a config version)
 and audits a rollback once: the agent repeats it in every heartbeat until a newer config is
-confirmed, and only a different rollback writes another `node.rollback` row. The answer carries the
+confirmed, and only a different rollback writes another `node.rollback` row. A changed `families`
+goes through the reconciler as the node (`node.families`, amendment A46): the plan leaves a
+family the host cannot use out for that node -- its address, endpoint and containers in that
+family -- so no peer routes it there and DNS does not name it there, unless the node cannot do
+without it (no other family, or a server or a container network, which need IPv4); either way the
+plan warns, and it is never refused for it. The answer carries the
 node's current version and hash, so an agent that missed an event catches up here; on a server
 node it is also what confirms a safe apply (below).
 
@@ -267,15 +293,22 @@ The agent applies a config in fixed steps, each comparing desired with observed 
 | --- | --- | --- |
 | 1 | validate the whole config | fatal; nothing touched |
 | 2 | interface: create `wg0` with alias `meshctl` (never adopt one without it), MTU, up | fatal |
-| 3 | address: the node's /32 is the only address | fatal |
+| 3 | address: the node's /32 and /128 (either may be absent, M8) are the only addresses; the host's IPv6 link-local ones are left alone, and the IPv6 one skips duplicate address detection | fatal |
 | 4 | WireGuard: key, port, fwmark, then per-peer changes (no full replace) | fatal |
-| 5 | routes: every AllowedIP except 0.0.0.0/0, protocol 201 | fatal |
+| 5 | routes: every AllowedIP of both families except 0.0.0.0/0 and ::/0, protocol 201 | fatal |
 | 6 | exit mode: policy rules and table 51820 (below), or their removal; on Windows split default routes and a bound socket (amendment A35) | fatal |
-| 7 | sysctls (relay and exit servers, container networks) | fatal |
+| 7 | sysctls (relay and exit servers, container networks); before IPv6 forwarding, every interface taking router advertisements (`accept_ra` 1) moves to `accept_ra` 2, so it keeps its IPv6 default route | fatal |
 | 8 | the mesh firewall (servers, amendment A43, below): the `policy` as the table `ip meshctl`, before step 9 lets the mesh through the mesh zone | fatal; a config without a policy removes the table after step 9, and keeps it while step 9 fails (degraded `policy` when the removal fails) |
 | 9 | firewall (servers, firewalld; an unzoned containers' bridge goes into the mesh zone) | degraded; the tunnel stays up |
 | 10 | containers (amendment A37, below) | degraded; the tunnel stays up |
 | 11 | DNS: the resolver on the mesh IP and the containers' gateway, then the host's registration (systemd-resolved; NRPT on Windows) | degraded; the tunnel stays up |
+
+**A host that cannot use IPv6** (M8: `net.ipv6.conf.all` or `.default.disable_ipv6` is 1, or the
+kernel has no IPv6) applies a dual-stack config without its IPv6 side -- the IPv6 address, routes
+and endpoints (a server whose IPv6 endpoint comes first is dialled on its IPv4 fallback), the
+IPv6 sysctls, the exit's IPv6 masquerade, the containers' IPv6 -- and reports `families: ["ipv4"]`;
+the server then plans the node without IPv6 (Status, above). An IPv6-only node cannot run on such a
+host: step 1 fails and says so. The hash it reports is of the config as sent.
 
 A config is cached (`config.json`) only after steps 1-8 succeed, and re-applied at boot, once the
 agent holds its local API socket and before the server is contacted. A config that failed is not retried until a newer one arrives or five

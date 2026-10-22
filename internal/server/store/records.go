@@ -11,13 +11,14 @@ type DNSRecord struct {
 	ID        int64  `json:"id"`
 	Name      string `json:"name"`
 	IP        string `json:"ip,omitempty"`
+	IP6       string `json:"ip6,omitempty"`
 	NodeID    int64  `json:"node_id,omitempty"`
 	CreatedAt int64  `json:"created_at"`
 }
 
 // DNSRecords lists custom records by name.
 func (t *Tx) DNSRecords() ([]DNSRecord, error) {
-	rows, err := t.query(`SELECT id, name, ip, node_id, created_at FROM dns_records ORDER BY name`)
+	rows, err := t.query(`SELECT id, name, ip, ip6, node_id, created_at FROM dns_records ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("list dns records: %w", err)
 	}
@@ -25,14 +26,14 @@ func (t *Tx) DNSRecords() ([]DNSRecord, error) {
 	var out []DNSRecord
 	for rows.Next() {
 		var (
-			r    DNSRecord
-			ip   sql.NullString
-			node sql.NullInt64
+			r       DNSRecord
+			ip, ip6 sql.NullString
+			node    sql.NullInt64
 		)
-		if err := rows.Scan(&r.ID, &r.Name, &ip, &node, &r.CreatedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.Name, &ip, &ip6, &node, &r.CreatedAt); err != nil {
 			return nil, fmt.Errorf("list dns records: %w", err)
 		}
-		r.IP, r.NodeID = ip.String, node.Int64
+		r.IP, r.IP6, r.NodeID = ip.String, ip6.String, node.Int64
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
@@ -46,8 +47,14 @@ func (t *Tx) InsertDNSRecord(r *DNSRecord) error {
 	if r.CreatedAt == 0 {
 		r.CreatedAt = t.now.Unix()
 	}
-	res, err := t.exec(`INSERT INTO dns_records (id, name, ip, node_id, created_at) VALUES (?, ?, ?, ?, ?)`,
-		nullInt(r.ID), r.Name, nullStr(r.IP), nullInt(r.NodeID), r.CreatedAt)
+	// A fixed record keeps ip non-NULL for 0001's check, '' when it has
+	// IPv6 only (M8).
+	var ip any = nullStr(r.IP)
+	if r.NodeID == 0 && r.IP == "" && r.IP6 != "" {
+		ip = ""
+	}
+	res, err := t.exec(`INSERT INTO dns_records (id, name, ip, ip6, node_id, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		nullInt(r.ID), r.Name, ip, nullStr(r.IP6), nullInt(r.NodeID), r.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("insert dns record %q: %w", r.Name, err)
 	}

@@ -179,6 +179,9 @@ func TestRoutesSysctlAndFirewall(t *testing.T) {
 	if n, _ := s.Apply(params); n != 0 || s.Writes != 1 {
 		t.Fatalf("second Apply = %d, writes %d", n, s.Writes)
 	}
+	if !s.IPv6() || (&Sysctl{NoIPv6: true}).IPv6() {
+		t.Fatal("IPv6 must follow NoIPv6")
+	}
 
 	fw := &Firewall{Err: errors.New("firewalld down")}
 	if _, err := fw.Apply(context.Background(), nil); err == nil || len(fw.Applied) != 1 {

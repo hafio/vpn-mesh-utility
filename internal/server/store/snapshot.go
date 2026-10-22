@@ -46,7 +46,7 @@ type SnapNode struct {
 	ID             int64  `json:"id"`
 	Name           string `json:"name"`
 	Role           string `json:"role"`
-	MeshIP         string `json:"mesh_ip"`
+	MeshIP         string `json:"mesh_ip,omitempty"`
 	WGPubKey       string `json:"wg_pubkey,omitempty"`
 	IdentityPubKey string `json:"identity_pubkey,omitempty"`
 	Endpoint       string `json:"endpoint,omitempty"`
@@ -67,6 +67,12 @@ type SnapNode struct {
 	// container networks encodes as before (amendment A37).
 	Mode            string `json:"mode,omitempty"`
 	ContainerSubnet string `json:"container_subnet,omitempty"`
+	// The IPv6 side (M8); Family is empty for proto.FamilyDual, so an IPv4
+	// mesh's snapshot encodes as before.
+	MeshIP6          string `json:"mesh_ip6,omitempty"`
+	Family           string `json:"ip_family,omitempty"`
+	Endpoint6        string `json:"endpoint6,omitempty"`
+	ContainerSubnet6 string `json:"container_subnet6,omitempty"`
 }
 
 func snapNode(n Node) SnapNode {
@@ -76,9 +82,13 @@ func snapNode(n Node) SnapNode {
 		PrimaryHubID: n.PrimaryHubID, CanExit: n.CanExit, ExitVia: n.ExitVia, Keepalive: n.Keepalive,
 		MTU: n.MTU, Enrolled: n.Enrolled, Disabled: n.Disabled, OS: n.OS, Arch: n.Arch,
 		Hostname: n.Hostname, WGBackend: n.WGBackend, CreatedAt: n.CreatedAt, ContainerSubnet: n.ContainerSubnet,
+		MeshIP6: n.MeshIP6, Endpoint6: n.Endpoint6, ContainerSubnet6: n.ContainerSubnet6,
 	}
 	if n.Mode != proto.ModeHost {
 		s.Mode = n.Mode
+	}
+	if n.Family != proto.FamilyDual {
+		s.Family = n.Family
 	}
 	return s
 }
@@ -171,24 +181,29 @@ func (t *Tx) Restore(s Snapshot) error {
 	// Pass 1: rows without cross-references (a node may point at one that is
 	// restored later in the list).
 	for _, n := range s.Nodes {
-		mode := n.Mode
+		mode, family := n.Mode, n.Family
 		if mode == "" {
 			mode = proto.ModeHost
 		}
-		args := []any{n.Name, n.Role, n.MeshIP, nullStr(n.WGPubKey), nullStr(n.IdentityPubKey), n.Endpoint,
+		if family == "" {
+			family = proto.FamilyDual
+		}
+		args := []any{n.Name, n.Role, nullStr(n.MeshIP), nullStr(n.WGPubKey), nullStr(n.IdentityPubKey), n.Endpoint,
 			n.ListenPort, boolInt(n.CanExit), n.Keepalive, n.MTU, boolInt(n.Enrolled), boolInt(n.Disabled),
-			n.OS, n.Arch, n.Hostname, n.WGBackend, mode, n.ContainerSubnet}
+			n.OS, n.Arch, n.Hostname, n.WGBackend, mode, n.ContainerSubnet,
+			nullStr(n.MeshIP6), family, n.Endpoint6, n.ContainerSubnet6}
 		if exists[n.ID] {
 			_, err = t.exec(`UPDATE nodes SET name = ?, role = ?, mesh_ip = ?, wg_pubkey = ?, identity_pubkey = ?,
 					endpoint = ?, listen_port = ?, can_exit = ?, keepalive = ?, mtu = ?, enrolled = ?, disabled = ?,
 					os = ?, arch = ?, hostname = ?, wg_backend = ?, mode = ?, container_subnet = ?,
+					mesh_ip6 = ?, ip_family = ?, endpoint6 = ?, container_subnet6 = ?,
 					primary_hub_id = NULL, exit_via = NULL
 				WHERE id = ?`, append(args, n.ID)...)
 		} else {
 			_, err = t.exec(`INSERT INTO nodes (name, role, mesh_ip, wg_pubkey, identity_pubkey, endpoint,
 					listen_port, can_exit, keepalive, mtu, enrolled, disabled, os, arch, hostname, wg_backend,
-					mode, container_subnet, id, created_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, append(args, n.ID, n.CreatedAt)...)
+					mode, container_subnet, mesh_ip6, ip_family, endpoint6, container_subnet6, id, created_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, append(args, n.ID, n.CreatedAt)...)
 		}
 		if err != nil {
 			return fmt.Errorf("restore node %q: %w", n.Name, err)

@@ -39,6 +39,14 @@ type Node struct {
 	// (amendment A37).
 	Mode            string
 	ContainerSubnet string
+	// The IPv6 side (M8): MeshIP6 is empty without one (and MeshIP is empty
+	// for an IPv6-only node); Family is proto.FamilyDual, FamilyIPv4 or
+	// FamilyIPv6; Endpoint6 a server's public [IPv6]:port; ContainerSubnet6
+	// the containers' /112, empty while their IPv6 is not on the mesh.
+	MeshIP6          string
+	Family           string
+	Endpoint6        string
+	ContainerSubnet6 string
 
 	// Written by the reconciler.
 	ConfigHash    string
@@ -56,6 +64,11 @@ type Node struct {
 	DownSince    int64
 	HealthySince int64
 
+	// HostFamilies are the address families the node's agent last reported
+	// its host can use (M8), "ipv4", "ipv6" or "ipv4,ipv6"; "" when it has
+	// not said. Operational state, like DownSince.
+	HostFamilies string
+
 	CreatedAt int64
 }
 
@@ -63,7 +76,8 @@ const nodeCols = `id, name, role, os, arch, hostname, wg_backend, agent_version,
 	mesh_ip, wg_pubkey, identity_pubkey, endpoint, listen_port, primary_hub_id,
 	can_exit, exit_via, keepalive, mtu, enrolled, disabled, config_hash,
 	config_version, applied_version, applied_hash, last_seen, observed_ip,
-	status_json, created_at, mode, container_subnet, down_since, healthy_since`
+	status_json, created_at, mode, container_subnet, down_since, healthy_since,
+	mesh_ip6, ip_family, endpoint6, container_subnet6, host_families`
 
 type scanner interface {
 	Scan(dest ...any) error
@@ -73,17 +87,20 @@ func scanNode(r scanner) (Node, error) {
 	var (
 		n                       Node
 		wgKey, idKey            sql.NullString
+		meshIP, meshIP6         sql.NullString
 		hub, exitVia, lastSeen  sql.NullInt64
 		canExit, enrolled, disb int
 	)
 	err := r.Scan(&n.ID, &n.Name, &n.Role, &n.OS, &n.Arch, &n.Hostname, &n.WGBackend, &n.AgentVersion,
-		&n.MeshIP, &wgKey, &idKey, &n.Endpoint, &n.ListenPort, &hub,
+		&meshIP, &wgKey, &idKey, &n.Endpoint, &n.ListenPort, &hub,
 		&canExit, &exitVia, &n.Keepalive, &n.MTU, &enrolled, &disb, &n.ConfigHash,
 		&n.ConfigVersion, &n.AppliedVersion, &n.AppliedHash, &lastSeen, &n.ObservedIP,
-		&n.StatusJSON, &n.CreatedAt, &n.Mode, &n.ContainerSubnet, &n.DownSince, &n.HealthySince)
+		&n.StatusJSON, &n.CreatedAt, &n.Mode, &n.ContainerSubnet, &n.DownSince, &n.HealthySince,
+		&meshIP6, &n.Family, &n.Endpoint6, &n.ContainerSubnet6, &n.HostFamilies)
 	if err != nil {
 		return Node{}, err
 	}
+	n.MeshIP, n.MeshIP6 = meshIP.String, meshIP6.String
 	n.WGPubKey, n.IdentityPubKey = wgKey.String, idKey.String
 	n.PrimaryHubID, n.ExitVia, n.LastSeen = hub.Int64, exitVia.Int64, lastSeen.Int64
 	n.CanExit, n.Enrolled, n.Disabled = canExit == 1, enrolled == 1, disb == 1
@@ -142,14 +159,19 @@ func (t *Tx) InsertNode(n *Node) error {
 	if n.Mode == "" {
 		n.Mode = proto.ModeHost
 	}
+	if n.Family == "" {
+		n.Family = proto.FamilyDual
+	}
 	res, err := t.exec(`INSERT INTO nodes (name, role, mesh_ip, wg_pubkey, identity_pubkey, endpoint,
 			listen_port, primary_hub_id, can_exit, exit_via, keepalive, mtu, enrolled, disabled,
-			os, arch, hostname, wg_backend, agent_version, created_at, mode, container_subnet)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		n.Name, n.Role, n.MeshIP, nullStr(n.WGPubKey), nullStr(n.IdentityPubKey), n.Endpoint,
+			os, arch, hostname, wg_backend, agent_version, created_at, mode, container_subnet,
+			mesh_ip6, ip_family, endpoint6, container_subnet6)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		n.Name, n.Role, nullStr(n.MeshIP), nullStr(n.WGPubKey), nullStr(n.IdentityPubKey), n.Endpoint,
 		n.ListenPort, nullInt(n.PrimaryHubID), boolInt(n.CanExit), nullInt(n.ExitVia), n.Keepalive, n.MTU,
 		boolInt(n.Enrolled), boolInt(n.Disabled),
-		n.OS, n.Arch, n.Hostname, n.WGBackend, n.AgentVersion, n.CreatedAt, n.Mode, n.ContainerSubnet)
+		n.OS, n.Arch, n.Hostname, n.WGBackend, n.AgentVersion, n.CreatedAt, n.Mode, n.ContainerSubnet,
+		nullStr(n.MeshIP6), n.Family, n.Endpoint6, n.ContainerSubnet6)
 	if err != nil {
 		return fmt.Errorf("insert node %q: %w", n.Name, err)
 	}
@@ -164,15 +186,20 @@ func (t *Tx) InsertNode(n *Node) error {
 // UpdateNode writes the desired fields of n (everything an operator or a join
 // may change). Reconciler bookkeeping and heartbeat fields are untouched.
 func (t *Tx) UpdateNode(n Node) error {
+	if n.Family == "" {
+		n.Family = proto.FamilyDual
+	}
 	res, err := t.exec(`UPDATE nodes SET name = ?, mesh_ip = ?, wg_pubkey = ?, identity_pubkey = ?,
 			endpoint = ?, listen_port = ?, primary_hub_id = ?, can_exit = ?, exit_via = ?,
 			keepalive = ?, mtu = ?, enrolled = ?, disabled = ?, os = ?, arch = ?, hostname = ?,
-			wg_backend = ?, agent_version = ?, container_subnet = ?
+			wg_backend = ?, agent_version = ?, container_subnet = ?,
+			mesh_ip6 = ?, ip_family = ?, endpoint6 = ?, container_subnet6 = ?
 		WHERE id = ?`,
-		n.Name, n.MeshIP, nullStr(n.WGPubKey), nullStr(n.IdentityPubKey),
+		n.Name, nullStr(n.MeshIP), nullStr(n.WGPubKey), nullStr(n.IdentityPubKey),
 		n.Endpoint, n.ListenPort, nullInt(n.PrimaryHubID), boolInt(n.CanExit), nullInt(n.ExitVia),
 		n.Keepalive, n.MTU, boolInt(n.Enrolled), boolInt(n.Disabled), n.OS, n.Arch, n.Hostname,
-		n.WGBackend, n.AgentVersion, n.ContainerSubnet, n.ID)
+		n.WGBackend, n.AgentVersion, n.ContainerSubnet,
+		nullStr(n.MeshIP6), n.Family, n.Endpoint6, n.ContainerSubnet6, n.ID)
 	if err != nil {
 		return fmt.Errorf("update node %q: %w", n.Name, err)
 	}
@@ -195,6 +222,17 @@ func (t *Tx) SetHubState(id, downSince, healthySince int64) error {
 	res, err := t.exec(`UPDATE nodes SET down_since = ?, healthy_since = ? WHERE id = ?`, downSince, healthySince, id)
 	if err != nil {
 		return fmt.Errorf("record the failover state of node %d: %w", id, err)
+	}
+	return mustAffect(res, fmt.Sprintf("node %d", id))
+}
+
+// SetHostFamilies records the address families a node's agent reported its
+// host can use (M8): "ipv4", "ipv6", "ipv4,ipv6", or "" for not said. The
+// caller writes it through the reconciler, since it changes the plan.
+func (t *Tx) SetHostFamilies(id int64, families string) error {
+	res, err := t.exec(`UPDATE nodes SET host_families = ? WHERE id = ?`, families, id)
+	if err != nil {
+		return fmt.Errorf("record the host families of node %d: %w", id, err)
 	}
 	return mustAffect(res, fmt.Sprintf("node %d", id))
 }

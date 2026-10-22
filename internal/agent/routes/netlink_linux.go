@@ -33,7 +33,7 @@ func (netlinkTable) List(link string) ([]netip.Prefix, error) {
 	var rs []netlink.Route
 	for try := 0; try < 3; try++ {
 		// A dump interrupted by a concurrent change is retried.
-		if rs, err = netlink.RouteListFiltered(netlink.FAMILY_V4, filter, netlink.RT_FILTER_OIF|netlink.RT_FILTER_PROTOCOL); err == nil {
+		if rs, err = netlink.RouteListFiltered(netlink.FAMILY_ALL, filter, netlink.RT_FILTER_OIF|netlink.RT_FILTER_PROTOCOL); err == nil {
 			break
 		}
 	}
@@ -54,7 +54,11 @@ func (netlinkTable) List(link string) ([]netip.Prefix, error) {
 
 func route(idx int, p netip.Prefix) *netlink.Route {
 	dst := netconv.IPNet(p)
-	return &netlink.Route{LinkIndex: idx, Dst: &dst, Scope: netlink.SCOPE_LINK, Protocol: Protocol}
+	r := &netlink.Route{LinkIndex: idx, Dst: &dst, Protocol: Protocol}
+	if p.Addr().Is4() {
+		r.Scope = netlink.SCOPE_LINK // IPv6 routes have no scope
+	}
+	return r
 }
 
 func (netlinkTable) Add(link string, p netip.Prefix) error {

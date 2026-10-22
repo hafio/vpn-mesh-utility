@@ -89,6 +89,11 @@ type JoinRequest struct {
 	Endpoint     string `json:"endpoint,omitempty"`
 	PublicIP     string `json:"public_ip,omitempty"`
 	AgentVersion string `json:"agent_version"`
+	// The IPv6 side (M8): Endpoint6 is the [IPv6]:port given with
+	// --endpoint6, PublicIP6 the public IPv6 the agent found; a server's
+	// IPv6 endpoint is chosen from them as its IPv4 one is.
+	Endpoint6 string `json:"endpoint6,omitempty"`
+	PublicIP6 string `json:"public_ip6,omitempty"`
 }
 
 // Validate normalises the request in place and reports every bad field.
@@ -133,6 +138,20 @@ func (r *JoinRequest) Validate() error {
 			r.PublicIP = ip.String()
 		}
 	}
+	if r.Endpoint6 != "" {
+		if ap, err := validate.Endpoint6("endpoint6", r.Endpoint6); err != nil {
+			errs = append(errs, err)
+		} else {
+			r.Endpoint6 = ap.String()
+		}
+	}
+	if r.PublicIP6 != "" {
+		if ip, err := validate.IPv6("public_ip6", r.PublicIP6); err != nil {
+			errs = append(errs, err)
+		} else {
+			r.PublicIP6 = ip.String()
+		}
+	}
 	s, err = validate.Version("agent_version", r.AgentVersion)
 	keep(s, err, &r.AgentVersion)
 	return errors.Join(errs...)
@@ -146,6 +165,8 @@ type JoinResponse struct {
 	MeshIP        string `json:"mesh_ip"`
 	ConfigVersion int64  `json:"config_version"`
 	ServerTime    int64  `json:"server_time"`
+	// MeshIP6 is the node's IPv6 mesh address, when it has one (M8).
+	MeshIP6 string `json:"mesh_ip6,omitempty"`
 }
 
 // StatusReport is the agent heartbeat (spec S6.3): every 30 s and right after
@@ -165,6 +186,11 @@ type StatusReport struct {
 	// DNS is the node's split DNS: one of DNSStates, empty when its config
 	// has no DNS section.
 	DNS string `json:"dns,omitempty"`
+	// Families are the address families the node's host can use (M8):
+	// FamilyIPv4, FamilyIPv6 or both. Empty is "not said", which the server
+	// reads as every family the node has; a family left out is planned
+	// away from the node until it is reported again.
+	Families []string `json:"families,omitempty"`
 }
 
 // PeerStatus is the runtime state of one peer as the agent sees it.
@@ -245,6 +271,16 @@ func (r *StatusReport) Validate() error {
 		if _, err := validate.Enum("dns", r.DNS, DNSStates...); err != nil {
 			errs = append(errs, err)
 		}
+	}
+	seen := map[string]bool{}
+	for i, f := range r.Families {
+		field := fmt.Sprintf("families[%d]", i)
+		if _, err := validate.Enum(field, f, FamilyIPv4, FamilyIPv6); err != nil {
+			errs = append(errs, err)
+		} else if seen[f] {
+			errs = append(errs, fmt.Errorf("%s: %s is listed twice", field, f))
+		}
+		seen[f] = true
 	}
 	return errors.Join(errs...)
 }

@@ -15,6 +15,10 @@
 //
 // A policy with schedules is compiled for the time of the apply; the
 // Result says when a schedule next starts or ends, the time to apply again.
+//
+// A host that cannot use IPv6 (M8) applies a dual-stack config without its
+// IPv6 side (forHost) and says so in Result.Families, which the agent
+// reports; the server then plans the node without IPv6.
 package apply
 
 import (
@@ -23,6 +27,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -53,6 +59,12 @@ const (
 // Sysctls applies kernel parameters (internal/agent/sysctl).
 type Sysctls interface {
 	Apply(params []proto.Sysctl) (int, error)
+}
+
+// IPv6Host is a Sysctls that knows whether the host can use IPv6 (M8);
+// without one, the host is taken to.
+type IPv6Host interface {
+	IPv6() bool
 }
 
 // MeshFirewall enforces a server's policy (internal/agent/policy): Sync
@@ -123,6 +135,9 @@ type Result struct {
 	// PolicyNext is when a schedule of the policy starts or ends, so the
 	// config must be applied again; zero without one.
 	PolicyNext time.Time
+	// Families are the address families the host can use (M8), as the
+	// status reports them.
+	Families []string
 }
 
 // StepError is a fatal step's failure.
@@ -171,10 +186,36 @@ func (e *Engine) Apply(ctx context.Context, cfg proto.NodeConfig) (Result, error
 		return fail(StepValidate, err)
 	}
 	res.Hash = hash
-	addr, err := netip.ParsePrefix(cfg.Interface.Address)
-	if err != nil {
+	ipv6 := true
+	if h, ok := e.d.Sysctl.(IPv6Host); ok {
+		ipv6 = h.IPv6()
+	}
+	res.Families = []string{proto.FamilyIPv4}
+	if ipv6 {
+		res.Families = append(res.Families, proto.FamilyIPv6)
+	}
+	// What the server sent is what the hash and the report are of; the
+	// steps apply what this host can carry.
+	if cfg, err = forHost(cfg, ipv6); err != nil {
 		return fail(StepValidate, err)
 	}
+	var addrs []netip.Prefix
+	for _, s := range []string{cfg.Interface.Address, cfg.Interface.Address6} {
+		if s == "" {
+			continue // a node has one or both (validated)
+		}
+		p, err := netip.ParsePrefix(s)
+		if err != nil {
+			return fail(StepValidate, err)
+		}
+		addrs = append(addrs, p)
+	}
+	if len(addrs) == 0 {
+		return fail(StepValidate, errors.New("the config gives the interface no address"))
+	}
+	// The node's own address for the resolver and the mesh firewall: its
+	// IPv4 one, the IPv6 one on an IPv6-only node.
+	self := addrs[0].Addr()
 	dev, err := wg.Desired(cfg, e.d.Key)
 	if err != nil {
 		return fail(StepValidate, err)
@@ -185,7 +226,7 @@ func (e *Engine) Apply(ctx context.Context, cfg proto.NodeConfig) (Result, error
 	}
 	var rules *policy.Ruleset
 	if cfg.Policy != nil {
-		local := policy.Local{Self: addr.Addr()}
+		local := policy.Local{Self: self}
 		if cfg.Containers != nil {
 			local.Containers, _ = netip.ParsePrefix(cfg.Containers.Subnet) // validated above
 		}
@@ -201,7 +242,7 @@ func (e *Engine) Apply(ctx context.Context, cfg proto.NodeConfig) (Result, error
 		run  func() (int, error)
 	}{
 		{StepInterface, func() (int, error) { return wg.SyncLink(e.d.Host, e.d.Iface, cfg.Interface.MTU) }},
-		{StepAddress, func() (int, error) { return wg.SyncAddr(e.d.Host, e.d.Iface, addr) }},
+		{StepAddress, func() (int, error) { return wg.SyncAddrs(e.d.Host, e.d.Iface, addrs) }},
 		{StepPeers, func() (int, error) { return wg.SyncDevice(e.d.Host, e.d.Iface, dev) }},
 		{StepRoutes, func() (int, error) { return routes.Sync(e.d.Routes, e.d.Iface, want) }},
 	}
@@ -308,7 +349,7 @@ func (e *Engine) Apply(ctx context.Context, cfg proto.NodeConfig) (Result, error
 	// 11. DNS: optional. The resolver binds the address step 3 put on the
 	// interface, and the containers' gateway.
 	if e.d.DNS != nil {
-		state, n, err := e.d.DNS.Apply(ctx, dns.Want{Iface: e.d.Iface, IP: addr.Addr(), Also: also, Config: cfg.DNS, Exit: exitOn,
+		state, n, err := e.d.DNS.Apply(ctx, dns.Want{Iface: e.d.Iface, IP: self, Also: also, Config: cfg.DNS, Exit: exitOn,
 			Off: e.dnsOff})
 		res.Changes += n
 		res.DNS = state
@@ -319,6 +360,53 @@ func (e *Engine) Apply(ctx context.Context, cfg proto.NodeConfig) (Result, error
 		}
 	}
 	return res, nil
+}
+
+// forHost is cfg as this host can carry it (M8). A host that can use IPv6
+// carries all of it; one that cannot gets it without the IPv6 side -- the
+// interface's IPv6 address, every IPv6 route and endpoint (a server's IPv4
+// fallback endpoint takes the place of its IPv6 one), the IPv6 sysctls,
+// the exit's IPv6 masquerade and the containers' IPv6 -- unless the node is
+// IPv6 only, which such a host cannot run at all. cfg itself is left as it
+// was.
+func forHost(cfg proto.NodeConfig, ipv6 bool) (proto.NodeConfig, error) {
+	switch {
+	case ipv6:
+		return cfg, nil
+	case cfg.Interface.Address == "":
+		return cfg, errors.New("this host cannot use IPv6 (net.ipv6.conf.all or .default.disable_ipv6 is 1, or the kernel has no IPv6), " +
+			"and the node is IPv6 only: turn IPv6 on, or give the node IPv4 (`meshctl node set <name> --family dual`)")
+	}
+	v6 := func(s string) bool {
+		ap, err := netip.ParseAddrPort(s)
+		return err == nil && ap.Addr().Is6()
+	}
+	cfg.Interface.Address6 = ""
+	peers := make([]proto.Peer, 0, len(cfg.Peers))
+	for _, p := range cfg.Peers {
+		p.AllowedIPs = slices.DeleteFunc(slices.Clone(p.AllowedIPs), func(s string) bool {
+			pf, err := netip.ParsePrefix(s)
+			return err == nil && pf.Addr().Is6()
+		})
+		if v6(p.Endpoint) {
+			p.Endpoint = p.Fallback // the IPv4 one, or none
+		}
+		p.Fallback = "" // the other family's: IPv6 now, or taken
+		peers = append(peers, p)
+	}
+	cfg.Peers = peers
+	cfg.Sysctl = slices.DeleteFunc(slices.Clone(cfg.Sysctl), func(s proto.Sysctl) bool { return strings.HasPrefix(s.Key, "net.ipv6.") })
+	if cfg.Firewall != nil {
+		fw := *cfg.Firewall
+		fw.Exit6 = ""
+		cfg.Firewall = &fw
+	}
+	if cfg.Containers != nil {
+		k := *cfg.Containers
+		k.Subnet6, k.Network6, k.Range6, k.Bridge6, k.Gateway6 = "", "", "", "", ""
+		cfg.Containers = &k
+	}
+	return cfg, nil
 }
 
 // SetDNSOff records the node's own `meshctl dns on|off`; the next apply

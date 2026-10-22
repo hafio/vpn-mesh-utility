@@ -34,6 +34,10 @@ func TestJoinRequestValidateNormalises(t *testing.T) {
 	if err := r.Validate(); err != nil || r.PublicIP != "198.51.100.7" {
 		t.Fatalf("public_ip: %v", err)
 	}
+	r.Endpoint6, r.PublicIP6 = "[2001:DB8::11]:51820", "2001:DB8::0011"
+	if err := r.Validate(); err != nil || r.Endpoint6 != "[2001:db8::11]:51820" || r.PublicIP6 != "2001:db8::11" {
+		t.Fatalf("the IPv6 side: %v, %q %q", err, r.Endpoint6, r.PublicIP6)
+	}
 }
 
 func TestETagQuotesTheHash(t *testing.T) {
@@ -58,6 +62,10 @@ func TestJoinRequestValidateRejects(t *testing.T) {
 		{"identity key", func(r *proto.JoinRequest) { r.IdentityPublicKey = "" }, "identity_public_key"},
 		{"endpoint", func(r *proto.JoinRequest) { r.Endpoint = "vps2:51820" }, "endpoint"},
 		{"public ip", func(r *proto.JoinRequest) { r.PublicIP = "203.0.113.11:51820" }, "public_ip"},
+		{"endpoint6 is IPv4", func(r *proto.JoinRequest) { r.Endpoint6 = "203.0.113.11:51820" }, "endpoint6"},
+		{"endpoint6 injection", func(r *proto.JoinRequest) { r.Endpoint6 = "[2001:db8::11]:51820\nx" }, "endpoint6"},
+		{"public ip6 is IPv4", func(r *proto.JoinRequest) { r.PublicIP6 = "198.51.100.7" }, "public_ip6"},
+		{"public ip6 with a zone", func(r *proto.JoinRequest) { r.PublicIP6 = "fe80::1%eth0" }, "public_ip6"},
 		{"version", func(r *proto.JoinRequest) { r.AgentVersion = "1.0;rm" }, "agent_version"},
 	}
 	for _, c := range cases {
@@ -98,6 +106,10 @@ func TestStatusReportValidate(t *testing.T) {
 	if err := r.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
+	r.Families = []string{proto.FamilyIPv6, proto.FamilyIPv4}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("Validate with both families: %v", err)
+	}
 	cases := []struct {
 		name   string
 		mutate func(*proto.StatusReport)
@@ -114,6 +126,9 @@ func TestStatusReportValidate(t *testing.T) {
 		{"unknown degraded step", func(r *proto.StatusReport) { r.Degraded = []string{"peers"} }, "degraded[0]"},
 		{"rollback reason", func(r *proto.StatusReport) { r.Rollback = &proto.Rollback{From: 4, To: 3, Reason: "x\x00"} }, "rollback.reason"},
 		{"unknown dns state", func(r *proto.StatusReport) { r.DNS = "maybe" }, "dns"},
+		{"unknown family", func(r *proto.StatusReport) { r.Families = []string{"ipv4", "ipx"} }, "families[1]"},
+		{"family twice", func(r *proto.StatusReport) { r.Families = []string{"ipv6", "ipv6"} }, "listed twice"},
+		{"family injection", func(r *proto.StatusReport) { r.Families = []string{"ipv4\nipv6"} }, "families[0]"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

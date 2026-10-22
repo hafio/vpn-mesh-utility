@@ -40,6 +40,7 @@ func commands() []command {
 		{name: "firewall", summary: "show, check and replace the mesh firewall (policies and zones) on the running server", sub: firewallCommands()},
 		{name: "healthcheck", summary: "exit 0 when the local server or agent answers", sub: healthCommands()},
 		{name: "import", args: "<file>", summary: "replace the desired state with an export (only while the server is stopped)", setup: setupImport},
+		{name: "ipv6", args: "[<prefix>|auto|off]", summary: "show or set the mesh's IPv6 prefix on the running server: a /48 to /64, auto (a random unique local /64) or off", setup: setupIPv6},
 		{name: "logs", summary: "print this node's recent agent log; -f keeps following it", setup: setupLogs},
 		{name: "node", summary: "add, change and remove nodes on the running server", sub: nodeCommands()},
 		{name: "server", summary: "run the control-plane server", setup: setupServer},

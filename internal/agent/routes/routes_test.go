@@ -19,15 +19,15 @@ func prefixes(ss ...string) []netip.Prefix {
 	return out
 }
 
-func TestDesiredSkipsTheDefaultRouteAndDuplicates(t *testing.T) {
+func TestDesiredSkipsTheDefaultRoutesAndDuplicates(t *testing.T) {
 	cfg := testfix.ServerConfig()
-	cfg.Peers[0].AllowedIPs = append(cfg.Peers[0].AllowedIPs, "0.0.0.0/0", "10.77.2.1/32")
+	cfg.Peers[0].AllowedIPs = append(cfg.Peers[0].AllowedIPs, "0.0.0.0/0", "10.77.2.1/32", "::/0", "fd10:77::2:1/128")
 	cfg.Peers[1].AllowedIPs = append(cfg.Peers[1].AllowedIPs, "10.77.2.1/32")
 	got, err := routes.Desired(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := prefixes("10.77.0.2/32", "10.77.0.3/32", "10.77.2.1/32"); !slices.Equal(got, want) {
+	if want := prefixes("10.77.0.2/32", "10.77.0.3/32", "10.77.2.1/32", "fd10:77::2:1/128"); !slices.Equal(got, want) {
 		t.Fatalf("Desired = %v, want %v", got, want)
 	}
 	cfg.Peers[0].AllowedIPs = []string{"bogus"}

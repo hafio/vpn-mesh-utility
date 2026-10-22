@@ -49,14 +49,22 @@ func (c *NodeConfig) Validate() error {
 		}
 		keys[p.PublicKey] = true
 		if p.Endpoint != "" {
-			_, err := validate.Endpoint(field+".endpoint", p.Endpoint)
+			_, err := validate.PeerEndpoint(field+".endpoint", p.Endpoint)
+			add(err)
+		}
+		if p.Fallback != "" {
+			fb, err := validate.PeerEndpoint(field+".fallback", p.Fallback)
+			ep, _ := netip.ParseAddrPort(p.Endpoint)
+			if err == nil && (p.Endpoint == "" || ep.Addr().Is4() == fb.Addr().Is4()) {
+				err = fmt.Errorf("%s.fallback: %s must be in the other address family than the endpoint %q", field, p.Fallback, p.Endpoint)
+			}
 			add(err)
 		}
 		if len(p.AllowedIPs) == 0 {
 			add(fmt.Errorf("%s.allowed_ips: must not be empty", field))
 		}
 		for j, s := range p.AllowedIPs {
-			pf, err := validate.Prefix4(fmt.Sprintf("%s.allowed_ips[%d]", field, j), s)
+			pf, err := validate.Prefix(fmt.Sprintf("%s.allowed_ips[%d]", field, j), s)
 			if err != nil {
 				add(err)
 				continue
@@ -83,7 +91,7 @@ func (c *NodeConfig) Validate() error {
 		add(c.Firewall.validate())
 	}
 	if c.Containers != nil {
-		add(c.Containers.validate(c.Interface.Address))
+		add(c.Containers.validate(c.Interface.Address, c.Interface.Address6))
 	}
 	if c.Policy != nil {
 		if c.Node.Role != RoleServer {
@@ -107,14 +115,28 @@ func (c *NodeConfig) Validate() error {
 
 func (i Interface) validate() error {
 	var errs []error
-	p, err := validate.Prefix4("interface.address", i.Address)
-	switch {
-	case err != nil:
-		// A /32 host address has no host bits, so Prefix4 accepts it; anything
-		// else that fails here is malformed.
-		errs = append(errs, err)
-	case p.Bits() != 32:
-		errs = append(errs, fmt.Errorf("interface.address: must be a /32 (got %s)", i.Address))
+	if i.Address == "" && i.Address6 == "" {
+		errs = append(errs, errors.New("interface: the node has neither an IPv4 nor an IPv6 mesh address"))
+	}
+	if i.Address != "" {
+		p, err := validate.Prefix4("interface.address", i.Address)
+		switch {
+		case err != nil:
+			// A /32 host address has no host bits, so Prefix4 accepts it;
+			// anything else that fails here is malformed.
+			errs = append(errs, err)
+		case p.Bits() != 32:
+			errs = append(errs, fmt.Errorf("interface.address: must be a /32 (got %s)", i.Address))
+		}
+	}
+	if i.Address6 != "" {
+		p, err := validate.Prefix6("interface.address6", i.Address6)
+		switch {
+		case err != nil:
+			errs = append(errs, err)
+		case p.Bits() != 128:
+			errs = append(errs, fmt.Errorf("interface.address6: must be a /128 (got %s)", i.Address6))
+		}
 	}
 	if i.ListenPort != nil {
 		if _, err := validate.Port("interface.listen_port", *i.ListenPort); err != nil {
@@ -145,11 +167,11 @@ func (e Exit) validate(peers []Peer) error {
 			continue
 		}
 		for _, a := range p.AllowedIPs {
-			if a == "0.0.0.0/0" {
+			if a == "0.0.0.0/0" || a == "::/0" {
 				return errors.Join(errs...)
 			}
 		}
-		return errors.Join(append(errs, fmt.Errorf("exit.via: peer %q does not carry 0.0.0.0/0", e.Via))...)
+		return errors.Join(append(errs, fmt.Errorf("exit.via: peer %q carries neither 0.0.0.0/0 nor ::/0", e.Via))...)
 	}
 	return errors.Join(append(errs, fmt.Errorf("exit.via: %q is not a peer of this node", e.Via))...)
 }
@@ -164,17 +186,27 @@ func (d DNS) validate() error {
 		if _, err := validate.DNSName(field+".name", r.Name); err != nil {
 			errs = append(errs, err)
 		}
-		if _, err := validate.IPv4(field+".ip", r.IP); err != nil {
-			errs = append(errs, err)
+		if r.IP == "" && r.IP6 == "" {
+			errs = append(errs, fmt.Errorf("%s: the record has no address", field))
+		}
+		if r.IP != "" {
+			if _, err := validate.IPv4(field+".ip", r.IP); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		if r.IP6 != "" {
+			if _, err := validate.IPv6(field+".ip6", r.IP6); err != nil {
+				errs = append(errs, err)
+			}
 		}
 	}
 	for i, u := range d.Upstream {
-		if _, err := validate.IPv4(fmt.Sprintf("dns.upstream[%d]", i), u); err != nil {
+		if _, err := validate.IP(fmt.Sprintf("dns.upstream[%d]", i), u); err != nil {
 			errs = append(errs, err)
 		}
 	}
 	for i, f := range d.ForwardFor {
-		if _, err := validate.Prefix4(fmt.Sprintf("dns.forward_for[%d]", i), f); err != nil {
+		if _, err := validate.Prefix(fmt.Sprintf("dns.forward_for[%d]", i), f); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -216,12 +248,19 @@ func (f Firewall) validate() error {
 			}
 		}
 		if r.Source != "" {
-			if _, err := validate.Prefix4(field+".source", r.Source); err != nil {
+			if _, err := validate.Prefix(field+".source", r.Source); err != nil {
 				errs = append(errs, err)
 			}
 		}
 		if _, err := validate.Text(field+".note", r.Note, 200); err != nil {
 			errs = append(errs, err)
+		}
+	}
+	if f.Exit6 != "" {
+		if _, err := validate.Prefix6("firewall.exit6", f.Exit6); err != nil {
+			errs = append(errs, err)
+		} else if !f.ExitGateway {
+			errs = append(errs, fmt.Errorf("firewall.exit6: %s is set on a server that is not an exit", f.Exit6))
 		}
 	}
 	return errors.Join(errs...)
@@ -232,8 +271,9 @@ func (f Firewall) validate() error {
 // half, the bridge and the gateway in the subnet but outside the range (so
 // the runtime never hands them out), the gateway the bridge in host mode
 // and the agent's own address in container mode, and the node's mesh IP
-// outside the subnet.
-func (k Containers) validate(address string) error {
+// outside the subnet. The IPv6 side, when there is one, has the same shape
+// with a /112 (M8).
+func (k Containers) validate(address, address6 string) error {
 	var errs []error
 	bad := func(err error) {
 		if err != nil {
@@ -280,6 +320,59 @@ func (k Containers) validate(address string) error {
 	}
 	if self, err := netip.ParsePrefix(address); err == nil && subnet.Contains(self.Addr()) {
 		bad(fmt.Errorf("containers.subnet: %s holds the node's own mesh IP %s", subnet, self.Addr()))
+	}
+	if k.Subnet6 != "" || k.Network6 != "" || k.Range6 != "" || k.Bridge6 != "" || k.Gateway6 != "" {
+		bad(k.validate6(address6))
+	}
+	return errors.Join(errs...)
+}
+
+// validate6 is validate for the IPv6 side.
+func (k Containers) validate6(address6 string) error {
+	var errs []error
+	bad := func(err error) {
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	subnet, err := validate.Prefix6("containers.subnet6", k.Subnet6)
+	bad(err)
+	network, err := validate.Prefix6("containers.network6", k.Network6)
+	bad(err)
+	rng, err := validate.Prefix6("containers.range6", k.Range6)
+	bad(err)
+	bridge, err := validate.IPv6("containers.bridge6", k.Bridge6)
+	bad(err)
+	gateway, err := validate.IPv6("containers.gateway6", k.Gateway6)
+	bad(err)
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	if subnet.Bits() != 112 {
+		bad(fmt.Errorf("containers.subnet6: must be a /112 (got %s)", subnet))
+	}
+	if network.Bits() > subnet.Bits() || !network.Contains(subnet.Addr()) {
+		bad(fmt.Errorf("containers.network6: %s does not contain the subnet %s", network, subnet))
+	}
+	if rng.Bits() <= subnet.Bits() || !subnet.Contains(rng.Addr()) {
+		bad(fmt.Errorf("containers.range6: %s is not a part of the subnet %s", rng, subnet))
+	}
+	for _, a := range []struct {
+		field string
+		ip    netip.Addr
+	}{{"containers.bridge6", bridge}, {"containers.gateway6", gateway}} {
+		if !subnet.Contains(a.ip) || rng.Contains(a.ip) {
+			bad(fmt.Errorf("%s: %s must be in %s and outside the range %s", a.field, a.ip, subnet, rng))
+		}
+	}
+	switch {
+	case k.Mode == ModeHost && gateway != bridge:
+		bad(fmt.Errorf("containers.gateway6: in host mode the gateway is the bridge %s (got %s)", bridge, gateway))
+	case k.Mode == ModeContainer && gateway == bridge:
+		bad(fmt.Errorf("containers.gateway6: in container mode the gateway is the agent, not the bridge %s", bridge))
+	}
+	if self, err := netip.ParsePrefix(address6); err == nil && subnet.Contains(self.Addr()) {
+		bad(fmt.Errorf("containers.subnet6: %s holds the node's own IPv6 mesh address %s", subnet, self.Addr()))
 	}
 	return errors.Join(errs...)
 }

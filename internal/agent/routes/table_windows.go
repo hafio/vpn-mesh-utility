@@ -39,7 +39,7 @@ func (winTable) List(link string) ([]netip.Prefix, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err := winipcfg.GetIPForwardTable2(windows.AF_INET)
+	rows, err := winipcfg.GetIPForwardTable2(windows.AF_UNSPEC)
 	if err != nil {
 		return nil, fmt.Errorf("list routes: %w", err)
 	}
@@ -58,7 +58,7 @@ func (winTable) List(link string) ([]netip.Prefix, error) {
 func (winTable) Add(link string, p netip.Prefix) error {
 	luid, err := luidOf(link)
 	if err == nil {
-		err = luid.AddRoute(p, netip.IPv4Unspecified(), 0)
+		err = luid.AddRoute(p, onLink(p), 0)
 	}
 	if err != nil {
 		return fmt.Errorf("add route %s via %s: %w", p, link, err)
@@ -69,10 +69,18 @@ func (winTable) Add(link string, p netip.Prefix) error {
 func (winTable) Del(link string, p netip.Prefix) error {
 	luid, err := luidOf(link)
 	if err == nil {
-		err = luid.DeleteRoute(p, netip.IPv4Unspecified())
+		err = luid.DeleteRoute(p, onLink(p))
 	}
 	if err != nil {
 		return fmt.Errorf("remove route %s via %s: %w", p, link, err)
 	}
 	return nil
+}
+
+// onLink is the next hop of an on-link route of p's family.
+func onLink(p netip.Prefix) netip.Addr {
+	if p.Addr().Is4() {
+		return netip.IPv4Unspecified()
+	}
+	return netip.IPv6Unspecified()
 }

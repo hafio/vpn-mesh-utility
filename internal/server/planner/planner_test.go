@@ -45,6 +45,10 @@ func node(f testfix.Node) Node {
 //	          (host mode, 10.77.128.0/24, 10.77.131.0/24), vps-3 and the
 //	          laptop in container mode (10.77.129.0/24, 10.77.130.0/24; the
 //	          laptop without its exit)
+//	dual      full on a dual-stack mesh (M8, testfix.MeshCIDR6): every node
+//	          but the phone (ip_family ipv4) has its IPv6 address, vps-2 an
+//	          IPv6 endpoint (so the laptop's exit carries ::/0), the nas's
+//	          containers IPv6 too, and a fixed IPv6 record "printer6"
 func topology(name string) Input {
 	in := Input{MeshCIDR: netip.MustParsePrefix(testfix.MeshCIDR),
 		Upstream: []netip.Addr{netip.MustParseAddr("1.1.1.1"), netip.MustParseAddr("9.9.9.9")}}
@@ -73,6 +77,18 @@ func topology(name string) Input {
 		vps2.Containers = netip.MustParsePrefix("10.77.131.0/24")
 		vps3.Mode, vps3.Containers = proto.ModeContainer, netip.MustParsePrefix("10.77.129.0/24")
 		laptop.Mode, laptop.Containers, laptop.ExitVia = proto.ModeContainer, netip.MustParsePrefix("10.77.130.0/24"), 0
+	case "dual":
+		in.MeshCIDR6 = netip.MustParsePrefix(testfix.MeshCIDR6)
+		for _, x := range []struct {
+			n *Node
+			f testfix.Node
+		}{{&vps1, testfix.VPS1}, {&vps2, testfix.VPS2}, {&vps3, testfix.VPS3}, {&nas, testfix.NAS}, {&laptop, testfix.Laptop}} {
+			x.n.MeshIP6 = netip.MustParseAddr(x.f.MeshIP6)
+		}
+		vps2.Endpoint6 = netip.MustParseAddrPort(testfix.VPS2.Endpoint6)
+		phone.Family = proto.FamilyIPv4
+		nas.Containers, nas.Containers6 = netip.MustParsePrefix(testfix.ContainerSubnet), netip.MustParsePrefix(testfix.ContainerSubnet6)
+		in.Records = append(in.Records, Record{Name: "printer6", IP6: netip.MustParseAddr("fd10:77::1:200")})
 	}
 	in.Nodes = []Node{vps1, vps2, vps3, nas, laptop, phone}
 	return in
@@ -100,7 +116,7 @@ func encode(t *testing.T, v any) []byte {
 // regenerate only after deciding the new output is what you wanted
 // (./scripts/dev.sh regen).
 func TestComputeGolden(t *testing.T) {
-	for _, name := range []string{"servers", "full", "degraded"} {
+	for _, name := range []string{"servers", "full", "degraded", "dual"} {
 		t.Run(name, func(t *testing.T) {
 			got := encode(t, mustCompute(t, topology(name)))
 			path := filepath.Join("testdata", name+".golden.json")
@@ -158,7 +174,7 @@ func TestComputeIsDeterministic(t *testing.T) {
 // Every config the planner emits must pass the agent's own validation: no
 // prefix on two peers, sane values, exit pointing at a peer with 0.0.0.0/0.
 func TestComputedConfigsPassAgentValidation(t *testing.T) {
-	for _, name := range []string{"servers", "full", "degraded", "containers"} {
+	for _, name := range []string{"servers", "full", "degraded", "containers", "dual"} {
 		for id, c := range mustCompute(t, topology(name)) {
 			if err := c.Validate(); err != nil {
 				t.Errorf("%s: node %d: %v", name, id, err)
@@ -236,17 +252,23 @@ func deliver(cfgs map[string]proto.NodeConfig, ips map[string]netip.Addr, from, 
 
 // TestEveryPairCanTalk is the property behind amendment A3: between any two
 // planned nodes, packets get through in both directions -- direct for
-// anything involving a server, through one relay for two non-servers.
+// anything involving a server, through one relay for two non-servers -- in
+// each family both have (M8).
 func TestEveryPairCanTalk(t *testing.T) {
-	for _, name := range []string{"full", "degraded", "containers"} {
+	for _, name := range []string{"full", "degraded", "containers", "dual", "dual/6"} {
 		t.Run(name, func(t *testing.T) {
-			in := topology(name)
+			topo, six := strings.CutSuffix(name, "/6")
+			in := topology(topo)
 			out := mustCompute(t, in)
 			cfgs := map[string]proto.NodeConfig{}
 			ips := map[string]netip.Addr{}
 			for _, n := range in.Nodes {
-				if c, ok := out[n.ID]; ok && (n.Role != proto.RoleServer || n.Endpoint.IsValid()) {
-					cfgs[n.Name], ips[n.Name] = c, n.MeshIP
+				ip := n.MeshIP
+				if six {
+					ip = n.MeshIP6
+				}
+				if c, ok := out[n.ID]; ok && ip.IsValid() && (n.Role != proto.RoleServer || n.Endpoint.IsValid() || n.Endpoint6.IsValid()) {
+					cfgs[n.Name], ips[n.Name] = c, ip
 				}
 			}
 			for a := range cfgs {
@@ -320,8 +342,8 @@ func TestRelayFailover(t *testing.T) {
 				p := newPlan(in)
 				for _, x := range p.others {
 					for _, y := range p.others {
-						rx, _ := p.relay(x, y)
-						ry, _ := p.relay(y, x)
+						rx, _ := p.relay(x, y, f4)
+						ry, _ := p.relay(y, x, f4)
 						if rx != ry {
 							t.Errorf("relay(%s, %s) = %d but relay(%s, %s) = %d", x.Name, y.Name, rx, y.Name, x.Name, ry)
 						}
@@ -348,7 +370,7 @@ func TestRelayFailover(t *testing.T) {
 	}
 	all := withDown(withDown(withDown(topology("full"), testfix.VPS1.ID), testfix.VPS2.ID), testfix.VPS3.ID)
 	p := newPlan(all)
-	if r, ok := p.relay(p.byID[testfix.NAS.ID], p.byID[testfix.Laptop.ID]); !ok || r != testfix.VPS1.ID {
+	if r, ok := p.relay(p.byID[testfix.NAS.ID], p.byID[testfix.Laptop.ID], f4); !ok || r != testfix.VPS1.ID {
 		t.Errorf("every server down: relay = %d, %v; want the usual vps-1", r, ok)
 	}
 	// The default hub comes before the lowest-id server once both ends'
@@ -356,7 +378,7 @@ func TestRelayFailover(t *testing.T) {
 	two := withDown(withDown(topology("full"), testfix.VPS1.ID), testfix.VPS2.ID)
 	two.DefaultHub = testfix.VPS3.ID
 	p = newPlan(two)
-	if r, _ := p.relay(p.byID[testfix.NAS.ID], p.byID[testfix.Laptop.ID]); r != testfix.VPS3.ID {
+	if r, _ := p.relay(p.byID[testfix.NAS.ID], p.byID[testfix.Laptop.ID], f4); r != testfix.VPS3.ID {
 		t.Errorf("both hubs down: relay = %d, want the default hub vps-3", r)
 	}
 }
@@ -626,11 +648,11 @@ func TestCheckRejects(t *testing.T) {
 		{"record defined twice", func(in *Input) { in.Records[1].Name = "files" }, "", "defined twice"},
 		{"record name", func(in *Input) { in.Records[0].Name = "-files" }, "", "dns record"},
 		{"record outside the mesh", func(in *Input) { in.Records[1].IP = netip.MustParseAddr("192.168.1.10") }, "", "outside the mesh"},
-		{"record without an ip", func(in *Input) { in.Records[1].IP = netip.Addr{} }, "", "no IPv4 address"},
+		{"record without an ip", func(in *Input) { in.Records[1].IP = netip.Addr{} }, "", "has no address"},
 		{"record with both targets", func(in *Input) { in.Records[1].Node = testfix.NAS.ID }, "", "both a node and an IP"},
 		{"record of a missing node", func(in *Input) { in.Records[0].Node = 99 }, "", "does not exist"},
 		{"upstream in the mesh", func(in *Input) { in.Upstream = []netip.Addr{netip.MustParseAddr("10.77.0.1")} }, "", "would loop"},
-		{"upstream not ipv4", func(in *Input) { in.Upstream = []netip.Addr{netip.MustParseAddr("2001:db8::1")} }, "", "not an IPv4"},
+		{"upstream mapped", func(in *Input) { in.Upstream = []netip.Addr{netip.MustParseAddr("::ffff:1.1.1.1")} }, "", "not an IPv4 or IPv6"},
 		{"zone", func(in *Input) { in.Zone = "office.local" }, "", "dns zone"},
 		{"record with the zone", func(in *Input) { in.Records[0].Name = "files.mesh" }, "", "ends with the zone"},
 		{"unknown mode", func(in *Input) { in.Nodes[3].Mode = "bridge" }, "nas", "unknown mode"},
@@ -663,6 +685,194 @@ func TestCheckRejects(t *testing.T) {
 				t.Fatalf("want an error for %q mentioning %q, got %v", c.node, c.want, problems)
 			}
 		})
+	}
+}
+
+// The IPv6 side refuses what an agent could not apply (M8).
+func TestCheckRejectsIPv6(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*Input)
+		node   string
+		want   string
+	}{
+		{"prefix too big", func(in *Input) { in.MeshCIDR6 = netip.MustParsePrefix("fd10::/32") }, "", "/48 to /64"},
+		{"no prefix", func(in *Input) { in.MeshCIDR6 = netip.Prefix{} }, "nas", "the mesh has no IPv6 prefix"},
+		{"address outside", func(in *Input) { in.Nodes[3].MeshIP6 = netip.MustParseAddr("fd10:78::1") }, "nas", "outside the mesh's"},
+		{"address twice", func(in *Input) { in.Nodes[3].MeshIP6 = in.Nodes[0].MeshIP6 }, "nas", "also assigned"},
+		{"address in the container part", func(in *Input) { in.Nodes[4].MeshIP6 = netip.MustParseAddr("fd10:77::9000:1") }, "laptop", "container networks"},
+		{"ipv4 node with IPv6", func(in *Input) { in.Nodes[3].Family = proto.FamilyIPv4 }, "nas", "IPv4-only"},
+		{"ipv6 node with IPv4", func(in *Input) { in.Nodes[3].Family = proto.FamilyIPv6 }, "nas", "IPv6-only"},
+		{"unknown family", func(in *Input) { in.Nodes[3].Family = "both" }, "nas", "unknown ip_family"},
+		{"server without IPv4", func(in *Input) {
+			in.Nodes[0].MeshIP, in.Nodes[0].Family = netip.Addr{}, proto.FamilyIPv6
+		}, "vps-1", "a server needs an IPv4 mesh address"},
+		{"no address at all", func(in *Input) { in.Nodes[4].MeshIP, in.Nodes[4].MeshIP6 = netip.Addr{}, netip.Addr{} }, "laptop", "no mesh address"},
+		{"endpoint6 on a spoke", func(in *Input) { in.Nodes[3].Endpoint6 = netip.MustParseAddrPort("[2001:db8::9]:51820") }, "nas", "only servers"},
+		{"container subnet6 size", func(in *Input) { in.Nodes[3].Containers6 = netip.MustParsePrefix("fd10:77::8000:0/111") }, "nas", "IPv6 /112"},
+		{"container subnet6 outside", func(in *Input) { in.Nodes[3].Containers6 = netip.MustParsePrefix("fd10:77::5:0/112") }, "nas", "outside the container part"},
+		{"container subnet6 alone", func(in *Input) { in.Nodes[4].Containers6 = netip.MustParsePrefix("fd10:77::8001:0/112") }, "laptop", "no IPv4 container network"},
+		{"container subnet6 twice", func(in *Input) {
+			in.Nodes[1].Containers, in.Nodes[1].Containers6 = netip.MustParsePrefix("10.77.131.0/24"), in.Nodes[3].Containers6
+		}, "nas", "is also \"vps-2\"'s"},
+		{"record6 outside", func(in *Input) { in.Records[3].IP6 = netip.MustParseAddr("fd99::1") }, "", "outside the mesh's IPv6 prefix"},
+		{"record6 without a prefix", func(in *Input) {
+			in.MeshCIDR6, in.Records[3].IP6 = netip.Prefix{}, netip.MustParseAddr("fd10:77::1:9")
+		}, "", "but the mesh has no IPv6 prefix"},
+		{"upstream in the IPv6 mesh", func(in *Input) { in.Upstream = []netip.Addr{netip.MustParseAddr("fd10:77::1")} }, "", "would loop"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			in := topology("dual")
+			in.Nodes = append([]Node(nil), in.Nodes...)
+			c.mutate(&in)
+			out, problems, err := Compute(in)
+			if err == nil || out != nil {
+				t.Fatalf("Compute accepted an invalid plan (err=%v, %d configs)", err, len(out))
+			}
+			if !hasProblem(problems, c.node, c.want, false) {
+				t.Fatalf("want an error for %q mentioning %q, got %v", c.node, c.want, problems)
+			}
+		})
+	}
+}
+
+// The dual-stack plan in detail (M8): endpoints by family with the
+// fallback, ::/0 only through an exit with public IPv6, an IPv6-only
+// laptop on the one server it can dial, the exit's IPv6 masquerade.
+// A family a node's agent reports its host cannot use is planned away from
+// that node, and never refuses the plan (M8).
+func TestReportedHostFamilies(t *testing.T) {
+	in := topology("dual")
+	in.Nodes = append([]Node(nil), in.Nodes...)
+	in.Nodes[3].NoIPv6 = true // nas
+	in.Nodes[4].NoIPv4 = true // laptop
+	in.Nodes[0].NoIPv4 = true // vps-1, a server, keeps IPv4
+	out, problems, err := Compute(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for node, want := range map[string]string{"nas": "cannot use IPv6; the mesh leaves IPv6 out", "laptop": "cannot use IPv4; the mesh leaves IPv4 out",
+		"vps-1": "planned as configured"} {
+		if !hasProblem(problems, node, want, true) {
+			t.Errorf("no warning %q for %s: %v", want, node, problems)
+		}
+	}
+	if !in.Nodes[3].MeshIP6.IsValid() || !in.Nodes[4].MeshIP.IsValid() {
+		t.Fatal("Compute changed the caller's nodes")
+	}
+	nas, laptop, vps1 := out[testfix.NAS.ID], out[testfix.Laptop.ID], out[testfix.VPS1.ID]
+	if nas.Interface.Address6 != "" || nas.Interface.Address != testfix.NAS.MeshIP+"/32" || nas.Containers == nil || nas.Containers.Subnet6 != "" {
+		t.Errorf("nas without IPv6: %+v, containers %+v", nas.Interface, nas.Containers)
+	}
+	if laptop.Interface.Address != "" || laptop.Interface.Address6 != testfix.Laptop.MeshIP6+"/128" {
+		t.Errorf("laptop without IPv4: %+v", laptop.Interface)
+	}
+	if vps1.Interface.Address != testfix.VPS1.MeshIP+"/32" || vps1.Interface.Address6 != testfix.VPS1.MeshIP6+"/128" {
+		t.Errorf("vps-1 as configured: %+v", vps1.Interface)
+	}
+	for id, c := range out {
+		for _, p := range c.Peers {
+			for _, a := range p.AllowedIPs {
+				if a == testfix.NAS.MeshIP6+"/128" || a == testfix.ContainerSubnet6 || a == testfix.Laptop.MeshIP+"/32" {
+					t.Errorf("node %d routes %s to %s", id, a, p.Name)
+				}
+			}
+		}
+	}
+	for _, r := range out[testfix.VPS2.ID].DNS.Records {
+		if (r.Name == "nas" && (r.IP6 != "" || r.IP == "")) || (r.Name == "laptop" && (r.IP != "" || r.IP6 == "")) {
+			t.Errorf("record %+v", r)
+		}
+	}
+
+	// A node that cannot do without the family is planned as configured.
+	in = topology("dual")
+	in.Nodes = append([]Node(nil), in.Nodes...)
+	// The IPv4-only phone has nothing to leave out; an IPv6-only laptop and
+	// the nas, which has a container network, cannot do without theirs.
+	in.Nodes[5].NoIPv6 = true
+	in.Nodes[4].MeshIP, in.Nodes[4].Family, in.Nodes[4].NoIPv6 = netip.Addr{}, proto.FamilyIPv6, true
+	in.Nodes[3].NoIPv4 = true
+	out, problems, err = Compute(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasProblem(problems, "laptop", "planned as configured", true) || !hasProblem(problems, "nas", "planned as configured", true) ||
+		hasProblem(problems, "phone", "cannot use", true) {
+		t.Errorf("problems: %v", problems)
+	}
+	if out[testfix.Laptop.ID].Interface.Address6 == "" || out[testfix.NAS.ID].Interface.Address == "" {
+		t.Error("a node that cannot do without the family lost it")
+	}
+}
+
+func TestDualStack(t *testing.T) {
+	in := topology("dual")
+	out := mustCompute(t, in)
+	peer := func(c proto.NodeConfig, name string) proto.Peer {
+		t.Helper()
+		for _, p := range c.Peers {
+			if p.Name == name {
+				return p
+			}
+		}
+		t.Fatalf("%s has no peer %s", c.Node.Name, name)
+		return proto.Peer{}
+	}
+	laptop := out[testfix.Laptop.ID]
+	vps2 := peer(laptop, "vps-2")
+	if laptop.Interface.Address6 != testfix.Laptop.MeshIP6+"/128" || vps2.Endpoint != testfix.VPS2.Endpoint ||
+		vps2.Fallback != testfix.VPS2.Endpoint6 || !slices.Contains(vps2.AllowedIPs, "::/0") || !slices.Contains(vps2.AllowedIPs, "0.0.0.0/0") {
+		t.Fatalf("the laptop: %+v; vps-2 %+v", laptop.Interface, vps2)
+	}
+	if p := peer(laptop, "vps-1"); p.Fallback != "" || !slices.Contains(p.AllowedIPs, testfix.NAS.MeshIP6+"/128") ||
+		!slices.Contains(p.AllowedIPs, testfix.ContainerSubnet6) {
+		t.Fatalf("the laptop's relay for the nas, both families: %+v", p)
+	}
+	server := out[testfix.VPS2.ID]
+	if server.Firewall.Exit6 != testfix.MeshCIDR6 || !slices.Contains(server.Sysctl, proto.Sysctl{Key: proto.SysctlIPv6Forward, Value: "1"}) {
+		t.Fatalf("vps-2, an exit with IPv6: %+v, %v", server.Firewall, server.Sysctl)
+	}
+	if p := peer(server, "laptop"); !slices.Equal(p.AllowedIPs, []string{testfix.Laptop.MeshIP + "/32", testfix.Laptop.MeshIP6 + "/128"}) {
+		t.Fatalf("a server routes a spoke's two addresses only: %v", p.AllowedIPs)
+	}
+	phone := out[testfix.Phone.ID]
+	if phone.Interface.Address6 != "" || slices.Contains(peer(phone, "vps-1").AllowedIPs, testfix.MeshCIDR6) {
+		t.Fatalf("an IPv4-only phone got IPv6: %+v", phone)
+	}
+	for _, r := range out[testfix.VPS1.ID].DNS.Records {
+		if r.Name == "laptop" && (r.IP != testfix.Laptop.MeshIP || r.IP6 != testfix.Laptop.MeshIP6) ||
+			r.Name == "phone" && r.IP6 != "" || r.Name == "printer6" && (r.IP != "" || r.IP6 != "fd10:77::1:200") {
+			t.Errorf("record %+v", r)
+		}
+	}
+
+	// IPv6 only: the laptop dials vps-2's IPv6 endpoint, the one there is,
+	// and relays through it; the others are not its peers.
+	in.Nodes = append([]Node(nil), in.Nodes...)
+	in.Nodes[4].Family, in.Nodes[4].MeshIP = proto.FamilyIPv6, netip.Addr{}
+	out, _, err := Compute(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	laptop = out[testfix.Laptop.ID]
+	if len(laptop.Peers) != 1 || laptop.Peers[0].Endpoint != testfix.VPS2.Endpoint6 || laptop.Peers[0].Fallback != "" ||
+		!slices.Contains(laptop.Peers[0].AllowedIPs, testfix.NAS.MeshIP6+"/128") || slices.Contains(laptop.Peers[0].AllowedIPs, "0.0.0.0/0") {
+		t.Fatalf("an IPv6-only laptop: %+v", laptop.Peers)
+	}
+	if p := peer(out[testfix.NAS.ID], "vps-2"); !slices.Contains(p.AllowedIPs, testfix.Laptop.MeshIP6+"/128") {
+		t.Fatalf("the nas must relay to the laptop where the laptop can be: %v", p.AllowedIPs)
+	}
+	for _, c := range out {
+		if err := c.Validate(); err != nil {
+			t.Errorf("%s: %v", c.Node.Name, err)
+		}
+	}
+	// Without any server it can dial, it is warned.
+	in.Nodes[1].Endpoint6 = netip.AddrPort{}
+	if _, problems, _ := Compute(in); !hasProblem(problems, "laptop", "can reach none of the servers", true) {
+		t.Fatalf("no warning: %v", problems)
 	}
 }
 

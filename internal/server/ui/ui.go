@@ -111,6 +111,7 @@ func New(d Deps) (http.Handler, error) {
 		"GET /audit":                                  u.auditPage,
 		"GET /settings":                               u.settingsPage,
 		"POST /settings":                              u.saveSettings,
+		"POST /settings/ipv6":                         u.saveIPv6,
 		"GET /users":                                  u.usersPage,
 		"POST /users":                                 u.addUser,
 		"POST /users/{name}/disable":                  u.disableUser,

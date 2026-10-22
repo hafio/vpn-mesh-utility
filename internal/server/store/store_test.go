@@ -77,8 +77,8 @@ func TestOpenAppliesMigrations(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if v != 7 {
-			t.Errorf("schema version = %d, want 7", v)
+		if v != 8 {
+			t.Errorf("schema version = %d, want 8", v)
 		}
 		cidr, err := t2.Setting(SettingMeshCIDR)
 		if err != nil {
@@ -147,6 +147,104 @@ func TestNodeContainerColumns(t *testing.T) {
 	})
 }
 
+// The IPv6 side of a node (M8): read back, defaults, uniqueness, IPv6-only
+// nodes (no IPv4 at all, several of them), IPv6-only records, and through a
+// snapshot and back.
+func TestNodeDualStackColumns(t *testing.T) {
+	s, _, _ := openTest(t)
+	insertTopology(t, s)
+	var snap Snapshot
+	tx(t, s, func(t2 *Tx) error {
+		vps2, err := t2.NodeByName("vps-2")
+		if err != nil {
+			return err
+		}
+		if vps2.Family != proto.FamilyDual || vps2.MeshIP6 != "" {
+			t.Errorf("defaults: family %q, IPv6 %q", vps2.Family, vps2.MeshIP6)
+		}
+		// The host's families are the agent's, so an update leaves them.
+		if err := t2.SetHostFamilies(vps2.ID, "ipv4"); err != nil {
+			return err
+		}
+		if err := t2.SetHostFamilies(9999, "ipv4"); err == nil {
+			t.Error("SetHostFamilies of a missing node succeeded")
+		}
+		vps2.MeshIP6, vps2.Endpoint6, vps2.ContainerSubnet6 = testfix.VPS2.MeshIP6, testfix.VPS2.Endpoint6, testfix.ContainerSubnet6
+		if err := t2.UpdateNode(vps2); err != nil {
+			return err
+		}
+		for _, n := range []Node{
+			{Name: "six", Role: "spoke", MeshIP6: "fd10:77::2:9", Family: proto.FamilyIPv6},
+			{Name: "six2", Role: "spoke", MeshIP6: "fd10:77::2:10", Family: proto.FamilyIPv6},
+			{Name: "four", Role: "spoke", MeshIP: "10.77.2.9", Family: proto.FamilyIPv4},
+		} {
+			if err := t2.InsertNode(&n); err != nil {
+				return err
+			}
+		}
+		for _, dup := range []Node{
+			{Name: "dup6", Role: "spoke", MeshIP6: "fd10:77::2:9"},
+			{Name: "dupk6", Role: "spoke", MeshIP6: "fd10:77::2:11", ContainerSubnet6: testfix.ContainerSubnet6},
+		} {
+			if err := t2.InsertNode(&dup); !errors.Is(err, ErrConflict) {
+				t.Errorf("%s: %v, want ErrConflict", dup.Name, err)
+			}
+		}
+		if err := t2.InsertDNSRecord(&DNSRecord{Name: "printer6", IP6: "fd10:77::1:200"}); err != nil {
+			return err
+		}
+		got, err := t2.NodeByName("six")
+		if err != nil {
+			return err
+		}
+		if got.MeshIP != "" || got.MeshIP6 != "fd10:77::2:9" || got.Family != proto.FamilyIPv6 {
+			t.Errorf("six = %+v", got)
+		}
+		if got, _ = t2.NodeByName("vps-2"); got.Endpoint6 != testfix.VPS2.Endpoint6 || got.ContainerSubnet6 != testfix.ContainerSubnet6 ||
+			got.HostFamilies != "ipv4" {
+			t.Errorf("vps-2 = %+v", got)
+		}
+		records, err := t2.DNSRecords()
+		if err != nil || len(records) != 1 || records[0].IP != "" || records[0].IP6 != "fd10:77::1:200" {
+			t.Errorf("records = %+v, %v", records, err)
+		}
+		if snap, err = t2.Snapshot(); err != nil {
+			return err
+		}
+		b, err := snap.Encode()
+		if err != nil {
+			return err
+		}
+		if strings.Count(string(b), `"ip_family":`) != 3 || !strings.Contains(string(b), `"mesh_ip6":"fd10:77::2:9"`) ||
+			!strings.Contains(string(b), `"endpoint6":"`+testfix.VPS2.Endpoint6+`"`) || strings.Contains(string(b), "families") {
+			t.Errorf("snapshot:\n%s", b)
+		}
+		return nil
+	})
+	tx(t, s, func(t2 *Tx) error {
+		if err := t2.DeleteNode(mustNode(t, t2, "six").ID); err != nil {
+			return err
+		}
+		if err := t2.Restore(snap); err != nil {
+			return err
+		}
+		got, err := t2.NodeByName("six")
+		if err != nil || got.MeshIP != "" || got.MeshIP6 != "fd10:77::2:9" || got.Family != proto.FamilyIPv6 {
+			t.Errorf("six after restore = %+v, %v", got, err)
+		}
+		return nil
+	})
+}
+
+func mustNode(t *testing.T, t2 *Tx, name string) Node {
+	t.Helper()
+	n, err := t2.NodeByName(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
 func TestOpenIsIdempotent(t *testing.T) {
 	s, clock, path := openTest(t)
 	if err := s.Close(); err != nil {
@@ -159,8 +257,8 @@ func TestOpenIsIdempotent(t *testing.T) {
 	defer s2.Close()
 	tx(t, s2, func(t2 *Tx) error {
 		v, err := t2.SchemaVersion()
-		if v != 7 {
-			t.Errorf("schema version after reopen = %d, want 7", v)
+		if v != 8 {
+			t.Errorf("schema version after reopen = %d, want 8", v)
 		}
 		return err
 	})

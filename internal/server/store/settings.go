@@ -19,6 +19,9 @@ const (
 	// SettingDNSExtraDomains are the extra domains every node resolves
 	// (amendment A39), comma separated.
 	SettingDNSExtraDomains = "dns_extra_domains"
+	// SettingMeshCIDR6 is the mesh's IPv6 prefix (M8); unset, the mesh is
+	// IPv4 only.
+	SettingMeshCIDR6 = "mesh_cidr6"
 	// SettingPolicyTZ is the time zone the mesh firewall's schedules are
 	// read in (amendment A43): Segmentation.TimeZone, so part of the
 	// segmentation document, not of DesiredSettings. Unset is
@@ -33,11 +36,11 @@ const (
 // part of every snapshot; deployment settings such as server_url are not, so
 // a rollback never moves the server.
 var DesiredSettings = []string{SettingMeshCIDR, SettingUpstreamDNS, SettingDefaultMTU, SettingDefaultHub, SettingDNSZone,
-	SettingDNSExtraDomains}
+	SettingDNSExtraDomains, SettingMeshCIDR6}
 
 // settingDefaults are what a setting held before it existed: restoring a
 // snapshot taken then puts the default back. "mesh" is proto.DefaultZone.
-var settingDefaults = map[string]string{SettingDNSZone: "mesh", SettingDNSExtraDomains: ""}
+var settingDefaults = map[string]string{SettingDNSZone: "mesh", SettingDNSExtraDomains: "", SettingMeshCIDR6: ""}
 
 // SplitDomains reads SettingDNSExtraDomains: the comma-separated domains,
 // none when it is empty.

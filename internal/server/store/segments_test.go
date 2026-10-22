@@ -209,13 +209,36 @@ func openAt(t *testing.T, version int) *Store {
 	return s
 }
 
+// insertAt5 writes the reference nodes into a database at schema 5 with the
+// columns it has (store.InsertNode writes later ones); it returns their ids
+// by name.
+func insertAt5(t *testing.T, s *Store) map[string]int64 {
+	t.Helper()
+	ids := map[string]int64{}
+	tx(t, s, func(t2 *Tx) error {
+		for _, f := range []testfix.Node{testfix.VPS1, testfix.VPS2, testfix.VPS3, testfix.NAS, testfix.Laptop} {
+			res, err := t2.exec(`INSERT INTO nodes (name, role, mesh_ip, wg_pubkey, identity_pubkey, endpoint, listen_port,
+					keepalive, mtu, enrolled, created_at) VALUES (?, ?, ?, ?, ?, ?, 51820, 25, 1420, 1, ?)`,
+				f.Name, string(f.Role), f.MeshIP, testfix.WGKey(f.Key), testfix.IdentityKeyB64(f.Key), f.Endpoint, t2.now.Unix())
+			if err != nil {
+				return err
+			}
+			if ids[f.Name], err = res.LastInsertId(); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return ids
+}
+
 // Migration 0006 turns the custom firewall rules into policies exactly as
 // LegacySegmentation does for older snapshots and exports, and drops them.
 func TestMigrationTurnsRulesIntoPolicies(t *testing.T) {
 	s := openAt(t, 5)
-	nodes := insertTopology(t, s)
+	nodes := insertAt5(t, s)
 	rules := []FirewallRule{
-		{ID: 1, NodeID: nodes["vps-1"].ID, Proto: "tcp", Port: 9000, SourceCIDR: "10.77.1.0/24", Note: "backup"},
+		{ID: 1, NodeID: nodes["vps-1"], Proto: "tcp", Port: 9000, SourceCIDR: "10.77.1.0/24", Note: "backup"},
 		{ID: 2, Proto: "udp", Port: 161, SourceCIDR: "0.0.0.0/0"},
 	}
 	tx(t, s, func(t2 *Tx) error {
@@ -230,7 +253,7 @@ func TestMigrationTurnsRulesIntoPolicies(t *testing.T) {
 	if err := s.migrate(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	names := map[int64]string{nodes["vps-1"].ID: "vps-1"}
+	names := map[int64]string{nodes["vps-1"]: "vps-1"}
 	want := LegacySegmentation(rules, names)
 	if want.Policies[0].To[0] != "node:vps-1" || want.Policies[1].To[0] != "role:server" || want.Policies[2].Name != "allow-all" {
 		t.Fatalf("LegacySegmentation = %+v", want)

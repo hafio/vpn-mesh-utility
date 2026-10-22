@@ -127,3 +127,58 @@ func TestCheckMeshCIDR(t *testing.T) {
 		}
 	}
 }
+
+// The IPv6 plan (M8): the role blocks keep their IPv4 numbers in the low
+// 32 bits, container networks take the blocks from 0x8000.
+func TestIPv6AddressPlan(t *testing.T) {
+	mesh6 := netip.MustParsePrefix("fd10:77::/64")
+	for r, want := range map[Range]string{RangeServers: "fd10:77::/112", RangeAlwaysOn: "fd10:77::1:0/112",
+		RangeLaptops: "fd10:77::2:0/112", RangePhones: "fd10:77::3:0/112"} {
+		if got := Block6(mesh6, int(r)).String(); got != want {
+			t.Errorf("Block6(%d) = %s, want %s", r, got, want)
+		}
+	}
+	used := map[netip.Addr]bool{netip.MustParseAddr("fd10:77::1"): true}
+	if ip, err := Allocate6(mesh6, RangeServers, used); err != nil || ip.String() != "fd10:77::2" {
+		t.Errorf("Allocate6 = %v, %v", ip, err)
+	}
+	if ip, err := Allocate6(mesh6, RangePhones, nil); err != nil || ip.String() != "fd10:77::3:1" {
+		t.Errorf("Allocate6 phones = %v, %v", ip, err)
+	}
+	k, err := AllocateContainers6(mesh6, map[netip.Prefix]bool{netip.MustParsePrefix("fd10:77::8000:0/112"): true})
+	if err != nil || k.String() != "fd10:77::8001:0/112" {
+		t.Errorf("AllocateContainers6 = %v, %v", k, err)
+	}
+	for _, c := range []struct {
+		ip, want string
+	}{
+		{"fd10:77::2:9", ""},
+		{"fd10:77:0:0:1234:5678:9abc:def0", ""},
+		{"fd10:78::1", "outside the mesh"},
+		{"fd10:77::", "prefix's own address"},
+		{"fd10:77::8000:5", "where the container networks are"},
+		{"fd10:77::ffff:1", "where the container networks are"},
+		{"fd10:77::1", "already assigned"},
+	} {
+		err := CheckRequested6(mesh6, netip.MustParseAddr(c.ip), used)
+		if (c.want == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), c.want)) {
+			t.Errorf("CheckRequested6(%s) = %v, want %q", c.ip, err, c.want)
+		}
+	}
+	for _, s := range []string{"fd10:77::/48", "fd10:77::/64", "2001:db8:1::/56"} {
+		if err := CheckMeshCIDR6(netip.MustParsePrefix(s)); err != nil {
+			t.Errorf("CheckMeshCIDR6(%s) = %v", s, err)
+		}
+	}
+	for _, s := range []string{"fd10::/32", "fd10:77::/80", "fd10:77::1/64", "10.77.0.0/16", "::ffff:10.0.0.0/112"} {
+		if err := CheckMeshCIDR6(netip.MustParsePrefix(s)); err == nil {
+			t.Errorf("CheckMeshCIDR6(%s) accepted", s)
+		}
+	}
+	if _, err := Allocate6(netip.MustParsePrefix("fd10::/32"), RangeServers, nil); err == nil {
+		t.Error("Allocate6 accepted an unsupported prefix")
+	}
+	if _, err := AllocateContainers6(netip.Prefix{}, nil); err == nil {
+		t.Error("AllocateContainers6 accepted no prefix")
+	}
+}

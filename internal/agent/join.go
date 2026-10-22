@@ -33,9 +33,11 @@ type JoinOptions struct {
 	Token   string
 	// Name, when set, must be the name the token was issued for.
 	Name string
-	// Endpoint is a server's public IPv4:port, when detection would be wrong.
-	Endpoint string
-	Version  string
+	// Endpoint is a server's public IPv4:port, when detection would be wrong;
+	// Endpoint6 its public [IPv6]:port (M8).
+	Endpoint  string
+	Endpoint6 string
+	Version   string
 	// NoService skips installing the system service.
 	NoService bool
 	Service   Service
@@ -47,6 +49,7 @@ type JoinOptions struct {
 	Hostname   func() (string, error)
 	Backend    func() string
 	PublicIPv4 func() (netip.Addr, bool)
+	PublicIPv6 func() (netip.Addr, bool)
 }
 
 // Join enrolls this node (spec S6.1): it generates the keys locally if they
@@ -69,6 +72,9 @@ func Join(ctx context.Context, o JoinOptions) (proto.JoinResponse, error) {
 	if o.PublicIPv4 == nil {
 		o.PublicIPv4 = PublicIPv4
 	}
+	if o.PublicIPv6 == nil {
+		o.PublicIPv6 = PublicIPv6
+	}
 	server, err := validate.ServerURL("--server", o.Server)
 	if err != nil {
 		return proto.JoinResponse{}, err
@@ -89,10 +95,13 @@ func Join(ctx context.Context, o JoinOptions) (proto.JoinResponse, error) {
 	req := proto.JoinRequest{
 		Token: o.Token, Name: o.Name, Hostname: cleanHostname(host), OS: runtime.GOOS, Arch: runtime.GOARCH,
 		WGBackend: o.Backend(), WGPublicKey: wgPub, IdentityPublicKey: keys.IdentityPublic(),
-		Endpoint: o.Endpoint, AgentVersion: o.Version,
+		Endpoint: o.Endpoint, AgentVersion: o.Version, Endpoint6: o.Endpoint6,
 	}
 	if ip, ok := o.PublicIPv4(); ok {
 		req.PublicIP = ip.String()
+	}
+	if ip, ok := o.PublicIPv6(); ok {
+		req.PublicIP6 = ip.String()
 	}
 	// The server validates too; failing here names the flag and spares a
 	// round trip.
@@ -115,7 +124,7 @@ func Join(ctx context.Context, o JoinOptions) (proto.JoinResponse, error) {
 		MeshIP: resp.MeshIP, JoinedAt: o.Now().Unix()}); err != nil {
 		return resp, err
 	}
-	fmt.Fprintf(o.Out, "joined %s as %s (%s, mesh IP %s, node id %d)\n", server, resp.Name, resp.Role, resp.MeshIP, resp.NodeID)
+	fmt.Fprintf(o.Out, "joined %s as %s (%s, mesh %s, node id %d)\n", server, resp.Name, resp.Role, meshAddresses(resp), resp.NodeID)
 
 	if o.NoService || o.Service == nil {
 		fmt.Fprintf(o.Out, "start the agent with: meshctl agent run --data %s\n", o.DataDir)
@@ -130,6 +139,18 @@ func Join(ctx context.Context, o JoinOptions) (proto.JoinResponse, error) {
 	}
 	fmt.Fprintln(o.Out, "installed and started meshctl-agent.service")
 	return resp, nil
+}
+
+// meshAddresses is how join names the node's mesh addresses: "IP
+// 10.77.0.1", "IP 10.77.0.1 and fd10:77::1" or "IPv6 fd10:77::2:1".
+func meshAddresses(r proto.JoinResponse) string {
+	switch {
+	case r.MeshIP != "" && r.MeshIP6 != "":
+		return "IP " + r.MeshIP + " and " + r.MeshIP6
+	case r.MeshIP6 != "":
+		return "IPv6 " + r.MeshIP6
+	}
+	return "IP " + r.MeshIP
 }
 
 // cleanHostname folds a host name into the grammar the server accepts
@@ -154,7 +175,15 @@ var cgnat = netip.MustParsePrefix("100.64.0.0/10")
 
 // PublicIPv4 returns the first public IPv4 address on the host's interfaces:
 // the address a VPS receives WireGuard traffic on (amendment A17).
-func PublicIPv4() (netip.Addr, bool) {
+func PublicIPv4() (netip.Addr, bool) { return firstAddr(isPublic) }
+
+// PublicIPv6 returns the first global IPv6 address on the host's interfaces
+// (M8), a server's IPv6 endpoint.
+func PublicIPv6() (netip.Addr, bool) { return firstAddr(isPublic6) }
+
+// firstAddr returns the first address of an up, non-loopback interface
+// that accept takes.
+func firstAddr(accept func(netip.Addr) bool) (netip.Addr, bool) {
 	ifs, err := net.Interfaces()
 	if err != nil {
 		return netip.Addr{}, false
@@ -172,8 +201,8 @@ func PublicIPv4() (netip.Addr, bool) {
 			if !ok {
 				continue
 			}
-			ip, ok := netip.AddrFromSlice(n.IP)
-			if ip = ip.Unmap(); ok && isPublic(ip) {
+			ip, parsed := netip.AddrFromSlice(n.IP)
+			if ip = ip.Unmap(); parsed && accept(ip) {
 				return ip, true
 			}
 		}
@@ -183,4 +212,10 @@ func PublicIPv4() (netip.Addr, bool) {
 
 func isPublic(ip netip.Addr) bool {
 	return ip.Is4() && ip.IsGlobalUnicast() && !ip.IsPrivate() && !cgnat.Contains(ip)
+}
+
+// isPublic6 is a global IPv6 address: not unique local (fc00::/7), link
+// local or IPv4-mapped.
+func isPublic6(ip netip.Addr) bool {
+	return ip.Is6() && !ip.Is4In6() && ip.IsGlobalUnicast() && !ip.IsPrivate()
 }

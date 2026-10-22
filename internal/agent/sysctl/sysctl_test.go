@@ -116,3 +116,71 @@ func TestApplyWithoutProc(t *testing.T) {
 		t.Fatal("New has neither /proc/sys nor NoProc")
 	}
 }
+
+// IPv6 forwarding (M8) first moves every interface that takes router
+// advertisements to accept_ra 2, so it keeps its IPv6 default route.
+func TestIPv6ForwardingKeepsRouterAdvertisements(t *testing.T) {
+	w := fakeProc(t, map[string]string{"net/ipv6/conf/all/forwarding": "0", "net/ipv6/conf/all/accept_ra": "1",
+		"net/ipv6/conf/default/accept_ra": "1", "net/ipv6/conf/lo/accept_ra": "1", "net/ipv6/conf/eth0/accept_ra": "1",
+		"net/ipv6/conf/eth1/accept_ra": "0", "net/ipv6/conf/wg0/accept_ra": "2"})
+	params := []proto.Sysctl{{Key: proto.SysctlIPv6Forward, Value: "1"}}
+	if n, err := w.Apply(params); err != nil || n != 2 {
+		t.Fatalf("Apply = %d, %v; want eth0's accept_ra and the forwarding", n, err)
+	}
+	for rel, want := range map[string]string{"all/forwarding": "1", "eth0/accept_ra": "2", "eth1/accept_ra": "0", "wg0/accept_ra": "2",
+		"all/accept_ra": "1", "default/accept_ra": "1", "lo/accept_ra": "1"} {
+		if b, _ := os.ReadFile(filepath.Join(w.Root, "net", "ipv6", "conf", filepath.FromSlash(rel))); strings.TrimSpace(string(b)) != want {
+			t.Errorf("%s = %q, want %s", rel, b, want)
+		}
+	}
+	if n, err := w.Apply(params); err != nil || n != 0 {
+		t.Fatalf("second Apply = %d, %v; want no change", n, err)
+	}
+	// An interface that comes later is moved at the next apply.
+	if err := os.MkdirAll(filepath.Join(w.Root, "net", "ipv6", "conf", "eth2"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(w.Root, "net", "ipv6", "conf", "eth2", "accept_ra"), []byte("1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := w.Apply(params); err != nil || n != 1 {
+		t.Fatalf("Apply with a new uplink = %d, %v", n, err)
+	}
+	// An interface the agent may not write stops the forwarding, with the
+	// key to set by hand.
+	if os.Geteuid() != 0 {
+		ra := filepath.Join(w.Root, "net", "ipv6", "conf", "eth3", "accept_ra")
+		if err := os.MkdirAll(filepath.Dir(ra), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(ra, []byte("1\n"), 0o444); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Apply(params); err == nil || !strings.Contains(err.Error(), "net.ipv6.conf.eth3.accept_ra = 2") {
+			t.Fatalf("Apply with an unwritable accept_ra = %v", err)
+		}
+	}
+	// Without the IPv6 tree there is nothing to forward.
+	if _, err := fakeProc(t, map[string]string{"net/ipv4/ip_forward": "0"}).Apply(params); err == nil || !strings.Contains(err.Error(), "IPv6 interfaces") {
+		t.Fatalf("Apply on a host without IPv6 = %v", err)
+	}
+}
+
+func TestIPv6(t *testing.T) {
+	for name, c := range map[string]struct {
+		values map[string]string
+		want   bool
+	}{
+		"enabled":          {map[string]string{"net/ipv6/conf/all/disable_ipv6": "0", "net/ipv6/conf/default/disable_ipv6": "0"}, true},
+		"disabled":         {map[string]string{"net/ipv6/conf/all/disable_ipv6": "1", "net/ipv6/conf/default/disable_ipv6": "1"}, false},
+		"new ones without": {map[string]string{"net/ipv6/conf/all/disable_ipv6": "0", "net/ipv6/conf/default/disable_ipv6": "1"}, false},
+		"no IPv6 stack":    {map[string]string{"net/ipv4/ip_forward": "0"}, false},
+	} {
+		if got := fakeProc(t, c.values).IPv6(); got != c.want {
+			t.Errorf("%s: IPv6() = %v", name, got)
+		}
+	}
+	if !(&Writer{NoProc: true}).IPv6() {
+		t.Error("a host without /proc/sys must be taken to have IPv6")
+	}
+}

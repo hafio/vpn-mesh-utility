@@ -76,6 +76,17 @@ func TestZoneAnswers(t *testing.T) {
 		})
 	}
 
+	// An IPv6-only node's name (M8) is in the zone without an A record.
+	d := meshDNS(true)
+	d.Records = append(d.Records, proto.Record{Name: "pad", IP6: "fd10:77::2:1"})
+	six, err := newZone(d, 53)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp, _ := six.answer(query("pad.mesh.", mdns.TypeA), laptop, nil); resp == nil || resp.Rcode != mdns.RcodeSuccess || len(resp.Answer) != 0 {
+		t.Fatalf("A of an IPv6-only name = %v", resp)
+	}
+
 	// Exit mode forwards everyone's other lookups.
 	exit, err := newZone(meshDNS(false), 53)
 	if err != nil {

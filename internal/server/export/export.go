@@ -47,7 +47,7 @@ type Node struct {
 	ID         int64  `yaml:"id"`
 	Name       string `yaml:"name"`
 	Role       string `yaml:"role"`
-	MeshIP     string `yaml:"mesh_ip"`
+	MeshIP     string `yaml:"mesh_ip,omitempty"`
 	Endpoint   string `yaml:"endpoint,omitempty"`
 	ListenPort int    `yaml:"listen_port"`
 	Hub        string `yaml:"hub,omitempty"`
@@ -69,13 +69,21 @@ type Node struct {
 	// containers (amendment A37).
 	Mode            string `yaml:"mode,omitempty"`
 	ContainerSubnet string `yaml:"container_subnet,omitempty"`
+	// The IPv6 side (M8): Family is empty for dual stack; an IPv6-only node
+	// has no mesh_ip.
+	MeshIP6          string `yaml:"mesh_ip6,omitempty"`
+	Family           string `yaml:"ip_family,omitempty"`
+	Endpoint6        string `yaml:"endpoint6,omitempty"`
+	ContainerSubnet6 string `yaml:"container_subnet6,omitempty"`
 }
 
-// DNSRecord is a custom record pointing at a node (by name) or a fixed IP.
+// DNSRecord is a custom record pointing at a node (by name) or a fixed IP
+// (IPv4, IPv6 or both).
 type DNSRecord struct {
 	Name string `yaml:"name"`
 	Node string `yaml:"node,omitempty"`
 	IP   string `yaml:"ip,omitempty"`
+	IP6  string `yaml:"ip6,omitempty"`
 }
 
 // FirewallRule is a custom rule of an export made before segmentation: a
@@ -103,11 +111,12 @@ func FromSnapshot(s store.Snapshot) Document {
 			Enrolled: n.Enrolled, Disabled: n.Disabled, WGPublicKey: n.WGPubKey, IdentityPublicKey: n.IdentityPubKey,
 			OS: n.OS, Arch: n.Arch, Hostname: n.Hostname, WGBackend: n.WGBackend, CreatedAt: n.CreatedAt,
 			Mode: n.Mode, ContainerSubnet: n.ContainerSubnet,
+			MeshIP6: n.MeshIP6, Family: n.Family, Endpoint6: n.Endpoint6, ContainerSubnet6: n.ContainerSubnet6,
 		})
 	}
 	sort.Slice(d.Nodes, func(i, j int) bool { return d.Nodes[i].ID < d.Nodes[j].ID })
 	for _, r := range s.DNS {
-		d.DNS = append(d.DNS, DNSRecord{Name: r.Name, Node: names[r.NodeID], IP: r.IP})
+		d.DNS = append(d.DNS, DNSRecord{Name: r.Name, Node: names[r.NodeID], IP: r.IP, IP6: r.IP6})
 	}
 	return d
 }
@@ -175,10 +184,27 @@ func ToSnapshot(d Document) (store.Snapshot, error) {
 		ids[n.Name] = n.ID
 		_, err = validate.Enum(f+".role", n.Role, string(proto.RoleServer), string(proto.RoleSpoke), string(proto.RolePhone))
 		bad(err)
-		_, err = validate.IPv4(f+".mesh_ip", n.MeshIP)
-		bad(err)
+		if n.MeshIP == "" && n.MeshIP6 == "" {
+			bad(fmt.Errorf("%s: needs a mesh_ip, a mesh_ip6 or both", f))
+		}
+		if n.MeshIP != "" {
+			_, err = validate.IPv4(f+".mesh_ip", n.MeshIP)
+			bad(err)
+		}
+		if n.MeshIP6 != "" {
+			_, err = validate.IPv6(f+".mesh_ip6", n.MeshIP6)
+			bad(err)
+		}
+		if n.Family != "" {
+			_, err = validate.Enum(f+".ip_family", n.Family, proto.FamilyDual, proto.FamilyIPv4, proto.FamilyIPv6)
+			bad(err)
+		}
 		if n.Endpoint != "" {
 			_, err = validate.Endpoint(f+".endpoint", n.Endpoint)
+			bad(err)
+		}
+		if n.Endpoint6 != "" {
+			_, err = validate.Endpoint6(f+".endpoint6", n.Endpoint6)
 			bad(err)
 		}
 		_, err = validate.Port(f+".listen_port", n.ListenPort)
@@ -212,6 +238,10 @@ func ToSnapshot(d Document) (store.Snapshot, error) {
 			_, err = validate.Prefix4(f+".container_subnet", n.ContainerSubnet)
 			bad(err)
 		}
+		if n.ContainerSubnet6 != "" {
+			_, err = validate.Prefix6(f+".container_subnet6", n.ContainerSubnet6)
+			bad(err)
+		}
 		if n.CreatedAt < 0 {
 			bad(fmt.Errorf("%s.created_at: must not be negative", f))
 		}
@@ -234,6 +264,7 @@ func ToSnapshot(d Document) (store.Snapshot, error) {
 			MTU: n.MTU, Enrolled: n.Enrolled, Disabled: n.Disabled, WGPubKey: n.WGPublicKey, IdentityPubKey: n.IdentityPublicKey,
 			OS: n.OS, Arch: n.Arch, Hostname: n.Hostname, WGBackend: n.WGBackend, CreatedAt: n.CreatedAt,
 			Mode: n.Mode, ContainerSubnet: n.ContainerSubnet,
+			MeshIP6: n.MeshIP6, Family: n.Family, Endpoint6: n.Endpoint6, ContainerSubnet6: n.ContainerSubnet6,
 		})
 	}
 
@@ -249,9 +280,15 @@ func ToSnapshot(d Document) (store.Snapshot, error) {
 		case store.SettingMeshCIDR:
 			_, err := validate.Prefix4(f, v)
 			bad(err)
+		case store.SettingMeshCIDR6:
+			// Empty is a mesh without IPv6; the size the plan checks.
+			if v != "" {
+				_, err := validate.Prefix6(f, v)
+				bad(err)
+			}
 		case store.SettingUpstreamDNS:
 			for _, ip := range strings.Split(v, ",") {
-				_, err := validate.IPv4(f, strings.TrimSpace(ip))
+				_, err := validate.IP(f, strings.TrimSpace(ip))
 				bad(err)
 			}
 		case store.SettingDNSZone:
@@ -286,14 +323,20 @@ func ToSnapshot(d Document) (store.Snapshot, error) {
 		bad(err)
 		rec := store.DNSRecord{Name: r.Name}
 		switch {
-		case (r.Node == "") == (r.IP == ""):
-			bad(fmt.Errorf("%s: needs exactly one of node and ip", f))
+		case (r.Node == "") == (r.IP == "" && r.IP6 == ""):
+			bad(fmt.Errorf("%s: needs either a node or a fixed ip/ip6, not both or neither", f))
 		case r.Node != "":
 			rec.NodeID = ref(f+".node", r.Node)
 		default:
-			_, err = validate.IPv4(f+".ip", r.IP)
-			bad(err)
-			rec.IP = r.IP
+			if r.IP != "" {
+				_, err = validate.IPv4(f+".ip", r.IP)
+				bad(err)
+			}
+			if r.IP6 != "" {
+				_, err = validate.IPv6(f+".ip6", r.IP6)
+				bad(err)
+			}
+			rec.IP, rec.IP6 = r.IP, r.IP6
 		}
 		s.DNS = append(s.DNS, rec)
 	}

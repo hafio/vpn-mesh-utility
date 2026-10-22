@@ -84,6 +84,8 @@ func (a *api) adminRoutes() []route {
 		{Route{http.MethodGet, AdminSegmentation, "socket"}, a.adminSegment},
 		{Route{http.MethodPut, AdminSegmentation, "socket"}, a.adminSetSegment},
 		{Route{http.MethodGet, AdminSegmentation + "/check", "socket"}, a.adminReach},
+		{Route{http.MethodGet, AdminIPv6, "socket"}, a.adminIPv6},
+		{Route{http.MethodPut, AdminIPv6, "socket"}, a.adminSetIPv6},
 	}
 }
 
@@ -243,7 +245,7 @@ func (s *Nodes) Network(ctx context.Context, name, runtime string) (NetworkInfo,
 	if err != nil {
 		return NetworkInfo{}, err
 	}
-	k := planner.ContainerNetwork(in.MeshCIDR, plannerNode(n))
+	k := planner.ContainerNetwork(in.MeshCIDR, in.MeshCIDR6, plannerNode(n))
 	if k == nil {
 		return NetworkInfo{}, errorf(http.StatusConflict, proto.CodeConflict,
 			"%s has no container network; give it one with `meshctl node set %s --containers`", name, name)
@@ -261,7 +263,7 @@ func (s *Nodes) Network(ctx context.Context, name, runtime string) (NetworkInfo,
 
 // containerCompose is Compose for a container-mode node.
 func (s *Nodes) containerCompose(n store.Node, in planner.Input, o ComposeOptions) (ComposeFile, error) {
-	k := planner.ContainerNetwork(in.MeshCIDR, plannerNode(n))
+	k := planner.ContainerNetwork(in.MeshCIDR, in.MeshCIDR6, plannerNode(n))
 	if k == nil {
 		return ComposeFile{}, errorf(http.StatusConflict, proto.CodeConflict, "%s is in container mode but has no container subnet; remove it and add it again", n.Name)
 	}
@@ -279,6 +281,9 @@ func (s *Nodes) containerCompose(n store.Node, in planner.Input, o ComposeOption
 	}
 	if p.Hub {
 		ep, err := netip.ParseAddrPort(n.Endpoint)
+		if err != nil {
+			ep, err = netip.ParseAddrPort(n.Endpoint6)
+		}
 		if err != nil {
 			return ComposeFile{}, errorf(http.StatusConflict, proto.CodeConflict,
 				"%s has no endpoint, so there is no port to publish; set it with `meshctl node set %s --endpoint <public IPv4>:<port>`", n.Name, n.Name)
@@ -370,7 +375,7 @@ func (s *Nodes) Show(ctx context.Context, name string) (NodeDetail, error) {
 // Add creates a node and its first join token; a phone gets its profile
 // instead (Phone).
 func (s *Nodes) Add(ctx context.Context, by Actor, req NodeAddRequest) (NodeChange, error) {
-	n, fixedIP, err := newNode(req)
+	n, fixedIP, fixedIP6, err := newNode(req)
 	if err != nil {
 		return NodeChange{}, err
 	}
@@ -384,27 +389,37 @@ func (s *Nodes) Add(ctx context.Context, by Actor, req NodeAddRequest) (NodeChan
 		if err != nil {
 			return err
 		}
-		used := map[netip.Addr]bool{}
-		for _, o := range nodes {
-			if ip, err := netip.ParseAddr(o.MeshIP); err == nil {
-				used[ip] = true
-			}
-		}
-		if fixedIP.IsValid() {
+		used := usedAddrs(nodes, 0)
+		block := planner.RangeFor(proto.Role(n.Role), req.AlwaysOn)
+		switch {
+		case n.Family == proto.FamilyIPv6:
+		case fixedIP.IsValid():
 			if err := planner.CheckRequested(in.MeshCIDR, fixedIP, used); err != nil {
 				return invalid(err)
 			}
 			n.MeshIP = fixedIP.String()
-		} else {
-			ip, err := planner.Allocate(in.MeshCIDR, planner.RangeFor(proto.Role(n.Role), req.AlwaysOn), used)
+		default:
+			ip, err := planner.Allocate(in.MeshCIDR, block, used)
 			if err != nil {
 				return errorf(http.StatusConflict, proto.CodeConflict, "%v", err)
 			}
 			n.MeshIP = ip.String()
 		}
+		if n.Family != proto.FamilyIPv4 {
+			if err := addIPv6(in, &n, fixedIP6, block, used); err != nil {
+				return err
+			}
+		}
 		if n.Mode == proto.ModeContainer || req.Containers {
-			used[netip.MustParseAddr(n.MeshIP)] = true
+			if ip, err := netip.ParseAddr(n.MeshIP); err == nil {
+				used[ip] = true
+			}
 			if n.ContainerSubnet, err = containerSubnet(in.MeshCIDR, nodes, used); err != nil {
+				return err
+			}
+		}
+		if req.Containers6 {
+			if n.ContainerSubnet6, err = containerSubnet6(in.MeshCIDR6, nodes); err != nil {
 				return err
 			}
 		}
@@ -441,6 +456,14 @@ func (s *Nodes) Add(ctx context.Context, by Actor, req NodeAddRequest) (NodeChan
 		if n.ContainerSubnet != "" {
 			detail["container_subnet"] = n.ContainerSubnet
 		}
+		for k, v := range map[string]string{"mesh_ip6": n.MeshIP6, "endpoint6": n.Endpoint6, "container_subnet6": n.ContainerSubnet6} {
+			if v != "" {
+				detail[k] = v
+			}
+		}
+		if n.Family != proto.FamilyDual {
+			detail["ip_family"] = n.Family
+		}
 		c.Detail = detail
 		if n.Role == string(proto.RolePhone) {
 			return nil
@@ -474,11 +497,33 @@ func (s *Nodes) Set(ctx context.Context, by Actor, name string, req NodeSetReque
 			return err
 		}
 		detail := map[string]any{}
+		if req.Family != nil {
+			if err := setFamily(tx, &n, *req.Family); err != nil {
+				return err
+			}
+			detail["ip_family"], detail["mesh_ip"], detail["mesh_ip6"] = n.Family, n.MeshIP, n.MeshIP6
+		}
 		if req.MeshIP != nil {
 			if notes, err = moveMeshIP(tx, &n, *req.MeshIP); err != nil {
 				return err
 			}
 			detail["mesh_ip"] = n.MeshIP
+		}
+		if req.MeshIP6 != nil {
+			more, err := moveMeshIP6(tx, &n, *req.MeshIP6)
+			if err != nil {
+				return err
+			}
+			notes = append(notes, more...)
+			detail["mesh_ip6"] = n.MeshIP6
+		}
+		if req.Endpoint6 != nil {
+			n.Endpoint6 = *req.Endpoint6
+			if n.Endpoint6 != "" {
+				ap, _ := validate.Endpoint6("endpoint6", n.Endpoint6) // validated in validateSet
+				n.Endpoint6 = ap.String()
+			}
+			detail["endpoint6"] = n.Endpoint6
 		}
 		if req.Endpoint != nil {
 			n.Endpoint = *req.Endpoint
@@ -522,6 +567,12 @@ func (s *Nodes) Set(ctx context.Context, by Actor, name string, req NodeSetReque
 			}
 			detail["container_subnet"] = n.ContainerSubnet
 		}
+		if req.Containers6 != nil {
+			if err := setContainers6(tx, &n, *req.Containers6); err != nil {
+				return err
+			}
+			detail["container_subnet6"] = n.ContainerSubnet6
+		}
 		if req.Groups != nil {
 			groups, _ := checkGroups(*req.Groups) // validated in validateSet
 			if err := setGroups(tx, n.ID, groups); err != nil {
@@ -538,6 +589,132 @@ func (s *Nodes) Set(ctx context.Context, by Actor, name string, req NodeSetReque
 	ch, err := s.answer(ctx, name, res, nil)
 	ch.Notes = notes
 	return ch, err
+}
+
+// usedAddrs is every mesh address of nodes, of both families, but the
+// node except's.
+func usedAddrs(nodes []store.Node, except int64) map[netip.Addr]bool {
+	used := map[netip.Addr]bool{}
+	for _, o := range nodes {
+		if o.ID == except {
+			continue
+		}
+		for _, s := range []string{o.MeshIP, o.MeshIP6} {
+			if ip, err := netip.ParseAddr(s); err == nil {
+				used[ip] = true
+			}
+		}
+	}
+	return used
+}
+
+// addIPv6 gives n an IPv6 mesh address (M8): fixed when the operator chose
+// one, else the lowest free one of block; none while the mesh has no IPv6
+// prefix, unless n is IPv6 only, which needs one.
+func addIPv6(in planner.Input, n *store.Node, fixed netip.Addr, block planner.Range, used map[netip.Addr]bool) error {
+	switch {
+	case !in.MeshCIDR6.IsValid() && (fixed.IsValid() || n.Family == proto.FamilyIPv6):
+		return errorf(http.StatusConflict, proto.CodeConflict,
+			"the mesh has no IPv6 prefix yet, so %s cannot have an IPv6 address; set one with `meshctl ipv6 auto` (or a prefix) first", n.Name)
+	case !in.MeshCIDR6.IsValid():
+		return nil
+	case fixed.IsValid():
+		if err := planner.CheckRequested6(in.MeshCIDR6, fixed, used); err != nil {
+			return invalid(err)
+		}
+		n.MeshIP6 = fixed.String()
+	default:
+		ip, err := planner.Allocate6(in.MeshCIDR6, block, used)
+		if err != nil {
+			return errorf(http.StatusConflict, proto.CodeConflict, "%v", err)
+		}
+		n.MeshIP6 = ip.String()
+	}
+	used[netip.MustParseAddr(n.MeshIP6)] = true
+	return nil
+}
+
+// blockOf is the address block n's existing address is in, so the family
+// it gains is allocated alike (an always-on spoke stays always-on).
+func blockOf(in planner.Input, n store.Node) planner.Range {
+	if ip, err := netip.ParseAddr(n.MeshIP); err == nil && in.MeshCIDR.Contains(ip) {
+		a, m := ip.As4(), in.MeshCIDR.Addr().As4()
+		if r := (int(a[2]) - int(m[2])) + (int(a[1])-int(m[1]))*256; r >= 0 && r <= int(planner.RangePhones) {
+			return planner.Range(r)
+		}
+	}
+	if ip, err := netip.ParseAddr(n.MeshIP6); err == nil {
+		b := ip.As16()
+		if r := int(b[12])<<8 | int(b[13]); r <= int(planner.RangePhones) {
+			return planner.Range(r)
+		}
+	}
+	return planner.RangeFor(proto.Role(n.Role), false)
+}
+
+// setFamily changes n's address families (M8): a family it gains gets an
+// address allocated (IPv6 only once the mesh has a prefix), one it loses
+// takes its address away -- and, for IPv6, its containers' /112.
+func setFamily(tx *store.Tx, n *store.Node, family string) error {
+	in, nodes, err := LoadInput(tx)
+	if err != nil {
+		return err
+	}
+	used, block := usedAddrs(nodes, n.ID), blockOf(in, *n)
+	switch family {
+	case proto.FamilyIPv4:
+		n.MeshIP6, n.ContainerSubnet6 = "", ""
+	case proto.FamilyIPv6:
+		if n.ContainerSubnet != "" {
+			return errorf(http.StatusConflict, proto.CodeConflict,
+				"%s has a container network, which needs IPv4; take its containers off the mesh first (`meshctl node set %s --containers=false`)", n.Name, n.Name)
+		}
+		n.MeshIP = ""
+	}
+	n.Family = family
+	if family != proto.FamilyIPv6 && n.MeshIP == "" {
+		ip, err := planner.Allocate(in.MeshCIDR, block, used)
+		if err != nil {
+			return errorf(http.StatusConflict, proto.CodeConflict, "%v", err)
+		}
+		n.MeshIP = ip.String()
+	}
+	if family != proto.FamilyIPv4 && n.MeshIP6 == "" {
+		return addIPv6(in, n, netip.Addr{}, block, used)
+	}
+	return nil
+}
+
+// moveMeshIP6 gives n the IPv6 mesh address ip (M8), checked as a fixed
+// one at add is; the same address changes nothing.
+func moveMeshIP6(tx *store.Tx, n *store.Node, ip string) ([]string, error) {
+	addr, _ := validate.IPv6("mesh_ip6", ip) // validated in validateSet
+	old := n.MeshIP6
+	if addr.String() == old {
+		return nil, nil
+	}
+	if n.Family == proto.FamilyIPv4 {
+		return nil, errorf(http.StatusBadRequest, proto.CodeBadRequest, "%s is IPv4 only; make it dual first (`meshctl node set %s --family dual`)", n.Name, n.Name)
+	}
+	in, nodes, err := LoadInput(tx)
+	if err != nil {
+		return nil, err
+	}
+	if !in.MeshCIDR6.IsValid() {
+		return nil, errorf(http.StatusConflict, proto.CodeConflict, "the mesh has no IPv6 prefix yet; set one with `meshctl ipv6 auto` (or a prefix) first")
+	}
+	if err := planner.CheckRequested6(in.MeshCIDR6, addr, usedAddrs(nodes, n.ID)); err != nil {
+		return nil, invalid(err)
+	}
+	n.MeshIP6 = addr.String()
+	if old == "" {
+		return nil, nil
+	}
+	notes := []string{fmt.Sprintf("%s moves from %s to %s; open IPv6 connections to the old address drop", n.Name, old, n.MeshIP6)}
+	if n.Role == string(proto.RolePhone) {
+		notes = append(notes, fmt.Sprintf("the phone's profile still has %s: make a new one (`meshctl node phone %s`)", old, n.Name))
+	}
+	return notes, nil
 }
 
 // moveMeshIP gives n the mesh IP ip (amendment A41), checked as a fixed IP
@@ -724,12 +901,12 @@ func (s *Nodes) answer(ctx context.Context, name string, res Result, enroll *Enr
 
 // newNode validates an add request into a store row (mesh IP and MTU still
 // to be filled in from the database).
-func newNode(req NodeAddRequest) (store.Node, netip.Addr, error) {
+func newNode(req NodeAddRequest) (store.Node, netip.Addr, netip.Addr, error) {
 	var (
-		n    store.Node
-		ip   netip.Addr
-		errs []error
-		err  error
+		n       store.Node
+		ip, ip6 netip.Addr
+		errs    []error
+		err     error
 	)
 	keep := func(e error) {
 		if e != nil {
@@ -749,8 +926,34 @@ func newNode(req NodeAddRequest) (store.Node, netip.Addr, error) {
 		keep(err)
 		n.Endpoint = ap.String()
 	}
-	if n.Role != string(proto.RoleServer) && (req.Endpoint != "" || req.CanExit) {
-		keep(errors.New("endpoint and can_exit apply to servers only; spokes dial out"))
+	if req.Endpoint6 != "" {
+		ap, err := validate.Endpoint6("endpoint6", req.Endpoint6)
+		keep(err)
+		n.Endpoint6 = ap.String()
+	}
+	if n.Role != string(proto.RoleServer) && (req.Endpoint != "" || req.Endpoint6 != "" || req.CanExit) {
+		keep(errors.New("endpoint, endpoint6 and can_exit apply to servers only; spokes dial out"))
+	}
+	n.Family = proto.FamilyDual
+	if req.Family != "" {
+		n.Family, err = validate.Enum("ip_family", req.Family, proto.FamilyDual, proto.FamilyIPv4, proto.FamilyIPv6)
+		keep(err)
+	}
+	if req.IP6 != "" {
+		ip6, err = validate.IPv6("ip6", req.IP6)
+		keep(err)
+	}
+	switch {
+	case n.Family == proto.FamilyIPv4 && req.IP6 != "":
+		keep(errors.New("an ipv4 node has no IPv6 mesh address; leave ip6 out, or make it dual"))
+	case n.Family == proto.FamilyIPv6 && req.IP != "":
+		keep(errors.New("an ipv6 node has no IPv4 mesh IP; leave ip out, or make it dual"))
+	case req.Containers6 && n.Family == proto.FamilyIPv4:
+		keep(errors.New("containers6 needs IPv6, and an ipv4 node has none"))
+	case req.Containers6 && n.Family == proto.FamilyIPv6:
+		keep(errors.New("an ipv6 node has no container network: containers need IPv4, and their IPv6 comes beside it"))
+	case req.Containers6 && !req.Containers && req.Mode != proto.ModeContainer:
+		keep(errors.New("containers6 puts the containers' IPv6 beside their IPv4: give the node a container network too (containers, or container mode)"))
 	}
 	n.ListenPort = proto.DefaultListenPort
 	if req.ListenPort != 0 {
@@ -780,15 +983,15 @@ func newNode(req NodeAddRequest) (store.Node, netip.Addr, error) {
 	switch {
 	case n.Role == string(proto.RolePhone) && (container || req.Containers):
 		keep(errors.New("a phone has no agent, so it has no container network; mode and containers apply to servers and spokes"))
-	case container && n.Role == string(proto.RoleServer) && req.Endpoint == "":
+	case container && n.Role == string(proto.RoleServer) && req.Endpoint == "" && req.Endpoint6 == "":
 		keep(errors.New("a container-mode server needs an endpoint, <public IPv4>:<port the host publishes>: inside its container the agent cannot see the host's address"))
 	case container && req.CanExit:
 		keep(errors.New("a container-mode server cannot be an exit: its host is not on the mesh"))
 	}
 	if err := errors.Join(errs...); err != nil {
-		return store.Node{}, netip.Addr{}, invalid(err)
+		return store.Node{}, netip.Addr{}, netip.Addr{}, invalid(err)
 	}
-	return n, ip, nil
+	return n, ip, ip6, nil
 }
 
 // containerSubnet allocates the lowest free container /24 (amendment A37);
@@ -807,6 +1010,48 @@ func containerSubnet(mesh netip.Prefix, nodes []store.Node, ips map[netip.Addr]b
 	return k.String(), nil
 }
 
+// containerSubnet6 allocates the lowest free container /112 of mesh6 (M8).
+func containerSubnet6(mesh6 netip.Prefix, nodes []store.Node) (string, error) {
+	if !mesh6.IsValid() {
+		return "", errorf(http.StatusConflict, proto.CodeConflict,
+			"the mesh has no IPv6 prefix yet, so containers have no IPv6 to get; set one with `meshctl ipv6 auto` (or a prefix) first")
+	}
+	taken := map[netip.Prefix]bool{}
+	for _, o := range nodes {
+		if k, err := netip.ParsePrefix(o.ContainerSubnet6); err == nil {
+			taken[k] = true
+		}
+	}
+	k, err := planner.AllocateContainers6(mesh6, taken)
+	if err != nil {
+		return "", errorf(http.StatusConflict, proto.CodeConflict, "%v", err)
+	}
+	return k.String(), nil
+}
+
+// setContainers6 puts n's containers' IPv6 on the mesh or takes it off
+// (M8): it comes beside their IPv4 network, on a node with IPv6.
+func setContainers6(tx *store.Tx, n *store.Node, on bool) error {
+	switch {
+	case !on:
+		n.ContainerSubnet6 = ""
+		return nil
+	case n.ContainerSubnet6 != "":
+		return nil
+	case n.ContainerSubnet == "":
+		return errorf(http.StatusBadRequest, proto.CodeBadRequest,
+			"%s has no container network; their IPv6 comes beside their IPv4, so give it one first (`meshctl node set %s --containers`)", n.Name, n.Name)
+	case n.MeshIP6 == "":
+		return errorf(http.StatusBadRequest, proto.CodeBadRequest, "%s has no IPv6 mesh address (ip_family %s), so its containers cannot have IPv6", n.Name, n.Family)
+	}
+	in, nodes, err := LoadInput(tx)
+	if err != nil {
+		return err
+	}
+	n.ContainerSubnet6, err = containerSubnet6(in.MeshCIDR6, nodes)
+	return err
+}
+
 // setContainers gives a host-mode node a container subnet (on) or takes it
 // away; a container-mode node keeps its own, and a phone has none.
 func setContainers(tx *store.Tx, n *store.Node, on bool) error {
@@ -817,7 +1062,7 @@ func setContainers(tx *store.Tx, n *store.Node, on bool) error {
 		return errorf(http.StatusBadRequest, proto.CodeBadRequest,
 			"%s is in container mode, where its containers are always on the mesh; to change its mode, remove the node and add it again", n.Name)
 	case !on:
-		n.ContainerSubnet = ""
+		n.ContainerSubnet, n.ContainerSubnet6 = "", "" // the IPv6 side comes beside the IPv4 one
 		return nil
 	case n.ContainerSubnet != "":
 		return nil
@@ -881,6 +1126,18 @@ func validateSet(req NodeSetRequest) error {
 	}
 	if req.MeshIP != nil {
 		_, err := validate.IPv4("mesh_ip", *req.MeshIP)
+		check(err)
+	}
+	if req.MeshIP6 != nil {
+		_, err := validate.IPv6("mesh_ip6", *req.MeshIP6)
+		check(err)
+	}
+	if req.Endpoint6 != nil && *req.Endpoint6 != "" {
+		_, err := validate.Endpoint6("endpoint6", *req.Endpoint6)
+		check(err)
+	}
+	if req.Family != nil {
+		_, err := validate.Enum("ip_family", *req.Family, proto.FamilyDual, proto.FamilyIPv4, proto.FamilyIPv6)
 		check(err)
 	}
 	if req.Groups != nil {
@@ -984,6 +1241,10 @@ func nodeInfo(n store.Node, all []store.Node) NodeInfo {
 		WGBackend: n.WGBackend, AgentVersion: n.AgentVersion, ConfigVersion: n.ConfigVersion,
 		AppliedVersion: n.AppliedVersion, InSync: n.ConfigHash != "" && n.AppliedHash == n.ConfigHash, LastSeen: n.LastSeen,
 		Mode: n.Mode, ContainerSubnet: n.ContainerSubnet, DownSince: n.DownSince,
+		MeshIP6: n.MeshIP6, Family: n.Family, Endpoint6: n.Endpoint6, ContainerSubnet6: n.ContainerSubnet6,
+	}
+	if n.HostFamilies != "" {
+		info.HostFamilies = strings.Split(n.HostFamilies, ",")
 	}
 	// The heartbeat's display-only part; written by status(), so it parses.
 	var d statusDetail

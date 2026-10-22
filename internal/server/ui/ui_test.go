@@ -536,6 +536,121 @@ func TestDNSPage(t *testing.T) {
 
 }
 
+// The IPv6 side (M8): Settings sets the mesh's IPv6 prefix, after which the
+// add and edit forms take families and IPv6 addresses, and DNS records an
+// IPv6 address.
+func TestDualStackPages(t *testing.T) {
+	r := newRig(t)
+	r.seedServers()
+	cookie, csrf := r.signIn()
+	post := func(path string, form url.Values) *httptest.ResponseRecorder {
+		t.Helper()
+		form.Set("csrf", csrf)
+		return r.do(http.MethodPost, path, cookie, form)
+	}
+	byName := func(name string) store.Node {
+		t.Helper()
+		for _, n := range r.nodes() {
+			if n.Name == name {
+				return n
+			}
+		}
+		t.Fatalf("no node %s", name)
+		return store.Node{}
+	}
+	if body := r.do(http.MethodGet, "/nodes", cookie, nil).Body.String(); strings.Contains(body, `name="ip_family"`) {
+		t.Fatal("the add form offers families before the mesh has IPv6")
+	}
+	if body := r.do(http.MethodGet, "/settings", cookie, nil).Body.String(); !strings.Contains(body, "The mesh runs IPv4 only") ||
+		!strings.Contains(body, `action="/settings/ipv6"`) {
+		t.Fatalf("Settings without IPv6:\n%s", body)
+	}
+	if w := post("/settings/ipv6", url.Values{"ipv6_prefix": {"fd10::/40"}}); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "/48 to /64") {
+		t.Fatalf("a /40 = %d\n%s", w.Code, w.Body)
+	}
+	if w := post("/settings/ipv6", url.Values{"ipv6_prefix": {testfix.MeshCIDR6}}); w.Code != http.StatusOK ||
+		!strings.Contains(w.Body.String(), "IPv6 prefix "+testfix.MeshCIDR6+"; 2 node(s) have an IPv6 mesh address; config v") ||
+		!strings.Contains(w.Body.String(), "<code>"+testfix.MeshCIDR6+"</code>") {
+		t.Fatalf("set the prefix = %d\n%s", w.Code, w.Body)
+	}
+
+	if w := post("/nodes", url.Values{"name": {"pad"}, "role": {"spoke"}, "ip_family": {"ipv6"}}); w.Code != http.StatusOK {
+		t.Fatalf("add an IPv6-only spoke = %d\n%s", w.Code, w.Body)
+	}
+	if n := byName("pad"); n.MeshIP != "" || n.MeshIP6 != "fd10:77::2:1" || n.Family != proto.FamilyIPv6 {
+		t.Fatalf("pad %+v", n)
+	}
+	if w := post("/nodes", url.Values{"name": {"x"}, "role": {"spoke"}, "ip6": {"fd20::5"}}); w.Code != http.StatusBadRequest ||
+		!strings.Contains(w.Body.String(), "outside the mesh") || !strings.Contains(w.Body.String(), `value="fd20::5"`) {
+		t.Fatalf("an IPv6 outside the mesh = %d\n%s", w.Code, w.Body)
+	}
+	body := r.do(http.MethodGet, "/nodes", cookie, nil).Body.String()
+	if !strings.Contains(body, `name="ip_family"`) || !strings.Contains(body, "<td>fd10:77::2:1</td>") {
+		t.Fatalf("the nodes page with IPv6:\n%s", body)
+	}
+	body = r.do(http.MethodGet, "/nodes/pad", cookie, nil).Body.String()
+	for _, want := range []string{"none (IPv6 only)", "<th>Mesh IPv6</th><td>fd10:77::2:1</td>", "ipv6 only", `name="ipv6_form"`, `<option value="ipv6" selected>`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("pad's page lacks %q", want)
+		}
+	}
+	spoke := func(kv ...string) url.Values {
+		v := url.Values{"ipv6_form": {"1"}, "keepalive": {"25"}, "mtu": {"1420"}}
+		for i := 0; i < len(kv); i += 2 {
+			v.Set(kv[i], kv[i+1])
+		}
+		return v
+	}
+	if w := post("/nodes/pad", spoke("ip_family", "dual", "mesh_ip6", "fd10:77::2:1")); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Saved") {
+		t.Fatalf("pad to dual = %d\n%s", w.Code, w.Body)
+	}
+	if n := byName("pad"); n.MeshIP != "10.77.2.1" || n.MeshIP6 != "fd10:77::2:1" {
+		t.Fatalf("pad after dual %+v", n)
+	}
+	if w := post("/nodes/pad", spoke("ip_family", "dual", "mesh_ip6", "fd10:77::2:7")); w.Code != http.StatusOK ||
+		!strings.Contains(w.Body.String(), "pad moves from fd10:77::2:1 to fd10:77::2:7") {
+		t.Fatalf("pad's IPv6 moved = %d\n%s", w.Code, w.Body)
+	}
+	// Going IPv4 only drops the IPv6 fields the form still carries.
+	if w := post("/nodes/pad", spoke("ip_family", "ipv4", "mesh_ip6", "fd10:77::2:7", "containers6", "on")); w.Code != http.StatusOK {
+		t.Fatalf("pad to ipv4 = %d\n%s", w.Code, w.Body)
+	}
+	if n := byName("pad"); n.MeshIP6 != "" || n.Family != proto.FamilyIPv4 {
+		t.Fatalf("pad after ipv4 %+v", n)
+	}
+	server := url.Values{"ipv6_form": {"1"}, "ip_family": {"dual"}, "endpoint": {testfix.VPS1.Endpoint}, "endpoint6": {"[2001:db8::10]:51820"},
+		"listen_port": {"51820"}, "mtu": {"1420"}}
+	if w := post("/nodes/vps-1", server); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "<th>Endpoint (IPv6)</th><td>[2001:db8::10]:51820</td>") {
+		t.Fatalf("vps-1's IPv6 endpoint = %d\n%s", w.Code, w.Body)
+	}
+	server.Set("endpoint6", "203.0.113.10:51820")
+	if w := post("/nodes/vps-1", server); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "[IPv6]:port") {
+		t.Fatalf("an IPv4 endpoint6 = %d\n%s", w.Code, w.Body)
+	}
+
+	if body := r.do(http.MethodGet, "/dns", cookie, nil).Body.String(); !strings.Contains(body, `name="ip6"`) || !strings.Contains(body, "10.77.0.1, fd10:77::1") {
+		t.Fatalf("the DNS page with IPv6:\n%s", body)
+	}
+	if w := post("/dns", url.Values{"name": {"printer6"}, "ip6": {"fd10:77::1:200"}}); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "<td>fd10:77::1:200</td>") {
+		t.Fatalf("an IPv6 record = %d\n%s", w.Code, w.Body)
+	}
+	settings := url.Values{"default_mtu": {"1420"}, "upstream_dns": {"2606:4700:4700::1111, 9.9.9.9"}}
+	if w := post("/settings", settings); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Settings saved") {
+		t.Fatalf("an IPv6 upstream = %d\n%s", w.Code, w.Body)
+	}
+	if w := post("/settings/ipv6", url.Values{"ipv6_prefix": {"off"}}); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "printer6") {
+		// The IPv6 record would point outside the mesh.
+		t.Fatalf("off with an IPv6 record = %d\n%s", w.Code, w.Body)
+	}
+	if w := post("/dns/printer6/remove", url.Values{}); w.Code != http.StatusOK {
+		t.Fatalf("remove printer6 = %d", w.Code)
+	}
+	if w := post("/settings/ipv6", url.Values{"ipv6_prefix": {"off"}}); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "IPv6 given up") ||
+		!strings.Contains(w.Body.String(), "The mesh runs IPv4 only") {
+		t.Fatalf("off = %d\n%s", w.Code, w.Body)
+	}
+}
+
 // A spoke's edit form sets its hub, exit and keepalive; its page offers the
 // servers as hubs and the can_exit ones as exits. Refused edits change nothing.
 func TestEditSpoke(t *testing.T) {

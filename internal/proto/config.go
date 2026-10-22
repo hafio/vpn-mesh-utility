@@ -75,8 +75,11 @@ type Self struct {
 
 // Interface is the local WireGuard interface.
 type Interface struct {
-	// Address is the node's mesh IP as a /32 prefix.
-	Address string `json:"address"`
+	// Address is the node's IPv4 mesh IP as a /32 prefix, Address6 its IPv6
+	// one as a /128 (M8); a node has one or both. Address6 is omitted
+	// without one, so an IPv4-only config hashes as before.
+	Address  string `json:"address,omitempty"`
+	Address6 string `json:"address6,omitempty"`
 	// ListenPort is fixed on servers and null on spokes (they dial out).
 	ListenPort *int `json:"listen_port"`
 	MTU        int  `json:"mtu"`
@@ -93,6 +96,10 @@ type Peer struct {
 	AllowedIPs []string `json:"allowed_ips"`
 	// Keepalive is PersistentKeepalive in seconds; 0 means none.
 	Keepalive int `json:"keepalive,omitempty"`
+	// Fallback is the server's endpoint in the other address family, when
+	// it has one the node may use (M8): the agent turns to it when Endpoint
+	// gets no handshake.
+	Fallback string `json:"fallback,omitempty"`
 }
 
 // Exit is a spoke's internet-exit selection.
@@ -121,10 +128,12 @@ type DNS struct {
 	Domains []string `json:"domains,omitempty"`
 }
 
-// Record is one A record in the mesh zone.
+// Record is one name in the mesh zone: an A record for IP, an AAAA record
+// for IP6 (M8); one of them at least.
 type Record struct {
 	Name string `json:"name"`
-	IP   string `json:"ip"`
+	IP   string `json:"ip,omitempty"`
+	IP6  string `json:"ip6,omitempty"`
 }
 
 // Node modes (amendment A37): where a node's WireGuard lives.
@@ -160,6 +169,15 @@ type Containers struct {
 	Bridge  string `json:"bridge"`
 	Gateway string `json:"gateway"`
 	Relay   bool   `json:"relay,omitempty"`
+	// The IPv6 side, when the node's containers have IPv6 on the mesh (M8,
+	// opt-in): Subnet6 is the node's /112 of the mesh's IPv6 prefix,
+	// Network6 that prefix on the link, Range6 the runtime's upper half;
+	// the gateway answers neighbour discovery for the far addresses.
+	Subnet6  string `json:"subnet6,omitempty"`
+	Network6 string `json:"network6,omitempty"`
+	Range6   string `json:"range6,omitempty"`
+	Bridge6  string `json:"bridge6,omitempty"`
+	Gateway6 string `json:"gateway6,omitempty"`
 }
 
 // FirewallFirewalld is the firewall backend of a host-mode server. A
@@ -181,6 +199,10 @@ type Firewall struct {
 	// container network (amendment A37): if no zone holds it, the agent
 	// puts it in the mesh zone.
 	Bridge string `json:"bridge,omitempty"`
+	// Exit6 is the mesh's IPv6 prefix an exit with IPv6 masquerades (M8):
+	// firewalld's policy masquerade is IPv4 only, so the exit policy gets an
+	// IPv6 rich rule for it.
+	Exit6 string `json:"exit6,omitempty"`
 }
 
 // Firewall zones.
@@ -233,13 +255,28 @@ const (
 	SysctlBridgeForwarding = "net.ipv4.conf." + ContainerBridge + ".forwarding"
 	SysctlBridgeProxyARP   = "net.ipv4.conf." + ContainerBridge + ".proxy_arp"
 	SysctlWGForwarding     = "net.ipv4.conf.wg0.forwarding"
+	// IPv6 (M8): Linux forwards IPv6 only with all.forwarding, and a
+	// container-mode gateway answers neighbour discovery for the far mesh
+	// addresses with proxy_ndp (one entry per address, which the agent
+	// keeps); a host-mode bridge's proxy_ndp is the agent's containers step.
+	SysctlIPv6Forward    = "net.ipv6.conf.all.forwarding"
+	SysctlProxyNDP       = "net.ipv6.conf.all.proxy_ndp"
+	SysctlBridgeProxyNDP = "net.ipv6.conf." + ContainerBridge + ".proxy_ndp"
 )
 
 // SysctlKeys is every key the server may ask for, for the allowlists.
 func SysctlKeys() []string {
 	return []string{SysctlIPForward, SysctlSrcValidMark, SysctlProxyARP, SysctlBridgeForwarding, SysctlBridgeProxyARP,
-		SysctlWGForwarding}
+		SysctlWGForwarding, SysctlIPv6Forward, SysctlProxyNDP, SysctlBridgeProxyNDP}
 }
+
+// Address families of a node (M8): which mesh addresses it has and which
+// endpoints it dials. FamilyDual is the default.
+const (
+	FamilyDual = "dual"
+	FamilyIPv4 = "ipv4"
+	FamilyIPv6 = "ipv6"
+)
 
 // Hash returns the hex SHA-256 of the canonical encoding with Version zeroed.
 // Two configs with the same Hash apply to the same state.

@@ -773,6 +773,7 @@ func TestStoreFailuresAreInternalErrors(t *testing.T) {
 		{"events: authenticate", http.MethodGet, proto.PathEvents, "", 1},
 		{"events: read", http.MethodGet, proto.PathEvents, "", 2},
 		{"status: record", http.MethodPost, proto.PathStatus, report, 2},
+		{"status: host families", http.MethodPost, proto.PathStatus, `{"agent_version":"v1","wg_backend":"kernel","peers":[],"families":["ipv4"]}`, 2},
 		{"prefs: authenticate", http.MethodPost, proto.PathPrefs, `{"mtu":1380}`, 1},
 		{"prefs: read back", http.MethodPost, proto.PathPrefs, `{"mtu":1380}`, 3},
 		{"mesh: read", http.MethodGet, proto.PathMesh, "", 2},

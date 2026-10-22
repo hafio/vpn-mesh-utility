@@ -1,0 +1,1135 @@
+{
+  "1": {
+    "version": 0,
+    "node": {
+      "id": 1,
+      "name": "vps-1",
+      "role": "server"
+    },
+    "interface": {
+      "address": "10.77.0.1/32",
+      "address6": "fd10:77::1/128",
+      "listen_port": 51820,
+      "mtu": 1420
+    },
+    "peers": [
+      {
+        "name": "laptop",
+        "public_key": "BQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQU=",
+        "allowed_ips": [
+          "10.77.2.1/32",
+          "fd10:77::2:1/128"
+        ]
+      },
+      {
+        "name": "nas",
+        "public_key": "BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=",
+        "allowed_ips": [
+          "10.77.1.1/32",
+          "10.77.128.0/24",
+          "fd10:77::1:1/128",
+          "fd10:77::8000:0/112"
+        ]
+      },
+      {
+        "name": "phone",
+        "public_key": "BgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgY=",
+        "allowed_ips": [
+          "10.77.3.1/32"
+        ]
+      },
+      {
+        "name": "vps-2",
+        "public_key": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
+        "endpoint": "203.0.113.11:51820",
+        "allowed_ips": [
+          "10.77.0.2/32",
+          "fd10:77::2/128"
+        ],
+        "fallback": "[2001:db8::11]:51820"
+      },
+      {
+        "name": "vps-3",
+        "public_key": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=",
+        "endpoint": "203.0.113.12:51820",
+        "allowed_ips": [
+          "10.77.0.3/32",
+          "fd10:77::3/128"
+        ]
+      }
+    ],
+    "dns": {
+      "zone": "mesh",
+      "records": [
+        {
+          "name": "files",
+          "ip": "10.77.1.1",
+          "ip6": "fd10:77::1:1"
+        },
+        {
+          "name": "laptop",
+          "ip": "10.77.2.1",
+          "ip6": "fd10:77::2:1"
+        },
+        {
+          "name": "nas",
+          "ip": "10.77.1.1",
+          "ip6": "fd10:77::1:1"
+        },
+        {
+          "name": "phone",
+          "ip": "10.77.3.1"
+        },
+        {
+          "name": "printer.office",
+          "ip": "10.77.1.200"
+        },
+        {
+          "name": "printer6",
+          "ip6": "fd10:77::1:200"
+        },
+        {
+          "name": "vps-1",
+          "ip": "10.77.0.1",
+          "ip6": "fd10:77::1"
+        },
+        {
+          "name": "vps-2",
+          "ip": "10.77.0.2",
+          "ip6": "fd10:77::2"
+        },
+        {
+          "name": "vps-3",
+          "ip": "10.77.0.3",
+          "ip6": "fd10:77::3"
+        },
+        {
+          "name": "work",
+          "ip": "10.77.2.1",
+          "ip6": "fd10:77::2:1"
+        }
+      ],
+      "upstream": [
+        "1.1.1.1",
+        "9.9.9.9"
+      ],
+      "split": true,
+      "forward_for": [
+        "10.77.3.1/32",
+        "10.77.128.0/24",
+        "fd10:77::8000:0/112"
+      ]
+    },
+    "firewall": {
+      "backend": "firewalld",
+      "rules": [
+        {
+          "zone": "mesh",
+          "proto": "all",
+          "port": 0,
+          "source": "10.77.0.0/16",
+          "note": "segmentation: the policy decides"
+        },
+        {
+          "zone": "public",
+          "proto": "udp",
+          "port": 51820,
+          "note": "wireguard"
+        }
+      ],
+      "relay": true
+    },
+    "sysctl": [
+      {
+        "key": "net.ipv4.ip_forward",
+        "value": "1"
+      },
+      {
+        "key": "net.ipv6.conf.all.forwarding",
+        "value": "1"
+      }
+    ],
+    "policy": {
+      "mesh": "10.77.0.0/16",
+      "rules": [
+        {
+          "name": "system: ping",
+          "services": [
+            {
+              "proto": "icmp"
+            }
+          ],
+          "action": "allow"
+        },
+        {
+          "name": "system: dns",
+          "to": [
+            "10.77.0.1-10.77.0.3"
+          ],
+          "services": [
+            {
+              "proto": "tcp",
+              "ports": [
+                "53"
+              ]
+            },
+            {
+              "proto": "udp",
+              "ports": [
+                "53"
+              ]
+            }
+          ],
+          "action": "allow"
+        },
+        {
+          "name": "system: swarm",
+          "from": [
+            "10.77.0.1-10.77.0.3"
+          ],
+          "to": [
+            "10.77.0.1-10.77.0.3"
+          ],
+          "services": [
+            {
+              "proto": "tcp",
+              "ports": [
+                "2377",
+                "7946"
+              ]
+            },
+            {
+              "proto": "udp",
+              "ports": [
+                "4789",
+                "7946"
+              ]
+            }
+          ],
+          "action": "allow"
+        },
+        {
+          "name": "policy: firewall-1",
+          "from": [
+            "10.77.0.0/16"
+          ],
+          "to": [
+            "10.77.0.1-10.77.0.3"
+          ],
+          "services": [
+            {
+              "proto": "tcp",
+              "ports": [
+                "9100"
+              ]
+            }
+          ],
+          "action": "allow"
+        },
+        {
+          "name": "policy: laptop-smb",
+          "from": [
+            "10.77.2.1"
+          ],
+          "to": [
+            "10.77.1.1",
+            "10.77.1.200"
+          ],
+          "services": [
+            {
+              "proto": "tcp",
+              "ports": [
+                "139",
+                "445"
+              ]
+            }
+          ],
+          "action": "allow"
+        },
+        {
+          "name": "policy: phones-out",
+          "from": [
+            "10.77.3.1"
+          ],
+          "to": [
+            "10.77.1.1",
+            "10.77.1.200"
+          ],
+          "action": "deny"
+        },
+        {
+          "name": "policy: allow-all",
+          "action": "allow"
+        },
+        {
+          "name": "zone: home",
+          "from": [
+            "10.77.1.1",
+            "10.77.1.200"
+          ],
+          "to": [
+            "10.77.1.1",
+            "10.77.1.200"
+          ],
+          "action": "allow"
+        }
+      ]
+    }
+  },
+  "2": {
+    "version": 0,
+    "node": {
+      "id": 2,
+      "name": "vps-2",
+      "role": "server"
+    },
+    "interface": {
+      "address": "10.77.0.2/32",
+      "address6": "fd10:77::2/128",
+      "listen_port": 51820,
+      "mtu": 1420
+    },
+    "peers": [
+      {
+        "name": "laptop",
+        "public_key": "BQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQU=",
+        "allowed_ips": [
+          "10.77.2.1/32",
+          "fd10:77::2:1/128"
+        ]
+      },
+      {
+        "name": "nas",
+        "public_key": "BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=",
+        "allowed_ips": [
+          "10.77.1.1/32",
+          "10.77.128.0/24",
+          "fd10:77::1:1/128",
+          "fd10:77::8000:0/112"
+        ]
+      },
+      {
+        "name": "phone",
+        "public_key": "BgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgY=",
+        "allowed_ips": [
+          "10.77.3.1/32"
+        ]
+      },
+      {
+        "name": "vps-1",
+        "public_key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+        "endpoint": "203.0.113.10:51820",
+        "allowed_ips": [
+          "10.77.0.1/32",
+          "fd10:77::1/128"
+        ]
+      },
+      {
+        "name": "vps-3",
+        "public_key": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=",
+        "endpoint": "203.0.113.12:51820",
+        "allowed_ips": [
+          "10.77.0.3/32",
+          "fd10:77::3/128"
+        ]
+      }
+    ],
+    "dns": {
+      "zone": "mesh",
+      "records": [
+        {
+          "name": "files",
+          "ip": "10.77.1.1",
+          "ip6": "fd10:77::1:1"
+        },
+        {
+          "name": "laptop",
+          "ip": "10.77.2.1",
+          "ip6": "fd10:77::2:1"
+        },
+        {
+          "name": "nas",
+          "ip": "10.77.1.1",
+          "ip6": "fd10:77::1:1"
+        },
+        {
+          "name": "phone",
+          "ip": "10.77.3.1"
+        },
+        {
+          "name": "printer.office",
+          "ip": "10.77.1.200"
+        },
+        {
+          "name": "printer6",
+          "ip6": "fd10:77::1:200"
+        },
+        {
+          "name": "vps-1",
+          "ip": "10.77.0.1",
+          "ip6": "fd10:77::1"
+        },
+        {
+          "name": "vps-2",
+          "ip": "10.77.0.2",
+          "ip6": "fd10:77::2"
+        },
+        {
+          "name": "vps-3",
+          "ip": "10.77.0.3",
+          "ip6": "fd10:77::3"
+        },
+        {
+          "name": "work",
+          "ip": "10.77.2.1",
+          "ip6": "fd10:77::2:1"
+        }
+      ],
+      "upstream": [
+        "1.1.1.1",
+        "9.9.9.9"
+      ],
+      "split": true,
+      "forward_for": [
+        "10.77.128.0/24",
+        "fd10:77::8000:0/112"
+      ]
+    },
+    "firewall": {
+      "backend": "firewalld",
+      "rules": [
+        {
+          "zone": "mesh",
+          "proto": "all",
+          "port": 0,
+          "source": "10.77.0.0/16",
+          "note": "segmentation: the policy decides"
+        },
+        {
+          "zone": "public",
+          "proto": "udp",
+          "port": 51820,
+          "note": "wireguard"
+        }
+      ],
+      "exit_gateway": true,
+      "exit6": "fd10:77::/64"
+    },
+    "sysctl": [
+      {
+        "key": "net.ipv4.ip_forward",
+        "value": "1"
+      },
+      {
+        "key": "net.ipv6.conf.all.forwarding",
+        "value": "1"
+      }
+    ],
+    "policy": {
+      "mesh": "10.77.0.0/16",
+      "rules": [
+        {
+          "name": "system: ping",
+          "services": [
+            {
+              "proto": "icmp"
+            }
+          ],
+          "action": "allow"
+        },
+        {
+          "name": "system: dns",
+          "to": [
+            "10.77.0.1-10.77.0.3"
+          ],
+          "services": [
+            {
+              "proto": "tcp",
+              "ports": [
+                "53"
+              ]
+            },
+            {
+              "proto": "udp",
+              "ports": [
+                "53"
+              ]
+            }
+          ],
+          "action": "allow"
+        },
+        {
+          "name": "system: swarm",
+          "from": [
+            "10.77.0.1-10.77.0.3"
+          ],
+          "to": [
+            "10.77.0.1-10.77.0.3"
+          ],
+          "services": [
+            {
+              "proto": "tcp",
+              "ports": [
+                "2377",
+                "7946"
+              ]
+            },
+            {
+              "proto": "udp",
+              "ports": [
+                "4789",
+                "7946"
+              ]
+            }
+          ],
+          "action": "allow"
+        },
+        {
+          "name": "policy: firewall-1",
+          "from": [
+            "10.77.0.0/16"
+          ],
+          "to": [
+            "10.77.0.1-10.77.0.3"
+          ],
+          "services": [
+            {
+              "proto": "tcp",
+              "ports": [
+                "9100"
+              ]
+            }
+          ],
+          "action": "allow"
+        },
+        {
+          "name": "policy: laptop-smb",
+          "from": [
+            "10.77.2.1"
+          ],
+          "to": [
+            "10.77.1.1",
+            "10.77.1.200"
+          ],
+          "services": [
+            {
+              "proto": "tcp",
+              "ports": [
+                "139",
+                "445"
+              ]
+            }
+          ],
+          "action": "allow"
+        },
+        {
+          "name": "policy: phones-out",
+          "from": [
+            "10.77.3.1"
+          ],
+          "to": [
+            "10.77.1.1",
+            "10.77.1.200"
+          ],
+          "action": "deny"
+        },
+        {
+          "name": "policy: allow-all",
+          "action": "allow"
+        },
+        {
+          "name": "zone: home",
+          "from": [
+            "10.77.1.1",
+            "10.77.1.200"
+          ],
+          "to": [
+            "10.77.1.1",
+            "10.77.1.200"
+          ],
+          "action": "allow"
+        }
+      ]
+    }
+  },
+  "3": {
+    "version": 0,
+    "node": {
+      "id": 3,
+      "name": "vps-3",
+      "role": "server"
+    },
+    "interface": {
+      "address": "10.77.0.3/32",
+      "address6": "fd10:77::3/128",
+      "listen_port": 51820,
+      "mtu": 1420
+    },
+    "peers": [
+      {
+        "name": "laptop",
+        "public_key": "BQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQU=",
+        "allowed_ips": [
+          "10.77.2.1/32",
+          "fd10:77::2:1/128"
+        ]
+      },
+      {
+        "name": "nas",
+        "public_key": "BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=",
+        "allowed_ips": [
+          "10.77.1.1/32",
+          "10.77.128.0/24",
+          "fd10:77::1:1/128",
+          "fd10:77::8000:0/112"
+        ]
+      },
+      {
+        "name": "phone",
+        "public_key": "BgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgY=",
+        "allowed_ips": [
+          "10.77.3.1/32"
+        ]
+      },
+      {
+        "name": "vps-1",
+        "public_key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+        "endpoint": "203.0.113.10:51820",
+        "allowed_ips": [
+          "10.77.0.1/32",
+          "fd10:77::1/128"
+        ]
+      },
+      {
+        "name": "vps-2",
+        "public_key": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
+        "endpoint": "203.0.113.11:51820",
+        "allowed_ips": [
+          "10.77.0.2/32",
+          "fd10:77::2/128"
+        ],
+        "fallback": "[2001:db8::11]:51820"
+      }
+    ],
+    "dns": {
+      "zone": "mesh",
+      "records": [
+        {
+          "name": "files",
+          "ip": "10.77.1.1",
+          "ip6": "fd10:77::1:1"
+        },
+        {
+          "name": "laptop",
+          "ip": "10.77.2.1",
+          "ip6": "fd10:77::2:1"
+        },
+        {
+          "name": "nas",
+          "ip": "10.77.1.1",
+          "ip6": "fd10:77::1:1"
+        },
+        {
+          "name": "phone",
+          "ip": "10.77.3.1"
+        },
+        {
+          "name": "printer.office",
+          "ip": "10.77.1.200"
+        },
+        {
+          "name": "printer6",
+          "ip6": "fd10:77::1:200"
+        },
+        {
+          "name": "vps-1",
+          "ip": "10.77.0.1",
+          "ip6": "fd10:77::1"
+        },
+        {
+          "name": "vps-2",
+          "ip": "10.77.0.2",
+          "ip6": "fd10:77::2"
+        },
+        {
+          "name": "vps-3",
+          "ip": "10.77.0.3",
+          "ip6": "fd10:77::3"
+        },
+        {
+          "name": "work",
+          "ip": "10.77.2.1",
+          "ip6": "fd10:77::2:1"
+        }
+      ],
+      "upstream": [
+        "1.1.1.1",
+        "9.9.9.9"
+      ],
+      "split": true,
+      "forward_for": [
+        "10.77.128.0/24",
+        "fd10:77::8000:0/112"
+      ]
+    },
+    "firewall": {
+      "backend": "firewalld",
+      "rules": [
+        {
+          "zone": "mesh",
+          "proto": "all",
+          "port": 0,
+          "source": "10.77.0.0/16",
+          "note": "segmentation: the policy decides"
+        },
+        {
+          "zone": "public",
+          "proto": "udp",
+          "port": 51820,
+          "note": "wireguard"
+        }
+      ]
+    },
+    "policy": {
+      "mesh": "10.77.0.0/16",
+      "rules": [
+        {
+          "name": "system: ping",
+          "services": [
+            {
+              "proto": "icmp"
+            }
+          ],
+          "action": "allow"
+        },
+        {
+          "name": "system: dns",
+          "to": [
+            "10.77.0.1-10.77.0.3"
+          ],
+          "services": [
+            {
+              "proto": "tcp",
+              "ports": [
+                "53"
+              ]
+            },
+            {
+              "proto": "udp",
+              "ports": [
+                "53"
+              ]
+            }
+          ],
+          "action": "allow"
+        },
+        {
+          "name": "system: swarm",
+          "from": [
+            "10.77.0.1-10.77.0.3"
+          ],
+          "to": [
+            "10.77.0.1-10.77.0.3"
+          ],
+          "services": [
+            {
+              "proto": "tcp",
+              "ports": [
+                "2377",
+                "7946"
+              ]
+            },
+            {
+              "proto": "udp",
+              "ports": [
+                "4789",
+                "7946"
+              ]
+            }
+          ],
+          "action": "allow"
+        },
+        {
+          "name": "policy: firewall-1",
+          "from": [
+            "10.77.0.0/16"
+          ],
+          "to": [
+            "10.77.0.1-10.77.0.3"
+          ],
+          "services": [
+            {
+              "proto": "tcp",
+              "ports": [
+                "9100"
+              ]
+            }
+          ],
+          "action": "allow"
+        },
+        {
+          "name": "policy: laptop-smb",
+          "from": [
+            "10.77.2.1"
+          ],
+          "to": [
+            "10.77.1.1",
+            "10.77.1.200"
+          ],
+          "services": [
+            {
+              "proto": "tcp",
+              "ports": [
+                "139",
+                "445"
+              ]
+            }
+          ],
+          "action": "allow"
+        },
+        {
+          "name": "policy: phones-out",
+          "from": [
+            "10.77.3.1"
+          ],
+          "to": [
+            "10.77.1.1",
+            "10.77.1.200"
+          ],
+          "action": "deny"
+        },
+        {
+          "name": "policy: allow-all",
+          "action": "allow"
+        },
+        {
+          "name": "zone: home",
+          "from": [
+            "10.77.1.1",
+            "10.77.1.200"
+          ],
+          "to": [
+            "10.77.1.1",
+            "10.77.1.200"
+          ],
+          "action": "allow"
+        }
+      ]
+    }
+  },
+  "4": {
+    "version": 0,
+    "node": {
+      "id": 4,
+      "name": "nas",
+      "role": "spoke"
+    },
+    "interface": {
+      "address": "10.77.1.1/32",
+      "address6": "fd10:77::1:1/128",
+      "listen_port": null,
+      "mtu": 1420,
+      "fwmark": 51820
+    },
+    "peers": [
+      {
+        "name": "vps-1",
+        "public_key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+        "endpoint": "203.0.113.10:51820",
+        "allowed_ips": [
+          "10.77.0.1/32",
+          "10.77.2.1/32",
+          "10.77.3.1/32",
+          "fd10:77::1/128",
+          "fd10:77::2:1/128"
+        ],
+        "keepalive": 25
+      },
+      {
+        "name": "vps-2",
+        "public_key": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
+        "endpoint": "203.0.113.11:51820",
+        "allowed_ips": [
+          "10.77.0.2/32",
+          "fd10:77::2/128"
+        ],
+        "keepalive": 25,
+        "fallback": "[2001:db8::11]:51820"
+      },
+      {
+        "name": "vps-3",
+        "public_key": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=",
+        "endpoint": "203.0.113.12:51820",
+        "allowed_ips": [
+          "10.77.0.3/32",
+          "fd10:77::3/128"
+        ],
+        "keepalive": 25
+      }
+    ],
+    "exit": {
+      "choices": [
+        "vps-2"
+      ]
+    },
+    "dns": {
+      "zone": "mesh",
+      "records": [
+        {
+          "name": "files",
+          "ip": "10.77.1.1",
+          "ip6": "fd10:77::1:1"
+        },
+        {
+          "name": "laptop",
+          "ip": "10.77.2.1",
+          "ip6": "fd10:77::2:1"
+        },
+        {
+          "name": "nas",
+          "ip": "10.77.1.1",
+          "ip6": "fd10:77::1:1"
+        },
+        {
+          "name": "phone",
+          "ip": "10.77.3.1"
+        },
+        {
+          "name": "printer.office",
+          "ip": "10.77.1.200"
+        },
+        {
+          "name": "printer6",
+          "ip6": "fd10:77::1:200"
+        },
+        {
+          "name": "vps-1",
+          "ip": "10.77.0.1",
+          "ip6": "fd10:77::1"
+        },
+        {
+          "name": "vps-2",
+          "ip": "10.77.0.2",
+          "ip6": "fd10:77::2"
+        },
+        {
+          "name": "vps-3",
+          "ip": "10.77.0.3",
+          "ip6": "fd10:77::3"
+        },
+        {
+          "name": "work",
+          "ip": "10.77.2.1",
+          "ip6": "fd10:77::2:1"
+        }
+      ],
+      "upstream": [
+        "1.1.1.1",
+        "9.9.9.9"
+      ],
+      "split": true,
+      "forward_for": [
+        "10.77.128.0/24",
+        "fd10:77::8000:0/112"
+      ]
+    },
+    "sysctl": [
+      {
+        "key": "net.ipv4.ip_forward",
+        "value": "1"
+      },
+      {
+        "key": "net.ipv6.conf.all.forwarding",
+        "value": "1"
+      }
+    ],
+    "containers": {
+      "mode": "host",
+      "subnet": "10.77.128.0/24",
+      "network": "10.77.0.0/16",
+      "range": "10.77.128.128/25",
+      "bridge": "10.77.128.1",
+      "gateway": "10.77.128.1",
+      "subnet6": "fd10:77::8000:0/112",
+      "network6": "fd10:77::/64",
+      "range6": "fd10:77::8000:8000/113",
+      "bridge6": "fd10:77::8000:1",
+      "gateway6": "fd10:77::8000:1"
+    }
+  },
+  "5": {
+    "version": 0,
+    "node": {
+      "id": 5,
+      "name": "laptop",
+      "role": "spoke"
+    },
+    "interface": {
+      "address": "10.77.2.1/32",
+      "address6": "fd10:77::2:1/128",
+      "listen_port": null,
+      "mtu": 1420,
+      "fwmark": 51820
+    },
+    "peers": [
+      {
+        "name": "vps-1",
+        "public_key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+        "endpoint": "203.0.113.10:51820",
+        "allowed_ips": [
+          "10.77.0.1/32",
+          "10.77.1.1/32",
+          "10.77.3.1/32",
+          "10.77.128.0/24",
+          "fd10:77::1/128",
+          "fd10:77::1:1/128",
+          "fd10:77::8000:0/112"
+        ],
+        "keepalive": 25
+      },
+      {
+        "name": "vps-2",
+        "public_key": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
+        "endpoint": "203.0.113.11:51820",
+        "allowed_ips": [
+          "10.77.0.2/32",
+          "fd10:77::2/128",
+          "0.0.0.0/0",
+          "::/0"
+        ],
+        "keepalive": 25,
+        "fallback": "[2001:db8::11]:51820"
+      },
+      {
+        "name": "vps-3",
+        "public_key": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=",
+        "endpoint": "203.0.113.12:51820",
+        "allowed_ips": [
+          "10.77.0.3/32",
+          "fd10:77::3/128"
+        ],
+        "keepalive": 25
+      }
+    ],
+    "exit": {
+      "via": "vps-2",
+      "choices": [
+        "vps-2"
+      ]
+    },
+    "dns": {
+      "zone": "mesh",
+      "records": [
+        {
+          "name": "files",
+          "ip": "10.77.1.1",
+          "ip6": "fd10:77::1:1"
+        },
+        {
+          "name": "laptop",
+          "ip": "10.77.2.1",
+          "ip6": "fd10:77::2:1"
+        },
+        {
+          "name": "nas",
+          "ip": "10.77.1.1",
+          "ip6": "fd10:77::1:1"
+        },
+        {
+          "name": "phone",
+          "ip": "10.77.3.1"
+        },
+        {
+          "name": "printer.office",
+          "ip": "10.77.1.200"
+        },
+        {
+          "name": "printer6",
+          "ip6": "fd10:77::1:200"
+        },
+        {
+          "name": "vps-1",
+          "ip": "10.77.0.1",
+          "ip6": "fd10:77::1"
+        },
+        {
+          "name": "vps-2",
+          "ip": "10.77.0.2",
+          "ip6": "fd10:77::2"
+        },
+        {
+          "name": "vps-3",
+          "ip": "10.77.0.3",
+          "ip6": "fd10:77::3"
+        },
+        {
+          "name": "work",
+          "ip": "10.77.2.1",
+          "ip6": "fd10:77::2:1"
+        }
+      ],
+      "upstream": [
+        "1.1.1.1",
+        "9.9.9.9"
+      ],
+      "split": false,
+      "forward_for": [
+        "10.77.128.0/24",
+        "fd10:77::8000:0/112"
+      ]
+    },
+    "sysctl": [
+      {
+        "key": "net.ipv4.conf.all.src_valid_mark",
+        "value": "1"
+      }
+    ]
+  },
+  "6": {
+    "version": 0,
+    "node": {
+      "id": 6,
+      "name": "phone",
+      "role": "phone"
+    },
+    "interface": {
+      "address": "10.77.3.1/32",
+      "listen_port": null,
+      "mtu": 1420
+    },
+    "peers": [
+      {
+        "name": "vps-1",
+        "public_key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+        "endpoint": "203.0.113.10:51820",
+        "allowed_ips": [
+          "10.77.0.0/16"
+        ],
+        "keepalive": 25
+      },
+      {
+        "name": "vps-2",
+        "public_key": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
+        "endpoint": "203.0.113.11:51820",
+        "allowed_ips": [
+          "10.77.0.2/32"
+        ],
+        "keepalive": 25
+      },
+      {
+        "name": "vps-3",
+        "public_key": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=",
+        "endpoint": "203.0.113.12:51820",
+        "allowed_ips": [
+          "10.77.0.3/32"
+        ],
+        "keepalive": 25
+      }
+    ],
+    "exit": {
+      "choices": [
+        "vps-2"
+      ]
+    }
+  }
+}

@@ -12,7 +12,7 @@ import (
 
 // recordForm is the add form's values, kept on a refusal.
 type recordForm struct {
-	Name, Node, IP string
+	Name, Node, IP, IP6 string
 }
 
 type dnsData struct {
@@ -35,8 +35,9 @@ func (u *ui) renderDNS(w http.ResponseWriter, r *http.Request, s auth.Session, s
 }
 
 func (u *ui) addRecord(w http.ResponseWriter, r *http.Request, s auth.Session) {
-	f := recordForm{Name: strings.TrimSpace(r.PostFormValue("name")), Node: r.PostFormValue("node"), IP: strings.TrimSpace(r.PostFormValue("ip"))}
-	ch, err := u.Nodes.AddRecord(r.Context(), actor(s), api.RecordRequest{Name: f.Name, Node: f.Node, IP: f.IP})
+	f := recordForm{Name: strings.TrimSpace(r.PostFormValue("name")), Node: r.PostFormValue("node"), IP: strings.TrimSpace(r.PostFormValue("ip")),
+		IP6: strings.TrimSpace(r.PostFormValue("ip6"))}
+	ch, err := u.Nodes.AddRecord(r.Context(), actor(s), api.RecordRequest{Name: f.Name, Node: f.Node, IP: f.IP, IP6: f.IP6})
 	if err != nil {
 		status, msg := u.refusal(r, err)
 		u.renderDNS(w, r, s, status, page{Error: msg}, f)

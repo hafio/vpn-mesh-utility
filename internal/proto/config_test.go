@@ -103,6 +103,10 @@ func TestValidateAcceptsFixtures(t *testing.T) {
 		"server with containers":     hosting,
 		"extra domains":              withDomains(testfix.SpokeConfig(""), "example.lan", "home.arpa"),
 		"server with a policy":       firewalled,
+		"dual-stack spoke":           testfix.DualSpokeConfig(""),
+		"dual-stack spoke, exit":     testfix.DualSpokeConfig(testfix.VPS2.Name),
+		"IPv6-only spoke":            v6only(),
+		"containers with IPv6":       withContainers6(),
 	} {
 		c := c
 		if err := c.Validate(); err != nil {
@@ -135,7 +139,18 @@ func TestValidateRejects(t *testing.T) {
 		{"bad key", func(c *proto.NodeConfig) { c.Peers[0].PublicKey = "not-a-key" }, "public_key"},
 		{"keepalive too long", func(c *proto.NodeConfig) { c.Peers[0].Keepalive = 86400 }, "keepalive"},
 		{"exit via stranger", func(c *proto.NodeConfig) { c.Exit = &proto.Exit{Via: "vps-9"} }, "not a peer"},
-		{"exit via peer without default", func(c *proto.NodeConfig) { c.Exit = &proto.Exit{Via: c.Peers[0].Name} }, "does not carry 0.0.0.0/0"},
+		{"exit via peer without default", func(c *proto.NodeConfig) { c.Exit = &proto.Exit{Via: c.Peers[0].Name} }, "neither 0.0.0.0/0 nor ::/0"},
+		{"no address", func(c *proto.NodeConfig) { c.Interface.Address = "" }, "neither an IPv4 nor an IPv6 mesh address"},
+		{"address6 not a /128", func(c *proto.NodeConfig) { c.Interface.Address6 = "fd10:77::/64" }, "must be a /128"},
+		{"address6 mapped", func(c *proto.NodeConfig) { c.Interface.Address6 = "::ffff:10.77.0.1/128" }, "interface.address6"},
+		{"IPv6 endpoint garbage", func(c *proto.NodeConfig) { c.Peers[0].Endpoint = "[fe80::1%eth0]:51820" }, "peers[0].endpoint"},
+		{"fallback in the same family", func(c *proto.NodeConfig) { c.Peers[0].Fallback = "198.51.100.9:51820" }, "other address family"},
+		{"fallback without an endpoint", func(c *proto.NodeConfig) {
+			c.Peers[0].Endpoint, c.Peers[0].Fallback = "", "[2001:db8::11]:51820"
+		}, "other address family"},
+		{"IPv6 allowed ip host bits", func(c *proto.NodeConfig) { c.Peers[0].AllowedIPs = []string{"fd10:77::2/64"} }, "host bits"},
+		{"exit6 on a non-exit", func(c *proto.NodeConfig) { c.Firewall.Exit6 = testfix.MeshCIDR6 }, "not an exit"},
+		{"exit6 garbage", func(c *proto.NodeConfig) { c.Firewall.ExitGateway, c.Firewall.Exit6 = true, "10.77.0.0/16" }, "firewall.exit6"},
 		{"exit choice", func(c *proto.NodeConfig) { c.Exit = &proto.Exit{Choices: []string{"vps-2;reboot"}} }, "exit.choices[0]"},
 		{"unknown sysctl", func(c *proto.NodeConfig) {
 			c.Sysctl = []proto.Sysctl{{Key: "kernel.core_pattern", Value: "|/bin/sh"}}
@@ -167,6 +182,12 @@ func TestValidateRejects(t *testing.T) {
 			c.Policy.Rules[3].Action = "maybe"
 		}, "policy.rules[3].action"},
 		{"dns zone", func(c *proto.NodeConfig) { c.DNS = &proto.DNS{Zone: "corp.local"} }, "dns.zone"},
+		{"dns record without an address", func(c *proto.NodeConfig) {
+			c.DNS = &proto.DNS{Zone: proto.DefaultZone, Records: []proto.Record{{Name: "nas"}}}
+		}, "the record has no address"},
+		{"dns record ip6", func(c *proto.NodeConfig) {
+			c.DNS = &proto.DNS{Zone: proto.DefaultZone, Records: []proto.Record{{Name: "nas", IP6: "10.77.1.1"}}}
+		}, "dns.records[0].ip6"},
 		{"dns record ip", func(c *proto.NodeConfig) {
 			c.DNS = &proto.DNS{Zone: proto.DefaultZone, Records: []proto.Record{{Name: "nas", IP: "nas.local"}}}
 		}, "dns.records[0].ip"},
@@ -219,6 +240,38 @@ func TestValidateRejects(t *testing.T) {
 			c.Containers = testfix.Containers(proto.ModeHost)
 			c.Interface.Address = "10.77.128.9/32"
 		}, "holds the node's own mesh IP"},
+		{"containers subnet6 not a /112", func(c *proto.NodeConfig) {
+			c.Containers = testfix.Containers6(proto.ModeHost)
+			c.Containers.Subnet6 = "fd10:77::8000:0/111"
+		}, "must be a /112"},
+		{"containers network6 without the subnet", func(c *proto.NodeConfig) {
+			c.Containers = testfix.Containers6(proto.ModeHost)
+			c.Containers.Network6 = "fd10:88::/64"
+		}, "does not contain the subnet"},
+		{"containers range6 outside the subnet", func(c *proto.NodeConfig) {
+			c.Containers = testfix.Containers6(proto.ModeHost)
+			c.Containers.Range6 = "fd10:77::8001:8000/113"
+		}, "containers.range6"},
+		{"containers gateway6 in the range", func(c *proto.NodeConfig) {
+			c.Containers = testfix.Containers6(proto.ModeContainer)
+			c.Containers.Gateway6 = "fd10:77::8000:8001"
+		}, "containers.gateway6"},
+		{"host mode gateway6 is not the bridge", func(c *proto.NodeConfig) {
+			c.Containers = testfix.Containers6(proto.ModeHost)
+			c.Containers.Gateway6 = "fd10:77::8000:2"
+		}, "the gateway is the bridge"},
+		{"container mode gateway6 is the bridge", func(c *proto.NodeConfig) {
+			c.Containers = testfix.Containers6(proto.ModeContainer)
+			c.Containers.Gateway6 = c.Containers.Bridge6
+		}, "the gateway is the agent"},
+		{"containers subnet6 holds the node", func(c *proto.NodeConfig) {
+			c.Containers = testfix.Containers6(proto.ModeHost)
+			c.Interface.Address6 = "fd10:77::8000:9/128"
+		}, "holds the node's own IPv6 mesh address"},
+		{"containers half IPv6", func(c *proto.NodeConfig) {
+			c.Containers = testfix.Containers(proto.ModeHost)
+			c.Containers.Subnet6 = testfix.ContainerSubnet6
+		}, "containers.network6"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -233,6 +286,35 @@ func TestValidateRejects(t *testing.T) {
 			}
 		})
 	}
+}
+
+// v6only is the laptop with no IPv4 at all (M8): an IPv6 mesh address and
+// IPv6 routes, its servers reached over their IPv6 endpoints.
+func v6only() proto.NodeConfig {
+	c := testfix.DualSpokeConfig("")
+	c.Interface.Address = ""
+	c.Exit = nil
+	for i := range c.Peers {
+		var six []string
+		for _, a := range c.Peers[i].AllowedIPs {
+			if strings.Contains(a, ":") {
+				six = append(six, a)
+			}
+		}
+		c.Peers[i].AllowedIPs = six
+	}
+	c.Peers[1].Endpoint, c.Peers[1].Fallback = testfix.VPS2.Endpoint6, ""
+	return c
+}
+
+// withContainers6 is a host-mode server whose containers have IPv6 too.
+func withContainers6() proto.NodeConfig {
+	c := testfix.ServerConfig()
+	c.Interface.Address6 = testfix.VPS1.MeshIP6 + "/128"
+	c.Containers = testfix.Containers6(proto.ModeHost)
+	c.Firewall.Bridge, c.Firewall.Relay = proto.ContainerBridge, true
+	c.Sysctl = []proto.Sysctl{{Key: proto.SysctlIPForward, Value: "1"}, {Key: proto.SysctlIPv6Forward, Value: "1"}}
+	return c
 }
 
 func withMode(mode string) *proto.Containers {

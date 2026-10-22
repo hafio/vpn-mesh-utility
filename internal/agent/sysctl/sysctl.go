@@ -1,15 +1,18 @@
 // Package sysctl sets the kernel parameters a config asks for: ip_forward on
 // relay and exit servers (amendment A4), src_valid_mark on exit-mode spokes,
-// and the container network's forwarding and proxy ARP (amendment A37).
+// the container network's forwarding and proxy ARP (amendment A37), and
+// IPv6 forwarding and proxy NDP (M8).
 // It writes /proc/sys directly -- no sysctl binary, no /etc/sysctl.d -- and
 // the agent re-asserts the values on every boot from its cached config.
 package sysctl
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
 	"github.com/hafio/vpn-mesh-utility/internal/validate"
@@ -42,6 +45,13 @@ func (w *Writer) Apply(params []proto.Sysctl) (int, error) {
 		case w.NoProc:
 			return n, fmt.Errorf("set %s = %s: this host has no %s; only a Linux server relays or is an exit", p.Key, p.Value, p.Key)
 		}
+		if p.Key == proto.SysctlIPv6Forward && p.Value == "1" {
+			k, err := w.keepRAs()
+			n += k
+			if err != nil {
+				return n, err
+			}
+		}
 		path := filepath.Join(w.Root, filepath.FromSlash(strings.ReplaceAll(p.Key, ".", "/")))
 		cur, err := os.ReadFile(path)
 		if err != nil {
@@ -58,4 +68,54 @@ func (w *Writer) Apply(params []proto.Sysctl) (int, error) {
 		n++
 	}
 	return n, nil
+}
+
+// keepRAs lets the interfaces that take router advertisements keep taking
+// them once IPv6 forwarding is on (M8): Linux ignores RAs on a forwarding
+// host unless accept_ra is 2, so an uplink whose IPv6 default route comes
+// from RAs (accept_ra 1) would lose it. Read-only interfaces (a
+// container's /proc/sys) are not the agent's to change.
+func (w *Writer) keepRAs() (int, error) {
+	conf := filepath.Join(w.Root, "net", "ipv6", "conf")
+	ifs, err := os.ReadDir(conf)
+	if err != nil {
+		return 0, fmt.Errorf("list the IPv6 interfaces in %s: %w", conf, err)
+	}
+	n := 0
+	for _, ifc := range ifs {
+		name := ifc.Name()
+		if name == "all" || name == "default" || name == "lo" {
+			continue
+		}
+		path := filepath.Join(conf, name, "accept_ra")
+		if cur, err := os.ReadFile(path); err != nil || strings.TrimSpace(string(cur)) != "1" {
+			continue // gone since the listing, or not taking RAs the forwarding would stop
+		}
+		err := os.WriteFile(path, []byte("2\n"), 0o644)
+		switch {
+		case errors.Is(err, syscall.EROFS):
+			continue
+		case err != nil:
+			return n, fmt.Errorf("set net.ipv6.conf.%s.accept_ra = 2 before turning IPv6 forwarding on, so %s keeps its router advertisements: %w", name, name, err)
+		}
+		n++
+	}
+	return n, nil
+}
+
+// IPv6 reports whether the host can use IPv6 (M8): it has the IPv6 stack,
+// and IPv6 is disabled neither on all interfaces nor on new ones (where
+// the mesh interface would be). A host without /proc/sys (Windows) is
+// taken to.
+func (w *Writer) IPv6() bool {
+	if w.NoProc {
+		return true
+	}
+	for _, scope := range []string{"all", "default"} {
+		b, err := os.ReadFile(filepath.Join(w.Root, "net", "ipv6", "conf", scope, "disable_ipv6"))
+		if err != nil || strings.TrimSpace(string(b)) != "0" {
+			return false
+		}
+	}
+	return true
 }

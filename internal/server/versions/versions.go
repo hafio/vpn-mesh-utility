@@ -63,7 +63,10 @@ func fields(n store.SnapNode, names map[int64]string) [][2]string {
 		{"name", n.Name},
 		{"role", n.Role},
 		{"mesh_ip", n.MeshIP},
+		{"mesh_ip6", n.MeshIP6},
+		{"ip_family", n.Family},
 		{"endpoint", n.Endpoint},
+		{"endpoint6", n.Endpoint6},
 		{"listen_port", strconv.Itoa(n.ListenPort)},
 		{"hub", names[n.PrimaryHubID]},
 		{"can_exit", strconv.FormatBool(n.CanExit)},
@@ -74,6 +77,7 @@ func fields(n store.SnapNode, names map[int64]string) [][2]string {
 		{"disabled", strconv.FormatBool(n.Disabled)},
 		{"wg_public_key", fingerprint(n.WGPubKey)},
 		{"identity_public_key", fingerprint(n.IdentityPubKey)},
+		{"container_subnet6", n.ContainerSubnet6},
 	}
 }
 
@@ -153,6 +157,9 @@ func describeDNS(s store.Snapshot, names map[int64]string) []string {
 	var out []string
 	for _, r := range s.DNS {
 		target := r.IP
+		if r.IP6 != "" {
+			target = strings.TrimPrefix(target+", "+r.IP6, ", ")
+		}
 		if r.NodeID != 0 {
 			target = "node " + names[r.NodeID]
 		}

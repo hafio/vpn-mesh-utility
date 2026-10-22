@@ -35,12 +35,17 @@ type DNSView struct {
 	Nodes []string `json:"nodes"`
 	// Names are the containers' reported names (amendment A38).
 	Names []NameEntry `json:"names"`
+	// IPv6 says the mesh has an IPv6 prefix, so records may carry IPv6
+	// addresses (M8).
+	IPv6 bool `json:"ipv6"`
 }
 
 // DNSEntry is one name of the zone.
 type DNSEntry struct {
 	Name string `json:"name"`
 	IP   string `json:"ip"`
+	// IP6 is the IPv6 address (M8); IP is empty for an IPv6-only name.
+	IP6 string `json:"ip6,omitempty"`
 	// Node is the node the name follows: the node itself for an automatic
 	// record, the target of an alias; empty for a fixed IP.
 	Node   string `json:"node,omitempty"`
@@ -50,11 +55,13 @@ type DNSEntry struct {
 	Live bool `json:"live"`
 }
 
-// RecordRequest adds a custom record: an alias of Node, or a fixed IP.
+// RecordRequest adds a custom record: an alias of Node, or a fixed IP,
+// IPv6 address or both.
 type RecordRequest struct {
 	Name string `json:"name"`
 	Node string `json:"node,omitempty"`
 	IP   string `json:"ip,omitempty"`
+	IP6  string `json:"ip6,omitempty"`
 }
 
 // DNS returns the mesh zone.
@@ -65,14 +72,14 @@ func (s *Nodes) DNS(ctx context.Context) (DNSView, error) {
 		if err != nil {
 			return err
 		}
-		v.Zone = in.ZoneName()
+		v.Zone, v.IPv6 = in.ZoneName(), in.MeshCIDR6.IsValid()
 		v.Domains = append(v.Domains, in.Domains...)
 		live := func(n store.Node) bool { return n.Enrolled && !n.Disabled && n.WGPubKey != "" }
 		byID := map[int64]store.Node{}
 		for _, n := range nodes {
 			byID[n.ID] = n
 			v.Nodes = append(v.Nodes, n.Name)
-			v.Records = append(v.Records, DNSEntry{Name: n.Name, IP: n.MeshIP, Node: n.Name, Live: live(n)})
+			v.Records = append(v.Records, DNSEntry{Name: n.Name, IP: n.MeshIP, IP6: n.MeshIP6, Node: n.Name, Live: live(n)})
 		}
 		records, err := tx.DNSRecords()
 		if err != nil {
@@ -80,9 +87,9 @@ func (s *Nodes) DNS(ctx context.Context) (DNSView, error) {
 		}
 		var custom []DNSEntry
 		for _, r := range records {
-			e := DNSEntry{Name: r.Name, IP: r.IP, Custom: true, Live: true}
+			e := DNSEntry{Name: r.Name, IP: r.IP, IP6: r.IP6, Custom: true, Live: true}
 			if n, ok := byID[r.NodeID]; ok {
-				e.IP, e.Node, e.Live = n.MeshIP, n.Name, live(n)
+				e.IP, e.IP6, e.Node, e.Live = n.MeshIP, n.MeshIP6, n.Name, live(n)
 			}
 			custom = append(custom, e)
 		}
@@ -105,9 +112,9 @@ func (s *Nodes) AddRecord(ctx context.Context, by Actor, req RecordRequest) (Mes
 	if err != nil {
 		return MeshChange{}, invalid(err)
 	}
-	if (req.Node == "") == (req.IP == "") {
+	if (req.Node == "") == (req.IP == "" && req.IP6 == "") {
 		return MeshChange{}, errorf(http.StatusBadRequest, proto.CodeBadRequest,
-			"record %q: give either a node to follow or a fixed IP, not both or neither", name)
+			"record %q: give either a node to follow or a fixed IP (IPv4, IPv6 or both), not both or neither", name)
 	}
 	rec := store.DNSRecord{Name: name}
 	detail := map[string]any{}
@@ -116,12 +123,20 @@ func (s *Nodes) AddRecord(ctx context.Context, by Actor, req RecordRequest) (Mes
 			return MeshChange{}, invalid(err)
 		}
 		detail["node"] = req.Node
-	} else {
+	}
+	if req.IP != "" {
 		ip, err := validate.IPv4("ip", req.IP)
 		if err != nil {
 			return MeshChange{}, invalid(err)
 		}
 		rec.IP, detail["ip"] = ip.String(), ip.String()
+	}
+	if req.IP6 != "" {
+		ip, err := validate.IPv6("ip6", req.IP6)
+		if err != nil {
+			return MeshChange{}, invalid(err)
+		}
+		rec.IP6, detail["ip6"] = ip.String(), ip.String()
 	}
 	res, err := s.rec.Apply(ctx, Change{Actor: by.Name, UserID: by.UserID, Action: "dns.add", Target: name, Detail: detail},
 		func(tx *store.Tx, _ *Change) error {

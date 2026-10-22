@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"flag"
@@ -79,6 +80,10 @@ func setupNodeAdd(fs *flag.FlagSet, e *env) action {
 	mode := fs.String("mode", "host", "host (WireGuard on the host) or container (in the agent's container: only its containers are on the mesh)")
 	containers := fs.Bool("containers", false, "host mode: put the node's containers on the mesh too (container mode always does)")
 	groups := fs.String("groups", "", "comma-separated firewall groups to put the node in (a new name makes a new group)")
+	family := fs.String("family", "", "dual (default: IPv4 and, once the mesh has an IPv6 prefix, IPv6), ipv4 or ipv6: the node's mesh addresses and the endpoints it dials")
+	ip6 := fs.String("ip6", "", "fixed IPv6 mesh address (default: the lowest free one in the role's block, when the mesh has an IPv6 prefix)")
+	endpoint6 := fs.String("endpoint6", "", "servers: public [IPv6]:port (spokes dial it when IPv4 does not work)")
+	containers6 := fs.Bool("containers6", false, "put the containers' IPv6 on the mesh too (needs --containers or container mode)")
 	return func(ctx context.Context, args []string) error {
 		name, err := nodeName(args)
 		if err != nil {
@@ -90,7 +95,7 @@ func setupNodeAdd(fs *flag.FlagSet, e *env) action {
 		ch, err := client().Add(ctx, api.NodeAddRequest{
 			Name: name, Role: *role, IP: *ip, Endpoint: *endpoint, ListenPort: *listenPort, Hub: *hub,
 			CanExit: *canExit, AlwaysOn: *alwaysOn, Keepalive: *keepalive, MTU: *mtu, Mode: *mode, Containers: *containers,
-			Groups: splitComma(*groups),
+			Groups: splitComma(*groups), Family: *family, IP6: *ip6, Endpoint6: *endpoint6, Containers6: *containers6,
 		})
 		if err != nil {
 			return err
@@ -98,9 +103,9 @@ func setupNodeAdd(fs *flag.FlagSet, e *env) action {
 		if *asJSON {
 			return printJSON(e.stdout, ch)
 		}
-		fmt.Fprintf(e.stdout, "added %s (%s, mesh IP %s)\n", ch.Node.Name, ch.Node.Role, ch.Node.MeshIP)
-		if ch.Node.ContainerSubnet != "" {
-			fmt.Fprintf(e.stdout, "its containers: %s\n", ch.Node.ContainerSubnet)
+		fmt.Fprintf(e.stdout, "added %s (%s, mesh %s)\n", ch.Node.Name, ch.Node.Role, addresses(ch.Node))
+		if k := joinNonEmpty(", ", ch.Node.ContainerSubnet, ch.Node.ContainerSubnet6); k != "" {
+			fmt.Fprintf(e.stdout, "its containers: %s\n", k)
 		}
 		if ch.Node.Mode == "container" {
 			fmt.Fprintf(e.stdout, "\ncontainer mode: run its agent from the compose file\n  meshctl node compose %s [--runtime docker|podman|swarm] > compose.yml\n", ch.Node.Name)
@@ -112,6 +117,18 @@ func setupNodeAdd(fs *flag.FlagSet, e *env) action {
 		printWarnings(e.stdout, ch.Warnings)
 		return nil
 	}
+}
+
+// addresses is a node's mesh addresses as the CLI shows them: "IP
+// 10.77.2.1", "IP 10.77.2.1 and fd10:77::2:1", "IPv6 fd10:77::2:1".
+func addresses(n api.NodeInfo) string {
+	switch {
+	case n.MeshIP != "" && n.MeshIP6 != "":
+		return "IP " + n.MeshIP + " and " + n.MeshIP6
+	case n.MeshIP6 != "":
+		return "IPv6 " + n.MeshIP6
+	}
+	return "IP " + n.MeshIP
 }
 
 // printEnrollment shows a join token and how to use it; times are in loc,
@@ -151,11 +168,8 @@ func setupNodeList(fs *flag.FlagSet, e *env) action {
 		tw := tabwriter.NewWriter(e.stdout, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(tw, "NAME\tROLE\tMESH IP\tENDPOINT\tSTATE\tVERSION\tLAST SEEN")
 		for _, n := range l.Nodes {
-			ep := n.Endpoint
-			if ep == "" {
-				ep = "-"
-			}
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\tv%d/v%d\t%s\n", n.Name, n.Role, n.MeshIP, ep, nodeState(n),
+			ep, ip := cmp.Or(n.Endpoint, n.Endpoint6, "-"), cmp.Or(n.MeshIP, n.MeshIP6)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\tv%d/v%d\t%s\n", n.Name, n.Role, ip, ep, nodeState(n),
 				n.AppliedVersion, n.ConfigVersion, ago(heard(n), e.now()))
 		}
 		if err := tw.Flush(); err != nil {
@@ -306,12 +320,20 @@ func setupNodeShow(fs *flag.FlagSet, e *env) action {
 		row("role", n.Role)
 		row("state", nodeState(n))
 		row("mesh ip", n.MeshIP)
+		row("mesh ipv6", n.MeshIP6)
+		if n.Family != "" && n.Family != "dual" {
+			row("family", n.Family+" only")
+		}
+		if len(n.HostFamilies) > 0 {
+			row("host can use", strings.Join(n.HostFamilies, " and ")+" (its agent's report)")
+		}
 		if n.Mode == "container" {
 			row("mode", "container: only its containers are on the mesh")
 		}
-		row("containers", n.ContainerSubnet)
+		row("containers", joinNonEmpty(", ", n.ContainerSubnet, n.ContainerSubnet6))
 		row("groups", strings.Join(n.Groups, ", "))
 		row("endpoint", n.Endpoint)
+		row("endpoint6", n.Endpoint6)
 		if n.Role == "server" {
 			row("listen port", strconv.Itoa(n.ListenPort))
 			row("can exit", strconv.FormatBool(n.CanExit))
@@ -391,6 +413,10 @@ func setupNodeSet(fs *flag.FlagSet, e *env) action {
 	containers := fs.Bool("containers", false, "host mode: put the node's containers on the mesh (--containers=false takes them off)")
 	meshIP := fs.String("mesh-ip", "", "move the node to another mesh IP in the mesh (its peers, DNS name and agent follow)")
 	groups := fs.String("groups", "", "the node's firewall groups, comma separated, replacing the ones it is in (\"\" takes it out of all)")
+	family := fs.String("family", "", "dual, ipv4 or ipv6: allocates the address a family adds, drops the one it takes away")
+	meshIP6 := fs.String("mesh-ip6", "", "move the node to another IPv6 mesh address in the mesh's IPv6 prefix")
+	endpoint6 := fs.String("endpoint6", "", "servers: public [IPv6]:port, or "+clearEndpoint+" to clear it")
+	containers6 := fs.Bool("containers6", false, "put the containers' IPv6 on the mesh (--containers6=false takes it off)")
 	return func(ctx context.Context, args []string) error {
 		name, err := nodeName(args)
 		if err != nil {
@@ -423,12 +449,20 @@ func setupNodeSet(fs *flag.FlagSet, e *env) action {
 			case "groups":
 				g := splitComma(*groups)
 				req.Groups = &g
+			case "family":
+				req.Family = family
+			case "mesh-ip6":
+				req.MeshIP6 = meshIP6
+			case "endpoint6":
+				req.Endpoint6 = cleared(*endpoint6, clearEndpoint)
+			case "containers6":
+				req.Containers6 = containers6
 			default:
 				set-- // --data, --json
 			}
 		})
 		if set == 0 {
-			return usagef("nothing to change; give at least one of --endpoint, --listen-port, --hub, --can-exit, --exit, --keepalive, --mtu, --containers, --mesh-ip")
+			return usagef("nothing to change; give at least one of --endpoint, --listen-port, --hub, --can-exit, --exit, --keepalive, --mtu, --containers, --mesh-ip, --groups, --family, --mesh-ip6, --endpoint6, --containers6")
 		}
 		return printChange(e.stdout, e.now().Location(), *asJSON, "updated", func() (api.NodeChange, error) { return client().Set(ctx, name, req) })
 	}

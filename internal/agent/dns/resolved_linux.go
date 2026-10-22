@@ -21,7 +21,8 @@ const (
 	resolvedPath = dbus.ObjectPath("/org/freedesktop/resolve1")
 	managerIface = "org.freedesktop.resolve1.Manager"
 	linkIface    = "org.freedesktop.resolve1.Link"
-	afInet       = 2 // AF_INET
+	afInet       = 2  // AF_INET
+	afInet6      = 10 // AF_INET6
 	// busTimeout bounds each registrar call, so a hung resolved cannot
 	// hold up the apply.
 	busTimeout = 5 * time.Second
@@ -158,7 +159,11 @@ func (r *resolved) Set(ctx context.Context, iface string, reg Registration) erro
 	}
 	addrs := []linkDNS{}
 	for _, a := range reg.DNS {
-		addrs = append(addrs, linkDNS{Family: afInet, Address: a.AsSlice()})
+		family := afInet
+		if a.Is6() {
+			family = afInet6 // an IPv6-only node's resolver (M8)
+		}
+		addrs = append(addrs, linkDNS{Family: int32(family), Address: a.AsSlice()})
 	}
 	domains := []linkDomain{}
 	for _, d := range reg.Domains {

@@ -276,8 +276,9 @@ func TestAgentJoinTakesTheTokenFromTheEnvironment(t *testing.T) {
 		t.Fatalf("no token: %d %s", code, errOut)
 	}
 	e, out, errb := testEnv(map[string]string{"MESHCTL_TOKEN": testfix.Token})
-	code := run(context.Background(), e, []string{"agent", "join", "--server", srv.URL, "--data", t.TempDir(), "--no-service"})
-	if code != exitOK || got.Token != testfix.Token || !strings.Contains(out.String(), "joined") {
+	code := run(context.Background(), e, []string{"agent", "join", "--server", srv.URL, "--data", t.TempDir(), "--no-service",
+		"--endpoint6", "[2001:db8::10]:51820"})
+	if code != exitOK || got.Token != testfix.Token || !strings.Contains(out.String(), "joined") || got.Endpoint6 != "[2001:db8::10]:51820" {
 		t.Fatalf("join: %d %q\n%s%s", code, got.Token, out, errb)
 	}
 	if strings.Contains(out.String()+errb.String(), testfix.Token) {

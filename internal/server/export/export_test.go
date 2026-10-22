@@ -148,6 +148,73 @@ func TestToSnapshotRefusesHostileDocuments(t *testing.T) {
 	}
 }
 
+// dualSnapshot is snapshot() with IPv6 (M8): the prefix, the NAS's IPv6
+// address and containers, an IPv6 endpoint on vps-1, an IPv6-only laptop
+// and an IPv6 record.
+func dualSnapshot() store.Snapshot {
+	s := snapshot()
+	s.Settings[store.SettingMeshCIDR6] = testfix.MeshCIDR6
+	s.Settings[store.SettingUpstreamDNS] = "2606:4700:4700::1111,9.9.9.9"
+	s.Nodes[0].MeshIP6, s.Nodes[0].ContainerSubnet6 = testfix.NAS.MeshIP6, testfix.ContainerSubnet6
+	s.Nodes[1].MeshIP6, s.Nodes[1].Endpoint6 = testfix.VPS1.MeshIP6, "[2001:db8::10]:51820"
+	s.Nodes = append(s.Nodes, store.SnapNode{ID: 5, Name: "laptop", Role: "spoke", MeshIP6: testfix.Laptop.MeshIP6, Family: "ipv6",
+		ListenPort: 51820, Keepalive: 25, MTU: 1420})
+	s.DNS = append(s.DNS, store.DNSRecord{ID: 2, Name: "printer", IP6: "fd10:77::1:200"})
+	return s
+}
+
+func TestDualStackExport(t *testing.T) {
+	in := dualSnapshot()
+	var b bytes.Buffer
+	if err := Write(&b, FromSnapshot(in)); err != nil {
+		t.Fatal(err)
+	}
+	out := b.String()
+	for _, want := range []string{"mesh_cidr6: " + testfix.MeshCIDR6, "mesh_ip6: " + testfix.NAS.MeshIP6, "container_subnet6: " + testfix.ContainerSubnet6,
+		"[2001:db8::10]:51820", "ip_family: ipv6", "ip6: fd10:77::1:200"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("export lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Count(out, "mesh_ip:") != 2 {
+		t.Errorf("the IPv6-only laptop must have no mesh_ip:\n%s", out)
+	}
+	d, err := Read(&b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := ToSnapshot(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []store.SnapNode{in.Nodes[1], in.Nodes[0], in.Nodes[2]} // by id
+	if !reflect.DeepEqual(got.Nodes, want) || got.DNS[1].IP6 != "fd10:77::1:200" || got.DNS[1].IP != "" ||
+		got.Settings[store.SettingMeshCIDR6] != testfix.MeshCIDR6 || got.Settings[store.SettingUpstreamDNS] != in.Settings[store.SettingUpstreamDNS] {
+		t.Fatalf("round trip:\n%+v\nwant\n%+v", got.Nodes, want)
+	}
+
+	for name, edit := range map[string]func(*Document){
+		"bad mesh ip6":         func(d *Document) { d.Nodes[1].MeshIP6 = "fd10:77::1:1:2:3:4:5:6" },
+		"mesh ip6 is IPv4":     func(d *Document) { d.Nodes[1].MeshIP6 = "10.77.1.1" },
+		"mesh ip6 injection":   func(d *Document) { d.Nodes[1].MeshIP6 = "fd10:77::1:1\nrole: server" },
+		"no address":           func(d *Document) { d.Nodes[2].MeshIP6 = "" },
+		"unknown family":       func(d *Document) { d.Nodes[2].Family = "both" },
+		"endpoint6 is IPv4":    func(d *Document) { d.Nodes[0].Endpoint6 = testfix.VPS1.Endpoint },
+		"container6 injection": func(d *Document) { d.Nodes[1].ContainerSubnet6 = testfix.ContainerSubnet6 + "\nrole: server" },
+		"container6 is IPv4":   func(d *Document) { d.Nodes[1].ContainerSubnet6 = testfix.ContainerSubnet },
+		"record ip6 is IPv4":   func(d *Document) { d.DNS[1].IP6 = "10.77.1.200" },
+		"record with node ip6": func(d *Document) { d.DNS[0].IP6 = "fd10:77::1:9" },
+		"mesh cidr6 host bits": func(d *Document) { d.Settings[store.SettingMeshCIDR6] = "fd10:77::1/64" },
+		"upstream injection":   func(d *Document) { d.Settings[store.SettingUpstreamDNS] = "2606:4700:4700::1111;id" },
+	} {
+		d := FromSnapshot(dualSnapshot())
+		edit(&d)
+		if _, err := ToSnapshot(d); err == nil || !strings.Contains(err.Error(), "nothing was imported") {
+			t.Errorf("%s: ToSnapshot = %v", name, err)
+		}
+	}
+}
+
 // An export made before the mesh firewall imports its custom rules as
 // policies, in their order, above allow-all.
 func TestToSnapshotReadsAnOlderExport(t *testing.T) {

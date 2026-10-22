@@ -1,6 +1,7 @@
 // Package routes keeps the routes on the mesh interface equal to the peers'
-// AllowedIPs, as wg-quick does (spec S7.2), minus 0.0.0.0/0: exit mode (M3)
-// routes the default by policy, never in the main table.
+// AllowedIPs, as wg-quick does (spec S7.2), of both families, minus the
+// default routes 0.0.0.0/0 and ::/0: exit mode (M3) routes the default by
+// policy, never in the main table.
 //
 // Routes the agent installs carry protocol 201 (amendment A18), so Sync only
 // ever lists, and therefore only ever removes, the agent's own routes.
@@ -26,7 +27,7 @@ type Table interface {
 	Del(link string, p netip.Prefix) error
 }
 
-var defaultRoute = netip.MustParsePrefix("0.0.0.0/0")
+var defaultRoutes = []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0")}
 
 // ExitPrefixes are the split default routes exit mode puts on the tunnel
 // where it routes by table instead of by policy (Windows): more specific
@@ -38,7 +39,7 @@ var ExitPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("::/1"), netip.MustParsePrefix("8000::/1"),
 }
 
-// Desired is every peer's AllowedIPs except the default route, sorted and
+// Desired is every peer's AllowedIPs except the default routes, sorted and
 // without duplicates.
 func Desired(cfg proto.NodeConfig) ([]netip.Prefix, error) {
 	var out []netip.Prefix
@@ -48,7 +49,7 @@ func Desired(cfg proto.NodeConfig) ([]netip.Prefix, error) {
 			if err != nil {
 				return nil, fmt.Errorf("peer %q: allowed ip %q: %w", p.Name, s, err)
 			}
-			if pf != defaultRoute {
+			if !slices.Contains(defaultRoutes, pf) {
 				out = append(out, pf)
 			}
 		}

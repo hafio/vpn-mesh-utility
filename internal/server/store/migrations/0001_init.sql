@@ -1,6 +1,9 @@
 -- 0001_init: the v1 schema (spec S8.2 plus the amendments in docs/spec.md).
 -- Applied once, inside one transaction, by store.migrate. Never edit a
--- shipped migration; add NNNN_<name>.sql instead.
+-- shipped migration; add NNNN_<name>.sql instead. The one exception, made
+-- before v1.0 with the owner's leave: mesh_ip became nullable here for
+-- IPv6-only nodes (M8, 0008), since SQLite cannot drop a NOT NULL; a
+-- database from an earlier release candidate keeps it.
 
 -- Multiple meshes per server are P2: the column exists now, with one row.
 CREATE TABLE meshes (
@@ -20,8 +23,8 @@ CREATE TABLE nodes (
   hostname        TEXT    NOT NULL DEFAULT '',
   wg_backend      TEXT    NOT NULL DEFAULT '',
   agent_version   TEXT    NOT NULL DEFAULT '',
-  mesh_ip         TEXT    NOT NULL,
-  mesh_ip6        TEXT,                                -- reserved (P2: IPv6)
+  mesh_ip         TEXT,                                -- NULL: IPv6 only (M8)
+  mesh_ip6        TEXT,                                -- IPv6 (M8, 0008)
   wg_pubkey       TEXT,
   identity_pubkey TEXT,
   endpoint        TEXT    NOT NULL DEFAULT '',         -- servers: public IPv4:port

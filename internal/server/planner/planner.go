@@ -36,9 +36,18 @@
 //     firewall, and its mesh zone lets the whole mesh through: the policy,
 //     not the zone, decides what crosses. Spokes enforce nothing, since
 //     every packet between two nodes crosses a server (amendment A43).
+//   - Dual stack (M8): a node has an IPv4 mesh address, an IPv6 one, or
+//     both, each allocated on its own. Two nodes route each other the
+//     families both have, relays are chosen per family (a relay must have
+//     it), and a node dials a server's endpoint in a family its ip_family
+//     allows -- IPv4 first, the IPv6 endpoint as the fallback. An exit
+//     carries ::/0 too when both ends have IPv6 and the exit has an IPv6
+//     endpoint (public IPv6). A mesh without an IPv6 prefix plans exactly
+//     as before.
 package planner
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -52,6 +61,8 @@ import (
 // Input is the desired state of the mesh.
 type Input struct {
 	MeshCIDR netip.Prefix
+	// MeshCIDR6 is the mesh's IPv6 prefix (M8); invalid without one.
+	MeshCIDR6 netip.Prefix
 	// DefaultHub is the hub for spokes without a usable primary hub; 0 means
 	// the lowest-id server.
 	DefaultHub int64
@@ -73,11 +84,12 @@ type Input struct {
 }
 
 // Record is a custom name in the mesh zone: an alias of a node (Node, which
-// follows its mesh IP) or a fixed IP.
+// follows its mesh addresses) or a fixed IP, IP6 or both.
 type Record struct {
 	Name string
 	Node int64
 	IP   netip.Addr
+	IP6  netip.Addr
 }
 
 // Node is the planner's view of one node.
@@ -106,22 +118,144 @@ type Node struct {
 	// (amendment A40): the pairs it relays go through another hub. It stays
 	// a peer of everyone, so direct traffic resumes when it is back.
 	Down bool
+	// The IPv6 side (M8): MeshIP6 is invalid when the node has none;
+	// Family is proto.FamilyDual (or empty), FamilyIPv4 or FamilyIPv6;
+	// Endpoint6 a server's public [IPv6]:port; Containers6 its containers'
+	// /112, invalid unless their IPv6 is on the mesh.
+	MeshIP6     netip.Addr
+	Family      string
+	Endpoint6   netip.AddrPort
+	Containers6 netip.Prefix
+	// NoIPv4 and NoIPv6 say the node's agent reported that its host cannot
+	// use that family (M8): the plan leaves it out for the node (usable).
+	NoIPv4, NoIPv6 bool
 }
+
+// fam is a set of address families.
+type fam uint8
+
+const (
+	f4 fam = 1 << iota
+	f6
+)
 
 // active nodes are enrolled, enabled and have a key: the only ones that get
 // a config or appear in anyone's peers.
 func (n Node) active() bool { return n.Enrolled && !n.Disabled && n.WGPubKey != "" }
 
-func (n Node) prefix() string { return netip.PrefixFrom(n.MeshIP, 32).String() }
+// usable is n as the mesh plans it (M8): without the family its agent
+// reported its host cannot use -- that family's address, endpoint and
+// containers -- so no peer routes it there, DNS does not name it there and
+// nobody dials it there. ok is false when n cannot do without the family
+// (none would be left, or it is a server or has a container network, which
+// need IPv4); it is then planned as configured.
+func (n Node) usable() (u Node, ok bool) {
+	switch {
+	case !n.NoIPv4 && !n.NoIPv6:
+		return n, true
+	case n.NoIPv4 && (n.NoIPv6 || !n.has6() || n.Role == proto.RoleServer || n.Containers.IsValid()):
+		return n, false
+	case n.NoIPv6 && !n.has4():
+		return n, false
+	case n.NoIPv6:
+		n.MeshIP6, n.Endpoint6, n.Containers6, n.Family = netip.Addr{}, netip.AddrPort{}, netip.Prefix{}, proto.FamilyIPv4
+	default:
+		n.MeshIP, n.Endpoint, n.Family = netip.Addr{}, netip.AddrPort{}, proto.FamilyIPv6
+	}
+	return n, true
+}
 
-// allowed is what a peer routes to n: its mesh IP, and its containers'
-// subnet when they are on the mesh.
-func (n Node) allowed() []string {
-	out := []string{n.prefix()}
-	if n.Containers.IsValid() {
-		out = append(out, n.Containers.String())
+// usable is in with every node as the mesh plans it (Node.usable).
+func (in Input) usable() Input {
+	in.Nodes = slices.Clone(in.Nodes) // the caller's slice stays as it was
+	for i, n := range in.Nodes {
+		if u, ok := n.usable(); ok {
+			in.Nodes[i] = u
+		}
+	}
+	return in
+}
+
+func (n Node) has4() bool { return n.MeshIP.Is4() }
+func (n Node) has6() bool { return n.MeshIP6.IsValid() }
+
+// fams is the families of n's mesh addresses.
+func (n Node) fams() fam {
+	var f fam
+	if n.has4() {
+		f |= f4
+	}
+	if n.has6() {
+		f |= f6
+	}
+	return f
+}
+
+// dials is the families n may reach a server's endpoint in (its
+// ip_family).
+func (n Node) dials() fam {
+	switch n.Family {
+	case proto.FamilyIPv4:
+		return f4
+	case proto.FamilyIPv6:
+		return f6
+	}
+	return f4 | f6
+}
+
+func (n Node) prefix() string  { return netip.PrefixFrom(n.MeshIP, 32).String() }
+func (n Node) prefix6() string { return netip.PrefixFrom(n.MeshIP6, 128).String() }
+
+// address and address6 are n's mesh addresses as an interface carries
+// them, "" for a family it does not have.
+func (n Node) address() string {
+	if !n.has4() {
+		return ""
+	}
+	return n.prefix()
+}
+
+func (n Node) address6() string {
+	if !n.has6() {
+		return ""
+	}
+	return n.prefix6()
+}
+
+// allowed is what a peer routes to n in the families f: its mesh
+// addresses, and its containers' subnets when they are on the mesh.
+func (n Node) allowed(f fam) []string {
+	var out []string
+	if f&f4 != 0 && n.has4() {
+		out = append(out, n.prefix())
+		if n.Containers.IsValid() {
+			out = append(out, n.Containers.String())
+		}
+	}
+	if f&f6 != 0 && n.has6() {
+		out = append(out, n.prefix6())
+		if n.Containers6.IsValid() {
+			out = append(out, n.Containers6.String())
+		}
 	}
 	return out
+}
+
+// endpoints is where n reaches server s: the endpoint in a family n dials,
+// IPv4 first, and the other family's as the fallback. primary is empty
+// when s has no endpoint n may use.
+func endpoints(n, s Node) (primary, fallback string) {
+	var four, six string
+	if n.dials()&f4 != 0 && s.Endpoint.IsValid() {
+		four = s.Endpoint.String()
+	}
+	if n.dials()&f6 != 0 && s.Endpoint6.IsValid() {
+		six = s.Endpoint6.String()
+	}
+	if four != "" {
+		return four, six
+	}
+	return six, ""
 }
 
 func (n Node) mode() string {
@@ -148,6 +282,7 @@ func Compute(in Input) (map[int64]proto.NodeConfig, []Problem, error) {
 		return nil, problems, errors.New("the mesh plan has errors:\n  " + strings.Join(errs, "\n  "))
 	}
 
+	in = in.usable()
 	p := newPlan(in)
 	p.policy = CompilePolicy(in)
 	out := map[int64]proto.NodeConfig{}
@@ -195,7 +330,7 @@ func newPlan(in Input) *plan {
 		}
 		switch n.Role {
 		case proto.RoleServer:
-			if n.Endpoint.IsValid() {
+			if n.Endpoint.IsValid() || n.Endpoint6.IsValid() {
 				p.servers = append(p.servers, n)
 				if n.CanExit {
 					p.exits = append(p.exits, n.Name)
@@ -210,20 +345,32 @@ func newPlan(in Input) *plan {
 	// is not is left out until it is.
 	for _, n := range p.nodes {
 		if n.active() {
-			p.records = append(p.records, proto.Record{Name: n.Name, IP: n.MeshIP.String()})
+			p.records = append(p.records, record(n.Name, n.MeshIP, n.MeshIP6))
 		}
 	}
 	for _, r := range in.Records {
 		target, ok := p.byID[r.Node]
 		switch {
 		case r.Node == 0:
-			p.records = append(p.records, proto.Record{Name: r.Name, IP: r.IP.String()})
+			p.records = append(p.records, record(r.Name, r.IP, r.IP6))
 		case ok && target.active():
-			p.records = append(p.records, proto.Record{Name: r.Name, IP: target.MeshIP.String()})
+			p.records = append(p.records, record(r.Name, target.MeshIP, target.MeshIP6))
 		}
 	}
 	sort.Slice(p.records, func(i, j int) bool { return p.records[i].Name < p.records[j].Name })
 	return p
+}
+
+// record is a name with the addresses that are valid.
+func record(name string, ip, ip6 netip.Addr) proto.Record {
+	r := proto.Record{Name: name}
+	if ip.IsValid() {
+		r.IP = ip.String()
+	}
+	if ip6.IsValid() {
+		r.IP6 = ip6.String()
+	}
+	return r
 }
 
 // planned reports whether id is a server that appears in peer lists.
@@ -252,47 +399,75 @@ func (p *plan) hub(n Node) (int64, bool) {
 	return p.servers[0].ID, true
 }
 
-// relay is the server that carries traffic between two non-server nodes. It
-// is symmetric: relay(a, b) == relay(b, a). A pair with a phone relays
-// through the phone's hub, which its profile names. Any other pair relays
-// through the lower-id node's hub; when the failover monitor judged that
-// one down (amendment A40), through the other node's hub, else the default
-// hub, else the lowest-id server that is up -- each chosen from the pair
-// and the mesh alone, so both ends agree.
-func (p *plan) relay(a, b Node) (int64, bool) {
+// relay is the server that carries traffic of family f between two
+// non-server nodes. It is symmetric: relay(a, b, f) == relay(b, a, f). A
+// pair with a phone relays through the phone's hub, which its profile
+// names. Any other pair relays through the lower-id node's hub; when the
+// failover monitor judged that one down (amendment A40), or it lacks f or
+// one of the two cannot dial it (M8), through the other node's hub, else
+// the default hub, else the lowest-id server that qualifies -- each chosen
+// from the pair and the mesh alone, so both ends agree.
+func (p *plan) relay(a, b Node, f fam) (int64, bool) {
+	fits := func(id int64) bool {
+		s := p.byID[id]
+		pa, _ := endpoints(a, s)
+		pb, _ := endpoints(b, s)
+		return s.fams()&f != 0 && pa != "" && pb != ""
+	}
 	switch {
 	case a.Role == proto.RolePhone:
-		return p.hub(a)
+		h, ok := p.hub(a)
+		return h, ok && fits(h)
 	case b.Role == proto.RolePhone:
-		return p.hub(b)
+		h, ok := p.hub(b)
+		return h, ok && fits(h)
 	}
 	if b.ID < a.ID {
 		a, b = b, a
 	}
+	up := func(id int64) bool { return fits(id) && !p.byID[id].Down }
 	first, ok := p.hub(a)
-	if !ok || !p.byID[first].Down {
-		return first, ok
+	if !ok {
+		return 0, false
 	}
-	if other, _ := p.hub(b); !p.byID[other].Down {
+	if up(first) {
+		return first, true
+	}
+	if other, _ := p.hub(b); up(other) {
 		return other, true
 	}
-	if d := p.in.DefaultHub; d != 0 && p.planned(d) && !p.byID[d].Down {
+	if d := p.in.DefaultHub; d != 0 && p.planned(d) && up(d) {
 		return d, true
 	}
 	for _, s := range p.servers {
-		if !s.Down {
+		if up(s.ID) {
 			return s.ID, true
 		}
 	}
-	return first, true // every server is down: none is better
+	// Every server that would do is down: none is better.
+	if fits(first) {
+		return first, true
+	}
+	for _, s := range p.servers {
+		if fits(s.ID) {
+			return s.ID, true
+		}
+	}
+	return 0, false
 }
 
-// relays reports whether server id carries traffic for any pair.
-func (p *plan) relays(id int64) bool {
+// relays reports whether server id carries traffic of a family in f for
+// any pair.
+func (p *plan) relays(id int64, f fam) bool {
 	for i, a := range p.others {
 		for _, b := range p.others[i+1:] {
-			if r, ok := p.relay(a, b); ok && r == id {
-				return true
+			for _, x := range []fam{f4, f6} {
+				if f&x == 0 || a.fams()&b.fams()&x == 0 {
+					continue
+				}
+				if r, ok := p.relay(a, b, x); ok && r == id {
+					return true
+				}
 			}
 		}
 	}
@@ -303,29 +478,43 @@ func (p *plan) server(n Node) proto.NodeConfig {
 	port := n.ListenPort
 	c := proto.NodeConfig{
 		Node:      proto.Self{ID: n.ID, Name: n.Name, Role: n.Role},
-		Interface: proto.Interface{Address: n.prefix(), ListenPort: &port, MTU: n.MTU},
+		Interface: proto.Interface{Address: n.address(), Address6: n.address6(), ListenPort: &port, MTU: n.MTU},
 		Peers:     []proto.Peer{},
 	}
 	for _, s := range p.servers {
-		if s.ID == n.ID {
+		common := n.fams() & s.fams()
+		if s.ID == n.ID || common == 0 {
+			continue
+		}
+		// Either end may open the tunnel: one that cannot dial the other
+		// lists it without an endpoint and waits for its handshake.
+		primary, fallback := endpoints(n, s)
+		if back, _ := endpoints(s, n); primary == "" && back == "" {
 			continue
 		}
 		c.Peers = append(c.Peers, proto.Peer{
-			Name: s.Name, PublicKey: s.WGPubKey, Endpoint: s.Endpoint.String(),
-			AllowedIPs: sortPrefixes(s.allowed()),
+			Name: s.Name, PublicKey: s.WGPubKey, Endpoint: primary, Fallback: fallback,
+			AllowedIPs: sortPrefixes(s.allowed(common)),
 		})
 	}
 	// Spokes and phones are planned only into servers others can reach: an
-	// endpointless server has no spokes pointing at it, so it lists none.
+	// endpointless server has no spokes pointing at it, so it lists none --
+	// nor one that cannot dial it, or shares no family with it (M8).
 	if p.planned(n.ID) {
 		for _, o := range p.others {
-			c.Peers = append(c.Peers, proto.Peer{Name: o.Name, PublicKey: o.WGPubKey, AllowedIPs: sortPrefixes(o.allowed())})
+			common := n.fams() & o.fams()
+			if dial, _ := endpoints(o, n); common == 0 || dial == "" {
+				continue
+			}
+			c.Peers = append(c.Peers, proto.Peer{Name: o.Name, PublicKey: o.WGPubKey, AllowedIPs: sortPrefixes(o.allowed(common))})
 		}
 	}
 	sortPeers(c.Peers)
 
-	relay := p.relays(n.ID)
-	c.Sysctl = p.sysctl(n, relay || n.CanExit, false)
+	relay4, relay6 := p.relays(n.ID, f4), p.relays(n.ID, f6)
+	relay := relay4 || relay6
+	exit6 := n.CanExit && n.Endpoint6.IsValid() && p.in.MeshCIDR6.IsValid() && n.has6()
+	c.Sysctl = p.sysctl(n, relay4 || n.CanExit, relay6 || exit6, false)
 	c.DNS = p.dns(n, false)
 	c.Containers = p.containers(n)
 	c.Policy = p.policy
@@ -338,6 +527,11 @@ func (p *plan) server(n Node) proto.NodeConfig {
 		Rules:       []proto.FWRule{{Zone: proto.ZonePublic, Proto: "udp", Port: n.ListenPort, Note: "wireguard"}},
 		Relay:       relay,
 		ExitGateway: n.CanExit,
+	}
+	// firewalld's policy masquerade is IPv4 only (trial 8a, F4): an exit
+	// with public IPv6 masquerades the mesh's IPv6 prefix by a rich rule.
+	if exit6 {
+		fw.Exit6 = p.in.MeshCIDR6.String()
 	}
 	// The containers' bridge forwards to and from wg0 like a relay.
 	if n.Containers.IsValid() {
@@ -353,7 +547,9 @@ func (p *plan) server(n Node) proto.NodeConfig {
 	return c
 }
 
-func (p *plan) containers(n Node) *proto.Containers { return ContainerNetwork(p.in.MeshCIDR, n) }
+func (p *plan) containers(n Node) *proto.Containers {
+	return ContainerNetwork(p.in.MeshCIDR, p.in.MeshCIDR6, n)
+}
 
 // ServerIPs are the mesh IPs of the servers in peer lists, by id: the
 // resolvers a Swarm service on the mesh uses, whose tasks run on several
@@ -369,8 +565,11 @@ func ServerIPs(in Input) []string {
 // ContainerNetwork is n's container network in mesh (amendment A37), nil
 // when its containers are not on the mesh: .1 of its subnet is the
 // runtime's bridge, .2 the agent in container mode, the upper half the
-// runtime's range, and the network on the link the whole mesh.
-func ContainerNetwork(mesh netip.Prefix, n Node) *proto.Containers {
+// runtime's range, and the network on the link the whole mesh. Its IPv6
+// side, when the containers' IPv6 is on the mesh (M8), is the same shape
+// in its /112 of mesh6: ::1 the bridge, ::2 the agent, the upper half the
+// range, mesh6 on the link.
+func ContainerNetwork(mesh, mesh6 netip.Prefix, n Node) *proto.Containers {
 	if !n.Containers.IsValid() {
 		return nil
 	}
@@ -385,21 +584,41 @@ func ContainerNetwork(mesh netip.Prefix, n Node) *proto.Containers {
 	if n.inContainer() {
 		k.Gateway = at(2).String()
 	}
+	if n.Containers6.IsValid() && mesh6.IsValid() {
+		b := n.Containers6.Addr().As16()
+		at6 := func(host uint16) netip.Addr {
+			binary.BigEndian.PutUint16(b[14:16], host)
+			return netip.AddrFrom16(b)
+		}
+		k.Subnet6, k.Network6 = n.Containers6.String(), mesh6.String()
+		k.Range6, k.Bridge6 = netip.PrefixFrom(at6(0x8000), 113).String(), at6(1).String()
+		k.Gateway6 = k.Bridge6
+		if n.inContainer() {
+			k.Gateway6 = at6(2).String()
+		}
+	}
 	return k
 }
 
-// sysctl is the kernel settings n needs, by key: forwarding when it relays,
-// is an exit or routes containers; proxy ARP for a container-mode gateway
-// (the compose file sets both there, so the agent only checks them);
-// src_valid_mark in exit mode. A host-mode bridge's own settings are the
-// agent's containers step, which runs once the bridge exists.
-func (p *plan) sysctl(n Node, forward, exitMode bool) []proto.Sysctl {
+// sysctl is the kernel settings n needs, by key: forwarding of a family
+// when it relays it, exits it or routes containers in it; proxy ARP and
+// proxy NDP for a container-mode gateway (the compose file sets them
+// there, so the agent only checks them); src_valid_mark in exit mode. A
+// host-mode bridge's own settings are the agent's containers step, which
+// runs once the bridge exists.
+func (p *plan) sysctl(n Node, forward, forward6, exitMode bool) []proto.Sysctl {
 	on := map[string]bool{}
-	if forward || n.Containers.IsValid() {
+	if (forward || n.Containers.IsValid()) && n.has4() {
 		on[proto.SysctlIPForward] = true
+	}
+	if (forward6 || n.Containers6.IsValid()) && n.has6() {
+		on[proto.SysctlIPv6Forward] = true
 	}
 	if n.Containers.IsValid() && n.inContainer() {
 		on[proto.SysctlProxyARP] = true
+	}
+	if n.Containers6.IsValid() && n.inContainer() {
+		on[proto.SysctlProxyNDP] = true
 	}
 	if exitMode {
 		on[proto.SysctlSrcValidMark] = true
@@ -441,6 +660,9 @@ func (p *plan) dns(n Node, exitOn bool) *proto.DNS {
 		if o.active() && o.Containers.IsValid() {
 			forward = append(forward, o.Containers.String())
 		}
+		if o.active() && o.Containers6.IsValid() {
+			forward = append(forward, o.Containers6.String())
+		}
 	}
 	if n.Role == proto.RoleServer {
 		for _, o := range p.others {
@@ -448,7 +670,7 @@ func (p *plan) dns(n Node, exitOn bool) *proto.DNS {
 				continue
 			}
 			if hub, ok := p.hub(o); ok && hub == n.ID {
-				forward = append(forward, o.prefix())
+				forward = append(forward, o.allowed(f4|f6)...)
 			}
 		}
 	}
@@ -461,28 +683,46 @@ func (p *plan) dns(n Node, exitOn bool) *proto.DNS {
 func (p *plan) spoke(n Node) proto.NodeConfig {
 	c := proto.NodeConfig{
 		Node:      proto.Self{ID: n.ID, Name: n.Name, Role: n.Role},
-		Interface: proto.Interface{Address: n.prefix(), MTU: n.MTU, FwMark: proto.FwMark},
+		Interface: proto.Interface{Address: n.address(), Address6: n.address6(), MTU: n.MTU, FwMark: proto.FwMark},
 		Peers:     []proto.Peer{},
 	}
 	exitOn := false
 	for _, s := range p.servers {
-		allowed := s.allowed()
+		primary, fallback := endpoints(n, s)
+		common := n.fams() & s.fams()
+		if primary == "" || common == 0 {
+			continue // no tunnel to it, or nothing to route through one
+		}
+		allowed := s.allowed(common)
 		for _, o := range p.others {
 			if o.ID == n.ID {
 				continue
 			}
-			if r, ok := p.relay(n, o); ok && r == s.ID {
-				allowed = append(allowed, o.allowed()...)
+			for _, f := range []fam{f4, f6} {
+				if common&o.fams()&f == 0 {
+					continue
+				}
+				if r, ok := p.relay(n, o, f); ok && r == s.ID {
+					allowed = append(allowed, o.allowed(f)...)
+				}
 			}
 		}
 		// Only containers are on the mesh in container mode: the host's own
-		// traffic has no tunnel to take, so there is no exit (Check).
+		// traffic has no tunnel to take, so there is no exit (Check). IPv6
+		// goes through the exit when both ends have it and the exit has
+		// public IPv6 (an IPv6 endpoint); otherwise the agent holds it back.
 		if n.ExitVia == s.ID && s.CanExit && !n.inContainer() {
-			allowed = append(allowed, "0.0.0.0/0")
-			exitOn = true
+			if common&f4 != 0 {
+				allowed = append(allowed, "0.0.0.0/0")
+				exitOn = true
+			}
+			if common&f6 != 0 && s.Endpoint6.IsValid() && p.in.MeshCIDR6.IsValid() {
+				allowed = append(allowed, "::/0")
+				exitOn = true
+			}
 		}
 		c.Peers = append(c.Peers, proto.Peer{
-			Name: s.Name, PublicKey: s.WGPubKey, Endpoint: s.Endpoint.String(),
+			Name: s.Name, PublicKey: s.WGPubKey, Endpoint: primary, Fallback: fallback,
 			AllowedIPs: sortPrefixes(allowed), Keepalive: n.Keepalive,
 		})
 	}
@@ -495,7 +735,7 @@ func (p *plan) spoke(n Node) proto.NodeConfig {
 	}
 	// src_valid_mark is wg-quick's companion setting for fwmark policy
 	// routing in exit mode.
-	c.Sysctl = p.sysctl(n, false, exitOn)
+	c.Sysctl = p.sysctl(n, false, false, exitOn)
 	c.DNS = p.dns(n, exitOn)
 	c.Containers = p.containers(n)
 	return c
@@ -509,17 +749,30 @@ func (p *plan) spoke(n Node) proto.NodeConfig {
 func (p *plan) phone(n Node) proto.NodeConfig {
 	c := proto.NodeConfig{
 		Node:      proto.Self{ID: n.ID, Name: n.Name, Role: n.Role},
-		Interface: proto.Interface{Address: n.prefix(), MTU: n.MTU},
+		Interface: proto.Interface{Address: n.address(), Address6: n.address6(), MTU: n.MTU},
 		Peers:     []proto.Peer{},
 	}
 	hub, _ := p.hub(n)
 	for _, s := range p.servers {
-		allowed := sortPrefixes(s.allowed())
+		// A profile has one endpoint per peer: no fallback.
+		primary, _ := endpoints(n, s)
+		common := n.fams() & s.fams()
+		if primary == "" || common == 0 {
+			continue
+		}
+		allowed := sortPrefixes(s.allowed(common))
 		if s.ID == hub {
-			allowed = []string{p.in.MeshCIDR.String()}
+			var whole []string
+			if common&f4 != 0 {
+				whole = append(whole, p.in.MeshCIDR.String())
+			}
+			if common&f6 != 0 {
+				whole = append(whole, p.in.MeshCIDR6.String())
+			}
+			allowed = sortPrefixes(whole)
 		}
 		c.Peers = append(c.Peers, proto.Peer{
-			Name: s.Name, PublicKey: s.WGPubKey, Endpoint: s.Endpoint.String(),
+			Name: s.Name, PublicKey: s.WGPubKey, Endpoint: primary,
 			AllowedIPs: allowed, Keepalive: n.Keepalive,
 		})
 	}

@@ -210,9 +210,11 @@ func SortPrefixes(ps []netip.Prefix) {
 type Link struct {
 	Exists bool
 	// Ours means the interface carries Alias.
-	Ours  bool
-	MTU   int
-	Up    bool
+	Ours bool
+	MTU  int
+	Up   bool
+	// Addrs are its addresses of both families, without the IPv6
+	// link-local ones the host gives an interface itself.
 	Addrs []netip.Prefix
 }
 
@@ -279,28 +281,30 @@ func SyncLink(h Host, name string, mtu int) (int, error) {
 	return n, nil
 }
 
-// SyncAddr makes p the interface's only IPv4 address.
-func SyncAddr(h Host, name string, p netip.Prefix) (int, error) {
+// SyncAddrs makes want the interface's only addresses: its mesh IPv4 and
+// IPv6 ones (M8), either of them absent. Addresses are added before others
+// are removed.
+func SyncAddrs(h Host, name string, want []netip.Prefix) (int, error) {
 	l, err := h.Link(name)
 	if err != nil {
 		return 0, err
 	}
-	n, has := 0, false
-	for _, a := range l.Addrs {
-		if a == p {
-			has = true
-			continue
+	n := 0
+	for _, p := range want {
+		if !slices.Contains(l.Addrs, p) {
+			if err := h.AddAddr(name, p); err != nil {
+				return n, err
+			}
+			n++
 		}
-		if err := h.DelAddr(name, a); err != nil {
-			return n, err
-		}
-		n++
 	}
-	if !has {
-		if err := h.AddAddr(name, p); err != nil {
-			return n, err
+	for _, a := range l.Addrs {
+		if !slices.Contains(want, a) {
+			if err := h.DelAddr(name, a); err != nil {
+				return n, err
+			}
+			n++
 		}
-		n++
 	}
 	return n, nil
 }

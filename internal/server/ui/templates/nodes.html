@@ -22,6 +22,7 @@
 </select></label>
 <label>Mesh IP <input name="ip" value="{{.IP}}" placeholder="next free"></label>
 <label>Endpoint (servers) <input name="endpoint" value="{{.Endpoint}}" placeholder="detected at join"></label>
+<label>Endpoint IPv6 (servers) <input name="endpoint6" value="{{.Endpoint6}}" placeholder="[IPv6]:port, optional"></label>
 <label>Listen port (servers) <input name="listen_port" value="{{.ListenPort}}" placeholder="51820"></label>
 <label>Keepalive (spokes, phones) <input name="keepalive" value="{{.Keepalive}}" placeholder="25"></label>
 <label>MTU <input name="mtu" value="{{.MTU}}" placeholder="mesh default"></label>
@@ -33,6 +34,15 @@
 </select></label>
 <label><input type="checkbox" name="containers"{{if .Containers}} checked{{end}}> Its containers on the mesh too (host mode)</label>
 <label>Groups (firewall) <input name="groups" value="{{.Groups}}" placeholder="laptops, office"></label>
+{{- if $.Data.IPv6}}
+<label>Families <select name="ip_family">
+<option value="dual"{{if or (eq .Family "dual") (eq .Family "")}} selected{{end}}>IPv4 and IPv6</option>
+<option value="ipv4"{{if eq .Family "ipv4"}} selected{{end}}>IPv4 only</option>
+<option value="ipv6"{{if eq .Family "ipv6"}} selected{{end}}>IPv6 only</option>
+</select></label>
+<label>Mesh IPv6 <input name="ip6" value="{{.IP6}}" placeholder="next free"></label>
+<label><input type="checkbox" name="containers6"{{if .Containers6}} checked{{end}}> Its containers' IPv6 too</label>
+{{- end}}
 {{- end}}
 <label>Hub (spokes, phones) <select name="hub">
 <option value="">default</option>
