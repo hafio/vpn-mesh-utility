@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -32,6 +33,20 @@ func (l *lab) connects(space, addr string) bool {
 		return err
 	})
 	return err == nil
+}
+
+// waitOrDump waits for cond like eventually, and on a timeout fails with
+// what the relay's kernel holds: the mesh firewall's table and the rest.
+func (l *lab) waitOrDump(within time.Duration, what, space string, cond func() bool) {
+	l.t.Helper()
+	for deadline := time.Now().Add(within); time.Now().Before(deadline); time.Sleep(250 * time.Millisecond) {
+		if cond() {
+			return
+		}
+	}
+	table, _ := exec.Command("ip", "netns", "exec", ns(space), "nft", "-a", "list", "table", "ip", "meshctl").CombinedOutput()
+	tables, _ := exec.Command("ip", "netns", "exec", ns(space), "nft", "list", "tables").CombinedOutput()
+	l.t.Fatalf("not within %s: %s\n--- %s: nft list table ip meshctl ---\n%s\n--- nft list tables ---\n%s", within, what, space, table, tables)
 }
 
 func (l *lab) applyFirewall(doc string) {
@@ -78,9 +93,8 @@ func TestMeshFirewall(t *testing.T) {
     - name: allow-all
       action: allow
 `)
-	eventually(t, 20*time.Second, "the open connection to stop and a new one to be refused", func() bool {
-		return !s.alive("after") && !l.connects(laptop.ns, nas.meshIP+":7000")
-	})
+	l.waitOrDump(20*time.Second, "a new laptop-NAS connection to be refused", "a", func() bool { return !l.connects(laptop.ns, nas.meshIP+":7000") })
+	l.waitOrDump(10*time.Second, "the open laptop-NAS connection to stop", "a", func() bool { return !s.alive("after") })
 	if !l.ping(laptop.ns, nas.meshIP) {
 		t.Fatal("ping no longer crosses the mesh (a system rule)")
 	}

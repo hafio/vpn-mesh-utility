@@ -260,7 +260,7 @@ systemd-resolved would; `Kernel`, the mesh firewall's table by fingerprint, each
 injectable) that apply changes as the kernel would and count every mutation.
 Production code must not import it (`TestModuleBoundaries`). Its own tests
 (`TestNetHasKernelSemantics`, `TestConfigureHasKernelSemantics`, `TestLinksAddressesAndFailures`, `TestRoutesSysctlAndFirewall`,
-`TestPolicyHasKernelSemantics`, `TestDNS`) pin that fidelity -- append versus replace of AllowedIPs,
+`TestPolicyHasKernelSemantics`, `TestDNS`, `TestKernelHoldsOneTable`) pin that fidelity -- append versus replace of AllowedIPs,
 removals, copies, EEXIST and ENOENT -- because every idempotency test depends on it. `Host.SetFail`
 and `Policy.Fail`/`FailOn` inject a failure into one method, also while an agent runs.
 
@@ -287,6 +287,7 @@ and `Policy.Fail`/`FailOn` inject a failure into one method, also while an agent
 | | `TestMeshFirewallStep` | the mesh firewall (amendment A43): in the kernel when the firewall step runs, left alone when unchanged, replaced (re-judging flows) when changed; a config without a policy removes it after the firewall step, keeps it while that step fails (degraded firewall only), a failed removal degrades `policy`; a refused table stops the apply before the firewall step; a node without a mesh firewall refuses a policy, and one for another mesh is not applied |
 | `policy` | `TestCompileGolden` | `testdata/ruleset.golden.txt`: the table of a server, and of one with containers, in nft's spelling with where each rule comes from |
 | | `TestCompileAgreesWithDecide` | for every pair of addresses (servers, spokes, a phone, containers, the mesh's unassigned, outside), protocol and port, forwarded, received and sent: the table admits exactly what `proto.Matcher.Decide` allows, but for traffic within the node and loopback |
+| | `TestCompileMerges` | a rule's addresses and ports merged when the config's overlap, touch or nest; tcp without ports is every port |
 | | `TestCompileRefuses`, `TestRulesetText` | a bad mesh, an address outside it for the node, bad entries, services, ports, actions; one rule in nft's spelling, the count and the fingerprint |
 | | `TestEnforcer` | `Sync` installs once, leaves the same table alone, replaces a changed or foreign one and deletes the mesh flows' conntrack (not on a first install), removes for nil; a failed read, install or removal says which, a failed conntrack deletion does not fail the step |
 | | `TestBuildBatch`, `TestIntervalElems`, `TestExprs` (`nft_linux_test.go`) | the netlink batch: the six chains, the base ones accepting by default; every set added before the rule that looks it up; the fingerprint on the first rule only; interval elements as nft sends them (an end at 0 first, none past the top), and each match's expressions |

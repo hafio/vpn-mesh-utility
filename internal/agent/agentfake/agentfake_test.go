@@ -12,6 +12,7 @@ import (
 	"github.com/hafio/vpn-mesh-utility/internal/agent/containers"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/dns"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/exitmode"
+	"github.com/hafio/vpn-mesh-utility/internal/agent/policy"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/wg"
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
 )
@@ -380,5 +381,44 @@ func TestNetHasKernelSemantics(t *testing.T) {
 	s := &Sysctl{Err: boom}
 	if _, err := s.Apply([]proto.Sysctl{{Key: proto.SysctlIPForward, Value: "1"}}); !errors.Is(err, boom) {
 		t.Errorf("Sysctl with Err = %v", err)
+	}
+}
+
+// The mesh firewall's kernel holds one table by fingerprint, replaces and
+// removes it, counts deleted flows, and fails each call on request.
+func TestKernelHoldsOneTable(t *testing.T) {
+	k := &Kernel{Forgotten: 2}
+	if mark, err := k.Installed(); mark != "" || err != nil {
+		t.Fatalf("an empty kernel = %q, %v", mark, err)
+	}
+	rs := &policy.Ruleset{Mesh: netip.MustParsePrefix("10.77.0.0/16")}
+	if err := k.Replace(rs, "abc"); err != nil {
+		t.Fatal(err)
+	}
+	if table, mark := k.Holds(); table != rs || mark != "abc" || k.Replaces != 1 {
+		t.Fatalf("after Replace: %v %q %d", table, mark, k.Replaces)
+	}
+	if n, err := k.Forget(rs.Mesh); n != 2 || err != nil || k.Forgets != 1 {
+		t.Fatalf("Forget = %d, %v", n, err)
+	}
+	if err := k.Remove(); err != nil {
+		t.Fatal(err)
+	}
+	if mark, _ := k.Installed(); mark != "" {
+		t.Fatalf("after Remove the kernel holds %q", mark)
+	}
+	boom := errors.New("boom")
+	k.ReadErr, k.ReplaceErr, k.RemoveErr, k.ForgetErr = boom, boom, boom, boom
+	if _, err := k.Installed(); !errors.Is(err, boom) {
+		t.Fatal("ReadErr ignored")
+	}
+	if err := k.Replace(rs, "def"); !errors.Is(err, boom) || k.Replaces != 1 {
+		t.Fatal("ReplaceErr ignored, or it replaced anyway")
+	}
+	if err := k.Remove(); !errors.Is(err, boom) {
+		t.Fatal("RemoveErr ignored")
+	}
+	if _, err := k.Forget(rs.Mesh); !errors.Is(err, boom) {
+		t.Fatal("ForgetErr ignored")
 	}
 }

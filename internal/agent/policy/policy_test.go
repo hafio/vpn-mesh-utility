@@ -272,3 +272,21 @@ func TestRulesetText(t *testing.T) {
 		t.Fatalf("String =\n%s\nwant\n%s", got, want)
 	}
 }
+
+// A rule's addresses and ports are merged even when the config's are not
+// (overlapping, touching, inside one another), and tcp without ports is
+// every port.
+func TestCompileMerges(t *testing.T) {
+	p := &proto.Policy{Mesh: testfix.MeshCIDR, Rules: []proto.PolicyRule{{Name: "merge",
+		From:     []string{"10.77.2.3", "10.77.2.1-10.77.2.5", "10.77.2.6"},
+		Services: []proto.Service{{Proto: "tcp"}, {Proto: "udp", Ports: []string{"53", "50-60", "61"}}}, Action: proto.PolicyAllow}}}
+	text := compile(t, p, vps1).Text()
+	for _, want := range []string{
+		"  ip saddr { 10.77.2.1-10.77.2.6 } meta l4proto tcp accept  # merge\n",
+		"  ip saddr { 10.77.2.1-10.77.2.6 } meta l4proto udp th dport { 50-61 } accept  # merge\n",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the table lacks %q:\n%s", want, text)
+		}
+	}
+}
