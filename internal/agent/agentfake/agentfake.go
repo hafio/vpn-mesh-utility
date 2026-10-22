@@ -1,6 +1,7 @@
 // Package agentfake holds in-memory fakes of the agent's host interfaces for
 // tests: a WireGuard host, a routing table, policy routing, sysctls, the
-// firewall and DNS steps, and the container network's host. Each applies changes the way the host would and
+// firewall and DNS steps, the container network's host, and the kernel the
+// mesh firewall's table goes to. Each applies changes the way the host would and
 // counts every mutation, so a test can assert that applying the same config
 // twice changes nothing. Production code never imports it
 // (TestModuleBoundaries).
@@ -19,6 +20,7 @@ import (
 	"github.com/hafio/vpn-mesh-utility/internal/agent/containers"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/dns"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/exitmode"
+	"github.com/hafio/vpn-mesh-utility/internal/agent/policy"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/wg"
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
 )
@@ -334,6 +336,61 @@ func (f *Firewall) Rechecked() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.Rechecks
+}
+
+// Kernel is a fake policy.Kernel: the table it holds, by fingerprint.
+type Kernel struct {
+	mu sync.Mutex
+	// Table is the ruleset installed and Mark its fingerprint; Mark is ""
+	// without a table. Set Mark alone to stand for a table of another.
+	Table *policy.Ruleset
+	Mark  string
+	// Replaces and Forgets count the calls; Forgotten is the flows each
+	// Forget deletes.
+	Replaces, Forgets, Forgotten int
+	// ReadErr, ReplaceErr, RemoveErr and ForgetErr fail those calls.
+	ReadErr, ReplaceErr, RemoveErr, ForgetErr error
+}
+
+func (k *Kernel) Installed() (string, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.Mark, k.ReadErr
+}
+
+func (k *Kernel) Replace(rs *policy.Ruleset, fingerprint string) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.ReplaceErr != nil {
+		return k.ReplaceErr
+	}
+	k.Table, k.Mark = rs, fingerprint
+	k.Replaces++
+	return nil
+}
+
+func (k *Kernel) Remove() error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.RemoveErr != nil {
+		return k.RemoveErr
+	}
+	k.Table, k.Mark = nil, ""
+	return nil
+}
+
+func (k *Kernel) Forget(netip.Prefix) (int, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.Forgets++
+	return k.Forgotten, k.ForgetErr
+}
+
+// Holds is the table the kernel holds now, safely while an agent runs.
+func (k *Kernel) Holds() (*policy.Ruleset, string) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.Table, k.Mark
 }
 
 // DNS is a fake DNS step. It records what each apply asked for, counts a

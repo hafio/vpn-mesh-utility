@@ -256,7 +256,8 @@ mesh firewall included), `TestToSnapshotReadsAnOlderExport` (custom rules become
 `internal/agent/agentfake` holds in-memory fakes of the host (`Host` for links, addresses and
 WireGuard; `Routes`; `Policy` for exit mode's rules and table routes; `Sysctl`; `Firewall`, which
 counts the drift check's `Recheck`; `DNS`, which answers the state a host with or without
-systemd-resolved would) that apply changes as the kernel would and count every mutation.
+systemd-resolved would; `Kernel`, the mesh firewall's table by fingerprint, each call's failure
+injectable) that apply changes as the kernel would and count every mutation.
 Production code must not import it (`TestModuleBoundaries`). Its own tests
 (`TestNetHasKernelSemantics`, `TestConfigureHasKernelSemantics`, `TestLinksAddressesAndFailures`, `TestRoutesSysctlAndFirewall`,
 `TestPolicyHasKernelSemantics`, `TestDNS`) pin that fidelity -- append versus replace of AllowedIPs,
@@ -283,9 +284,16 @@ and `Policy.Fail`/`FailOn` inject a failure into one method, also while an agent
 | `agent` (`safeapply_test.go`) | `TestSafeApplyStateMachine` | the state machine on a fake clock: a report sent before the apply does not confirm, the window, a pending config replaced keeps the confirmed one as prev, disarm |
 | | `TestSafeApplyConfirmsWhenTheServerAnswers`, `TestSafeApplyRollsBackWithoutAnAnswer`, `TestSafeApplyRecoversAPendingConfigAtBoot`, `TestSpokesDoNotArmSafeApply`, `TestSafeApplyDisarmsWhenTheServerGoesBack`, `TestSafeApplyReportsAFailedRollback` | the runner with a 1 s window on a fake clock: confirm moves the cache; no answer puts the previous config back, reports the rollback and never re-applies the rejected version, while the next version is applied and confirmed; a pending config found at boot is rolled back the same way; spokes cache at once; the server going back to the confirmed config disarms without a rollback; a rollback that fails too is reported as an error with the rollback |
 | `apply` | `TestApplyIsIdempotent` | the second apply of the same config changes nothing on the host |
+| | `TestMeshFirewallStep` | the mesh firewall (amendment A43): in the kernel when the firewall step runs, left alone when unchanged, replaced (re-judging flows) when changed; a config without a policy removes it after the firewall step, keeps it while that step fails (degraded firewall only), a failed removal degrades `policy`; a refused table stops the apply before the firewall step; a node without a mesh firewall refuses a policy, and one for another mesh is not applied |
+| `policy` | `TestCompileGolden` | `testdata/ruleset.golden.txt`: the table of a server, and of one with containers, in nft's spelling with where each rule comes from |
+| | `TestCompileAgreesWithDecide` | for every pair of addresses (servers, spokes, a phone, containers, the mesh's unassigned, outside), protocol and port, forwarded, received and sent: the table admits exactly what `proto.Matcher.Decide` allows, but for traffic within the node and loopback |
+| | `TestCompileRefuses`, `TestRulesetText` | a bad mesh, an address outside it for the node, bad entries, services, ports, actions; one rule in nft's spelling, the count and the fingerprint |
+| | `TestEnforcer` | `Sync` installs once, leaves the same table alone, replaces a changed or foreign one and deletes the mesh flows' conntrack (not on a first install), removes for nil; a failed read, install or removal says which, a failed conntrack deletion does not fail the step |
+| | `TestBuildBatch`, `TestIntervalElems`, `TestExprs` (`nft_linux_test.go`) | the netlink batch: the six chains, the base ones accepting by default; every set added before the rule that looks it up; the fingerprint on the first rule only; interval elements as nft sends them (an end at 0 first, none past the top), and each match's expressions |
+| | `TestKernelNeedsPrivilege`, `TestNoKernelOffLinux` | without CAP_NET_ADMIN every kernel call is refused and says so (skipped as root, where it would change the host); off Linux there is no table and one is refused |
 | | `TestApplyValidatesBeforeTouchingTheHost`, `TestApplyStopsAtTheFailingStep`, `TestContainersStep`, `TestFirewallFailureOnlyDegrades`, `TestRemovedPeerLeavesDeviceAndRoutes`, `TestStatsNamesKnownPeers` | step order and failure modes |
 | | `TestRestartRenewsEveryPeer` | restart drops both peers and adds them back (two Configure calls, routes untouched) after rechecking the firewall; a missing wg0 is rebuilt, a failed drop is the peers step's error, a foreign wg0 is refused with nothing changed |
-| | `TestDNSFailureOnlyDegrades`, `TestDNSFollowsDNSOffAndExitMode`, `TestReassertPutsBackWhatDrifted` | step 9 gets the mesh IP, the config's DNS, exit mode and `dns off`, and only degrades; `Reassert` rechecks the firewall, changes nothing on an unchanged host and rebuilds a deleted interface; `Close` stops the DNS step |
+| | `TestDNSFailureOnlyDegrades`, `TestDNSFollowsDNSOffAndExitMode`, `TestReassertPutsBackWhatDrifted` | step 11 gets the mesh IP, the config's DNS, exit mode and `dns off`, and only degrades; `Reassert` rechecks the firewall, changes nothing on an unchanged host and rebuilds a deleted interface; `Close` stops the DNS step |
 | | `TestExitModeThroughTheHost` | without policy routing, step 6 hands exit mode to a host that does it itself (Windows): on with an exit, off without, nothing on a repeat, a failure fatal |
 | | `TestExitModeOnSwitchOff`, `TestExitModeFailureIsFatal` | exit on installs the rules, a switch moves 0.0.0.0/0 between peers without touching them, off removes them, 0.0.0.0/0 never in the main table; a policy failure is fatal; an engine without policy routing refuses exit on |
 | `exitmode` | `TestDesiredIsWgQuicksExitRouting`, `TestSyncTurnsExitModeOnAndOff`, `TestSyncReplacesAStaleRuleOfItsOwn`, `TestSyncStopsAtTheFirstFailure`, `TestSyncReportsEachFailure` | the exact rules and routes (IPv4 and IPv6 blackhole), routes before rules on, rules before routes off, idempotent, a stale own rule replaced, exit off on a clean host touches nothing; a failure of each call stops Sync there and counts the changes before it |
@@ -307,6 +315,7 @@ and `Policy.Fail`/`FailOn` inject a failure into one method, also while an agent
 | `firewall` | `TestFreshHostArgvGolden` | `testdata/fresh.golden.jsonl`: the exact firewall-cmd argv for a fresh host |
 | | `TestApplyIsIdempotent`, `TestRemovedRuleIsRemovedBothWays`, `TestNilFirewallRemovesOnlyOurRules` | state-file diffing, runtime and permanent |
 | | `TestPingRule` | a ping rule is the rich rule accepting ICMP echo requests from its source, added at runtime and permanently (amendment A42); one with a port or without a source is refused before firewall-cmd (`TestHostileRulesNeverReachFirewallCmd`) |
+| | `TestAcceptAllRule` | the mesh zone's accept-all rule (amendment A43) is the rich rule accepting everything from its source, added at runtime and permanently; one without a source, with a port or outside the mesh zone is refused before firewall-cmd |
 | | `TestHostileRulesNeverReachFirewallCmd` | a hostile rule runs no command at all |
 | | `TestContainersBridgeZone`, `TestForwardingPolicies` | `testdata/policies.golden.jsonl`: the relay and exit policies created --permanent and one reload; not asked again while unchanged; a restarted agent finds them and changes nothing; one edited by hand is put back whole; one no longer wanted is deleted |
 | | `TestMissingFirewalldIsActionable`, `TestOldFirewalldIsRefused`, `TestPolicyFailureIsReported`, `TestAtLeast`, `TestDamagedStateIsActionable` | failure messages; a failed policy is tried again on the next apply |
@@ -406,6 +415,14 @@ runs `--wg-backend userspace`: its `wg0` is a tun with the `meshctl` alias, a UA
 and the server's `node show` report `userspace` and `kernel`. The test's sockets are opened inside
 the namespaces from the test process (`inNS`).
 
+`TestMeshFirewall` (`firewall_test.go`, amendment A43): every server's namespace holds the table
+`ip meshctl` with its fingerprint comment and allow-all; after `meshctl firewall apply` of a policy
+denying the laptop TCP to the NAS, an open laptop-NAS connection stops at its next packet (the
+relay deleted its connection tracking) and a new one is refused, ping still crosses (a system
+rule), `meshctl firewall check` names the policy, and vps-1 reports no error; allow-all alone
+lets new connections through again. Every other e2e test runs with the default allow-all table on
+every server.
+
 ## `internal/server/planner`
 
 Goldens: `testdata/{servers,full,degraded}.golden.json`, derived by hand from the rules in
@@ -447,7 +464,8 @@ it is retried for up to 2 s, any other failure returns at once.
 
 `./scripts/dev.sh cov` totals every package, including the adapters the unit tests cannot reach
 by design: `internal/agent/wg/{kernel,link,userspace}_linux.go`,
-`internal/agent/routes/netlink_linux.go`, `internal/agent/exitmode/policy_linux.go` (netlink,
+`internal/agent/routes/netlink_linux.go`, `internal/agent/exitmode/policy_linux.go`, the privileged half of
+`internal/agent/policy/nft_linux.go` (netlink,
 wgctrl, wireguard-go's tun) and `internal/agent/dns/resolved_linux.go` (systemd-resolved, which a
 test must not change on the host it runs on). Their unprivileged paths (opening a backend, a refused create) are
 unit-tested; the rest needs root and the wireguard module, and is exercised by

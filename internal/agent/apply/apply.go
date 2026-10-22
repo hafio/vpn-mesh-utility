@@ -3,10 +3,11 @@
 // desired with observed state and changes only the difference, so applying
 // the same config twice changes nothing (TestApplyIsIdempotent).
 //
-// Steps 1-7 are fatal: if one fails the config is not recorded as applied and
-// the agent reports the error. Steps 8-10 (firewall, the container network,
-// DNS) are optional: a failure is reported as degraded and the tunnel stays
-// up.
+// Steps 1-8 are fatal: if one fails the config is not recorded as applied and
+// the agent reports the error. Step 8 is a server's mesh firewall (amendment
+// A43), installed before step 9 lets the mesh through firewalld's mesh zone.
+// Steps 9-11 (firewall, the container network, DNS) are optional: a failure
+// is reported as degraded and the tunnel stays up.
 //
 // Reassert is the drift check: it applies a config again after the steps
 // that remember what they found on the host (Rechecker) forget it, so a
@@ -25,6 +26,7 @@ import (
 	"github.com/hafio/vpn-mesh-utility/internal/agent/containers"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/dns"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/exitmode"
+	"github.com/hafio/vpn-mesh-utility/internal/agent/policy"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/routes"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/wg"
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
@@ -39,6 +41,7 @@ const (
 	StepRoutes     = "routes"
 	StepExit       = "exit"
 	StepSysctl     = "sysctl"
+	StepPolicy     = "policy"
 	StepFirewall   = "firewall"
 	StepContainers = "containers"
 	StepDNS        = "dns"
@@ -47,6 +50,12 @@ const (
 // Sysctls applies kernel parameters (internal/agent/sysctl).
 type Sysctls interface {
 	Apply(params []proto.Sysctl) (int, error)
+}
+
+// MeshFirewall enforces a server's policy (internal/agent/policy): Sync
+// makes the kernel hold the ruleset, or no table for nil.
+type MeshFirewall interface {
+	Sync(rs *policy.Ruleset) (int, error)
 }
 
 // Firewall applies a firewall section (internal/agent/firewall).
@@ -76,6 +85,9 @@ type Deps struct {
 	// exit mode on.
 	Exit   exitmode.Policy
 	Sysctl Sysctls
+	// MeshFirewall is nil on a node that is not a server; a config with a
+	// policy is then refused.
+	MeshFirewall MeshFirewall
 	// Firewall is nil when firewall management is off (--no-firewall, or a
 	// node that is not a server).
 	Firewall Firewall
@@ -160,6 +172,16 @@ func (e *Engine) Apply(ctx context.Context, cfg proto.NodeConfig) (Result, error
 	if err != nil {
 		return fail(StepValidate, err)
 	}
+	var rules *policy.Ruleset
+	if cfg.Policy != nil {
+		local := policy.Local{Self: addr.Addr()}
+		if cfg.Containers != nil {
+			local.Containers, _ = netip.ParsePrefix(cfg.Containers.Subnet) // validated above
+		}
+		if rules, err = policy.Compile(*cfg.Policy, local); err != nil {
+			return fail(StepValidate, err)
+		}
+	}
 
 	// 2-5. Interface, address, WireGuard, routes.
 	steps := []struct {
@@ -210,17 +232,44 @@ func (e *Engine) Apply(ctx context.Context, cfg proto.NodeConfig) (Result, error
 		}
 	}
 
-	// 8. Firewall: optional.
+	// 8. The mesh firewall: fatal, so a server never runs a config whose
+	// policy it does not enforce (safe apply puts the previous one back).
+	if rules != nil {
+		if e.d.MeshFirewall == nil {
+			return fail(StepPolicy, errors.New("this node enforces no mesh firewall, but its config has a policy (only servers do)"))
+		}
+		n, err := e.d.MeshFirewall.Sync(rules)
+		res.Changes += n
+		if err != nil {
+			return fail(StepPolicy, err)
+		}
+	}
+	// 9. Firewall: optional.
+	firewallFailed := false
 	if e.d.Firewall != nil {
 		n, err := e.d.Firewall.Apply(ctx, cfg.Firewall)
 		res.Changes += n
 		if err != nil {
+			firewallFailed = true
 			res.Degraded = append(res.Degraded, StepFirewall)
 			res.Errors = append(res.Errors, err.Error())
 			e.d.Log.Warn("firewall step failed; the tunnel stays up", "err", err)
 		}
 	}
-	// 9. The container network: optional, and before DNS, whose resolver
+	// A config without a policy takes the table away -- after firewalld has
+	// closed the mesh zone again, and not when it could not (the firewall is
+	// degraded already): a stale table filtering is safer than an open zone
+	// with none, and the next apply tries again.
+	if rules == nil && e.d.MeshFirewall != nil && !firewallFailed {
+		n, err := e.d.MeshFirewall.Sync(nil)
+		res.Changes += n
+		if err != nil {
+			res.Degraded = append(res.Degraded, StepPolicy)
+			res.Errors = append(res.Errors, err.Error())
+			e.d.Log.Warn("mesh firewall not removed", "err", err)
+		}
+	}
+	// 10. The container network: optional, and before DNS, whose resolver
 	// answers the containers on their gateway address.
 	var also netip.Addr
 	switch {
@@ -238,7 +287,7 @@ func (e *Engine) Apply(ctx context.Context, cfg proto.NodeConfig) (Result, error
 		res.Degraded = append(res.Degraded, StepContainers)
 		res.Errors = append(res.Errors, "containers: this agent manages no container network; the mesh reaches the node, not its containers")
 	}
-	// 10. DNS: optional. The resolver binds the address step 3 put on the
+	// 11. DNS: optional. The resolver binds the address step 3 put on the
 	// interface, and the containers' gateway.
 	if e.d.DNS != nil {
 		state, n, err := e.d.DNS.Apply(ctx, dns.Want{Iface: e.d.Iface, IP: addr.Addr(), Also: also, Config: cfg.DNS, Exit: exitOn,

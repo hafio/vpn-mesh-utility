@@ -36,9 +36,9 @@ that applies) and continue from the output reported back.
   tests can share it. `internal/agent/agentfake` (in-memory host fakes) is test-only too.
 - `deploy` (unit, install.sh, compose files) imports only `internal/validate` and yaml.v3; both sides use it.
 - `internal/fsutil` (atomic file writes) is stdlib-only; both sides use it.
-- The server never imports data-plane libraries (wgctrl, wireguard-go, netlink, miekg/dns,
-  godbus, x/sys/windows, go-winio); the agent never imports server ones (sqlite, argon2, otp,
-  barcode, qrcode).
+- The server never imports data-plane libraries (wgctrl, wireguard-go, netlink, nftables,
+  miekg/dns, godbus, x/sys/windows, go-winio); the agent never imports server ones (sqlite,
+  argon2, otp, barcode, qrcode).
 - `cmd/meshctl` wires everything; nothing imports it.
 
 `internal/archtest` (`TestModuleBoundaries`) enforces all of this for linux and windows builds,

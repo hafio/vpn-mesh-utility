@@ -267,15 +267,30 @@ The agent applies a config in fixed steps, each comparing desired with observed 
 | 5 | routes: every AllowedIP except 0.0.0.0/0, protocol 201 | fatal |
 | 6 | exit mode: policy rules and table 51820 (below), or their removal; on Windows split default routes and a bound socket (amendment A35) | fatal |
 | 7 | sysctls (relay and exit servers, container networks) | fatal |
-| 8 | firewall (servers, firewalld; an unzoned containers' bridge goes into the mesh zone) | degraded; the tunnel stays up |
-| 9 | containers (amendment A37, below) | degraded; the tunnel stays up |
-| 10 | DNS: the resolver on the mesh IP and the containers' gateway, then the host's registration (systemd-resolved; NRPT on Windows) | degraded; the tunnel stays up |
+| 8 | the mesh firewall (servers, amendment A43, below): the `policy` as the table `ip meshctl`, before step 9 lets the mesh through the mesh zone | fatal; a config without a policy removes the table after step 9, and keeps it while step 9 fails (degraded `policy` when the removal fails) |
+| 9 | firewall (servers, firewalld; an unzoned containers' bridge goes into the mesh zone) | degraded; the tunnel stays up |
+| 10 | containers (amendment A37, below) | degraded; the tunnel stays up |
+| 11 | DNS: the resolver on the mesh IP and the containers' gateway, then the host's registration (systemd-resolved; NRPT on Windows) | degraded; the tunnel stays up |
 
-A config is cached (`config.json`) only after steps 1-7 succeed, and re-applied at boot, once the
+A config is cached (`config.json`) only after steps 1-8 succeed, and re-applied at boot, once the
 agent holds its local API socket and before the server is contacted. A config that failed is not retried until a newer one arrives or five
 minutes pass.
 
-**The container network** (step 9, `internal/agent/containers`). In container mode the agent is
+**The mesh firewall** (step 8, `internal/agent/policy`). A server compiles its `policy` into one
+nftables table of its own, `table ip meshctl`, in its own network namespace (the host's, or a
+container-mode server's): base chains on forward, input and output accept established and related
+traffic, the node's own traffic (loopback, its containers' subnet) and anything with an end
+outside the mesh, and jump to `mesh_forward` (matched on both addresses), `mesh_input` (on the
+source; the server is the destination, whatever address the packet names) or `mesh_output` (on the
+destination): the policy's rules in order, each service its own rule (`icmp` is an echo request),
+then drop. Addresses and ports are anonymous interval sets; the only string in the table is the
+first rule's comment, `meshctl policy <fingerprint>`, by which the agent sees whether the kernel
+holds the table it installed. A different table is replaced whole in one transaction, and the
+connection tracking of flows between two mesh addresses is then deleted, so open connections
+are judged by the new policy at their next packet. The step runs at every apply and every drift
+check; an unchanged table costs one read. `nft list table ip meshctl` shows it.
+
+**The container network** (step 10, `internal/agent/containers`). In container mode the agent is
 its containers' gateway in its own namespace: it adds `gateway` (.2) to the interface the runtime
 gave an address of the subnet, and isolates by policy routing -- forwarded traffic from wg0 may
 reach the subnet (never the bridge address), from the mesh side only the subnet may reach the
@@ -293,7 +308,7 @@ runtime, the policies. Whatever changed underneath the agent -- wg0 moved to ano
 removed by hand, a route or the interface deleted -- is put back and logged; an unchanged host
 costs only the checks.
 
-**DNS** (step 9): the resolver binds UDP and TCP 53 on the node's mesh IP and answers the zone
+**DNS** (step 11): the resolver binds UDP and TCP 53 on the node's mesh IP and answers the zone
 authoritatively: A records, NODATA for another type of a name it has, NXDOMAIN for one it has not.
 A name outside the zone is forwarded to `upstream` (over the transport the query came on) when
 `split` is false or the source is in `forward_for`, and REFUSED otherwise. On Linux it then

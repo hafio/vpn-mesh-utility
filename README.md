@@ -30,8 +30,8 @@ out), and extra DNS domains of your own (Settings) resolve the containers' `host
 across the mesh. When a hub goes down, the server moves the pairs it relays to another hub and
 back once it returns (relay failover). The mesh firewall (M7, in progress) segments the mesh:
 groups (`meshctl node add --groups`), zones, address and service objects and ordered policies,
-enforced by every server, edited on the web UI's Firewall page or with `meshctl firewall`; a mesh
-starts with one `allow-all` policy. The live tests and the v1.0.0 release follow.
+enforced by every server in an nftables table of its own, edited on the web UI's Firewall page or
+with `meshctl firewall`; a mesh starts with one `allow-all` policy. The live tests and the v1.0.0 release follow.
 
 ## Quick start
 

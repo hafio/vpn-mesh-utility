@@ -233,6 +233,15 @@ WireGuard drops a packet whose source is not in the AllowedIPs of the peer it ca
 cannot send as another, and a container network is its node's /24. Same-node traffic (a node and
 its own containers, two of its containers) does not cross a server and is not filtered.
 
+A server enforces it in a table of the agent's own (`table ip meshctl`, nftables over netlink, no
+binary): installed before firewalld lets the mesh through the mesh zone, so the zone is never open
+without the table; a config that fails to install it is not applied (safe apply puts the previous
+one back). An accept in one nftables table does not end the walk through another, so the table
+only ever takes away what firewalld lets through: a packet arriving on the public interface stays
+in the public zone, whatever its source. A changed policy deletes the connection tracking of mesh
+flows, so an open connection the new policy denies stops at its next packet. Every apply and the
+5-minute drift check compare the table's fingerprint and put back one that was changed or deleted.
+
 Every value of the document passes `internal/validate` on the way in (names, addresses, services,
 `kind:name` references); the planner refuses a change that would leave a reference to nothing, and
 the agent checks the compiled policy against the same grammar, so no operator string reaches the

@@ -28,6 +28,7 @@ import (
 	"github.com/hafio/vpn-mesh-utility/internal/agent/localapi"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/logbuf"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/names"
+	"github.com/hafio/vpn-mesh-utility/internal/agent/policy"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/state"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/wg"
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
@@ -344,6 +345,7 @@ type rig struct {
 	policy *agentfake.Policy
 	dns    *agentfake.DNS
 	fw     *agentfake.Firewall
+	kernel *agentfake.Kernel
 	deps   Deps
 	done   chan error
 	cancel context.CancelFunc
@@ -362,10 +364,12 @@ func startLogged(t *testing.T, dir *state.Dir, socket string, log *slog.Logger) 
 // startWith runs the agent on fakes; edit adjusts its Deps first.
 func startWith(t *testing.T, dir *state.Dir, socket string, edit func(*Deps)) *rig {
 	t.Helper()
-	r := &rig{host: agentfake.NewHost(), policy: &agentfake.Policy{}, dns: &agentfake.DNS{}, fw: &agentfake.Firewall{}, done: make(chan error, 1)}
+	r := &rig{host: agentfake.NewHost(), policy: &agentfake.Policy{}, dns: &agentfake.DNS{}, fw: &agentfake.Firewall{}, kernel: &agentfake.Kernel{},
+		done: make(chan error, 1)}
 	r.deps = Deps{DataDir: dir.Path, Socket: socket, Version: "v1.0.0", Host: r.host, Routes: agentfake.NewRoutes(),
-		Exit: r.policy, Sysctl: &agentfake.Sysctl{}, Firewall: r.fw, DNS: r.dns, Containers: agentfake.NewNet(),
-		PollEvery: 50 * time.Millisecond, StatusEvery: 50 * time.Millisecond, BackoffMin: 10 * time.Millisecond, BackoffMax: 50 * time.Millisecond,
+		Exit: r.policy, Sysctl: &agentfake.Sysctl{}, MeshFirewall: &policy.Enforcer{K: r.kernel}, Firewall: r.fw, DNS: r.dns,
+		Containers: agentfake.NewNet(), PollEvery: 50 * time.Millisecond, StatusEvery: 50 * time.Millisecond,
+		BackoffMin: 10 * time.Millisecond, BackoffMax: 50 * time.Millisecond,
 		RuntimeSocket: RuntimeOff} // never the host's container runtime
 	if edit != nil {
 		edit(&r.deps)

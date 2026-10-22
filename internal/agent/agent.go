@@ -46,6 +46,7 @@ import (
 	"github.com/hafio/vpn-mesh-utility/internal/agent/localapi"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/localui"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/names"
+	"github.com/hafio/vpn-mesh-utility/internal/agent/policy"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/routes"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/state"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/sysctl"
@@ -107,14 +108,17 @@ type Deps struct {
 	// the usual places, RuntimeOff reads none.
 	RuntimeSocket string
 
-	Host       wg.Host
-	Routes     routes.Table
-	Exit       exitmode.Policy
-	Sysctl     apply.Sysctls
-	Firewall   apply.Firewall
-	DNS        apply.DNS
-	Containers containers.Net
-	Transport  http.RoundTripper
+	Host   wg.Host
+	Routes routes.Table
+	Exit   exitmode.Policy
+	Sysctl apply.Sysctls
+	// MeshFirewall enforces a server's policy; nil on a server means the
+	// netlink one (amendment A43).
+	MeshFirewall apply.MeshFirewall
+	Firewall     apply.Firewall
+	DNS          apply.DNS
+	Containers   containers.Net
+	Transport    http.RoundTripper
 	// Runtime replaces the container runtime RuntimeSocket names.
 	Runtime names.Source
 
@@ -260,6 +264,9 @@ func Run(ctx context.Context, d Deps) error {
 	if d.Sysctl == nil {
 		d.Sysctl = sysctl.New()
 	}
+	if d.MeshFirewall == nil && enr.Role == proto.RoleServer {
+		d.MeshFirewall = &policy.Enforcer{K: policy.NewKernel(), Log: d.Log}
+	}
 	if d.Firewall == nil && !d.NoFirewall && enr.Role == proto.RoleServer {
 		d.Firewall = &firewall.Firewall{Run: execrun.Exec{}, Dir: dir.Path, Iface: Interface}
 	}
@@ -282,8 +289,8 @@ func Run(ctx context.Context, d Deps) error {
 		log:      d.Log.With("node", enr.Name),
 		syncKick: make(chan struct{}, 1), statusKick: make(chan struct{}, 1),
 		meshKick: make(chan struct{}, 1), namesKick: make(chan struct{}, 1),
-		engine: apply.New(apply.Deps{Host: host, Routes: d.Routes, Exit: d.Exit, Sysctl: d.Sysctl, Firewall: d.Firewall,
-			DNS: d.DNS, Containers: d.Containers, Iface: Interface, Key: wg.Key(keys.WG), Log: d.Log}),
+		engine: apply.New(apply.Deps{Host: host, Routes: d.Routes, Exit: d.Exit, Sysctl: d.Sysctl, MeshFirewall: d.MeshFirewall,
+			Firewall: d.Firewall, DNS: d.DNS, Containers: d.Containers, Iface: Interface, Key: wg.Key(keys.WG), Log: d.Log}),
 	}
 	r.engine.SetDNSOff(local.DNSOff)
 	if r.mesh, err = dir.Mesh(); err != nil {

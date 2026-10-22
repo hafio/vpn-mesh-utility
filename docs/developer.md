@@ -52,7 +52,7 @@ local changes, `git rm -r --cached -q . && git reset --hard`.
 | `image` | `docker build` of the root Dockerfile as `vpn-mesh-utility:<version>` |
 | `up` / `down` | the local dev stack in `deploy/compose.dev.yml` |
 | `dist` | cross-compile linux/amd64, linux/arm64, windows/amd64 (local convenience) |
-| `regen` | rewrite golden files with `-update` in planner, the phone profiles, the web UI pages, the firewall argv, the userspace backend's UAPI text, the local UI's dashboard, deploy (install.sh, the NAS and container compose files, docs/compose.md) and cmd/meshctl (docs/commands.md); not in any aggregate |
+| `regen` | rewrite golden files with `-update` in planner, the phone profiles, the web UI pages, the firewall argv, the userspace backend's UAPI text, the local UI's dashboard, the mesh firewall's table, deploy (install.sh, the NAS and container compose files, docs/compose.md) and cmd/meshctl (docs/commands.md); not in any aggregate |
 | `e2e` | builds `dist/e2e.test` and `dist/meshctl-e2e` as you, then runs the network-namespace tests against kernel WireGuard under `sudo -n` (Linux; run `sudo -v` first, then the task as yourself -- under `sudo` it fails, as root's PATH has no `go`; not in any aggregate) |
 | `graphify` | refresh the knowledge graph (local only) |
 | `all` | `build vet test` -- CI runs `all scan` |

@@ -35,6 +35,7 @@ var rules = []Rule{
 	{Dir: "internal/server", Deny: []string{
 		"golang.zx2c4.com/wireguard", // includes wgctrl
 		"github.com/vishvananda/netlink",
+		"github.com/google/nftables",
 		"github.com/miekg/dns",
 		"github.com/godbus/dbus",
 		"golang.org/x/sys/windows",

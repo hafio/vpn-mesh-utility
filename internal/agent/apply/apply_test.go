@@ -11,6 +11,7 @@ import (
 
 	"github.com/hafio/vpn-mesh-utility/internal/agent/agentfake"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/apply"
+	"github.com/hafio/vpn-mesh-utility/internal/agent/policy"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/wg"
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
 	"github.com/hafio/vpn-mesh-utility/internal/testfix"
@@ -24,6 +25,7 @@ type rig struct {
 	s   *agentfake.Sysctl
 	fw  *agentfake.Firewall
 	dns *agentfake.DNS
+	k   *agentfake.Kernel
 	key wg.Key
 }
 
@@ -34,13 +36,14 @@ func newRig(t *testing.T) *rig {
 		t.Fatal(err)
 	}
 	r := &rig{h: agentfake.NewHost(), r: agentfake.NewRoutes(), p: &agentfake.Policy{}, s: &agentfake.Sysctl{}, fw: &agentfake.Firewall{},
-		dns: &agentfake.DNS{}, key: k}
-	r.e = apply.New(apply.Deps{Host: r.h, Routes: r.r, Exit: r.p, Sysctl: r.s, Firewall: r.fw, DNS: r.dns, Iface: "wg0", Key: k})
+		dns: &agentfake.DNS{}, k: &agentfake.Kernel{}, key: k}
+	r.e = apply.New(apply.Deps{Host: r.h, Routes: r.r, Exit: r.p, Sysctl: r.s, MeshFirewall: &policy.Enforcer{K: r.k}, Firewall: r.fw,
+		DNS: r.dns, Iface: "wg0", Key: k})
 	return r
 }
 
 func (r *rig) mutations() int {
-	return r.h.Mutations() + r.r.Mutations() + len(r.p.Calls) + r.s.Writes
+	return r.h.Mutations() + r.r.Mutations() + len(r.p.Calls) + r.s.Writes + r.k.Replaces
 }
 
 // meshDNS is a DNS section for the reference servers.
@@ -210,6 +213,89 @@ func TestFirewallFailureOnlyDegrades(t *testing.T) {
 	if dev, ok := r.h.DeviceOf("wg0"); !ok || len(dev.Peers) != 2 {
 		t.Fatal("the peers must be in place despite the firewall")
 	}
+}
+
+// watchingFirewall is a firewall step that notes whether the mesh
+// firewall's table was in the kernel when it ran.
+type watchingFirewall struct {
+	k     *agentfake.Kernel
+	saw   []bool
+	fails bool
+}
+
+func (w *watchingFirewall) Apply(context.Context, *proto.Firewall) (int, error) {
+	table, _ := w.k.Holds()
+	w.saw = append(w.saw, table != nil)
+	if w.fails {
+		return 0, errors.New("firewalld is not running")
+	}
+	return 0, nil
+}
+
+// The mesh firewall (amendment A43): in the kernel before the firewall step
+// lets the mesh through the mesh zone, left alone when unchanged, fatal when
+// it fails; a config without a policy takes the table away once the
+// firewall step closed the zone, and keeps it when that failed.
+func TestMeshFirewallStep(t *testing.T) {
+	r := newRig(t)
+	w := &watchingFirewall{k: r.k}
+	e := apply.New(apply.Deps{Host: r.h, Routes: r.r, Exit: r.p, Sysctl: r.s, MeshFirewall: &policy.Enforcer{K: r.k}, Firewall: w,
+		Iface: "wg0", Key: r.key})
+	ctx := context.Background()
+	cfg := testfix.ServerConfig()
+	cfg.Policy = testfix.Policy()
+	if res, err := e.Apply(ctx, cfg); err != nil || res.Changes == 0 || r.k.Replaces != 1 || !slices.Equal(w.saw, []bool{true}) {
+		t.Fatalf("first apply = %+v, %v; %d replaces, the firewall saw a table: %v", res, err, r.k.Replaces, w.saw)
+	}
+	if res, err := e.Apply(ctx, cfg); err != nil || res.Changes != 0 || r.k.Replaces != 1 {
+		t.Fatalf("the same config again = %+v, %v; %d replaces", res, err, r.k.Replaces)
+	}
+	changed := testfix.ServerConfig()
+	changed.Policy = testfix.Policy()
+	changed.Policy.Rules = changed.Policy.Rules[:3]
+	if _, err := e.Apply(ctx, changed); err != nil || r.k.Replaces != 2 || r.k.Forgets != 1 {
+		t.Fatalf("a new policy: %v; %d replaces, %d forgets", err, r.k.Replaces, r.k.Forgets)
+	}
+
+	// Without a policy: removed after the firewall step, which still saw it.
+	res, err := e.Apply(ctx, testfix.ServerConfig())
+	if table, _ := r.k.Holds(); err != nil || table != nil || res.Changes == 0 || !w.saw[len(w.saw)-1] {
+		t.Fatalf("no policy = %+v, %v; the table %v", res, err, table)
+	}
+	// ... but kept while the firewall step fails, which degrades alone.
+	r.k.Mark, w.fails = "kept", true
+	if res, err = e.Apply(ctx, testfix.ServerConfig()); err != nil || !slices.Equal(res.Degraded, []string{apply.StepFirewall}) || r.k.Mark != "kept" {
+		t.Fatalf("firewall down = %+v, %v; mark %q", res, err, r.k.Mark)
+	}
+	w.fails, r.k.RemoveErr = false, errors.New("device busy")
+	if res, err = e.Apply(ctx, testfix.ServerConfig()); err != nil || !slices.Equal(res.Degraded, []string{apply.StepPolicy}) ||
+		!strings.Contains(res.Errors[0], "remove the table meshctl") {
+		t.Fatalf("a failed removal = %+v, %v", res, err)
+	}
+
+	// A table the kernel refuses stops the apply before the firewall step.
+	runs := len(w.saw)
+	r.k.ReplaceErr = errors.New("no buffer space available")
+	if _, err := e.Apply(ctx, cfg); !isStep(err, apply.StepPolicy) || !strings.Contains(err.Error(), "install the table meshctl") || len(w.saw) != runs {
+		t.Fatalf("a refused table = %v; the firewall ran %d more times", err, len(w.saw)-runs)
+	}
+	// A node that enforces nothing refuses a policy; one outside its mesh
+	// is not a config to apply.
+	spoke := apply.New(apply.Deps{Host: agentfake.NewHost(), Routes: agentfake.NewRoutes(), Exit: &agentfake.Policy{}, Sysctl: &agentfake.Sysctl{},
+		Iface: "wg0", Key: r.key})
+	if _, err := spoke.Apply(ctx, cfg); !isStep(err, apply.StepPolicy) || !strings.Contains(err.Error(), "only servers") {
+		t.Fatalf("a policy without a mesh firewall = %v", err)
+	}
+	elsewhere := testfix.ServerConfig()
+	elsewhere.Policy = &proto.Policy{Mesh: "10.99.0.0/16"}
+	if _, err := e.Apply(ctx, elsewhere); !isStep(err, apply.StepValidate) || !strings.Contains(err.Error(), "outside the mesh") {
+		t.Fatalf("a policy for another mesh = %v", err)
+	}
+}
+
+func isStep(err error, step string) bool {
+	s, ok := apply.IsStepError(err)
+	return ok && s == step
 }
 
 // Exit on installs the policy rules; switching exits only moves 0.0.0.0/0

@@ -59,7 +59,7 @@ $DistTargets = @(
 )
 
 # Packages whose tests own golden files (`regen` rewrites them with -update).
-$RegenPkgs = @('./internal/server/planner', './internal/server/phone', './internal/server/ui', './internal/agent/firewall', './internal/agent/wg', './internal/agent/localui', './deploy', './cmd/meshctl')
+$RegenPkgs = @('./internal/server/planner', './internal/server/phone', './internal/server/ui', './internal/agent/firewall', './internal/agent/wg', './internal/agent/localui', './internal/agent/policy', './deploy', './cmd/meshctl')
 
 # -race needs cgo + a C compiler; OFF by default here, enable with
 # MESHCTL_RACE=1 (dev.sh defaults it on). `cov` never races.

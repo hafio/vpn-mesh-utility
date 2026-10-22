@@ -208,6 +208,9 @@ func TestHostileRulesNeverReachFirewallCmd(t *testing.T) {
 		"source is a host":  {Zone: "mesh", Proto: "tcp", Port: 2377, Source: "10.77.0.2/24"},
 		"ping with a port":  {Zone: "mesh", Proto: proto.ProtoICMP, Port: 22, Source: "10.77.0.0/16"},
 		"ping from anyone":  {Zone: "mesh", Proto: proto.ProtoICMP},
+		"all from anyone":   {Zone: "mesh", Proto: proto.ProtoAll},
+		"all with a port":   {Zone: "mesh", Proto: proto.ProtoAll, Port: 22, Source: "10.77.0.0/16"},
+		"all in public":     {Zone: "public", Proto: proto.ProtoAll, Source: "10.77.0.0/16"},
 	}
 	for name, rule := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -246,6 +249,29 @@ func TestPingRule(t *testing.T) {
 	}
 	if added != 2 {
 		t.Fatalf("the ping rule was added %d times (want runtime and permanent): %q", added, r.calls)
+	}
+}
+
+// The mesh firewall's zone rule (amendment A43) is a rich rule accepting
+// everything from the mesh, both at runtime and permanently.
+func TestAcceptAllRule(t *testing.T) {
+	rule := proto.FWRule{Zone: proto.ZoneMesh, Proto: proto.ProtoAll, Source: "10.77.0.0/16", Note: "segmentation: the policy decides"}
+	want := []string{"firewall-cmd", "--zone=mesh", `--add-rich-rule=rule family="ipv4" source address="10.77.0.0/16" accept`}
+	if got := RuleArgv(rule, "add", false); !slices.Equal(got, want) {
+		t.Fatalf("RuleArgv = %q", got)
+	}
+	r := freshHost()
+	if _, err := newFirewall(t, r).Apply(context.Background(), &proto.Firewall{Backend: "firewalld", Rules: []proto.FWRule{rule}}); err != nil {
+		t.Fatal(err)
+	}
+	added := 0
+	for _, c := range r.calls {
+		if strings.HasSuffix(strings.Join(c, " "), `source address="10.77.0.0/16" accept`) && strings.Contains(strings.Join(c, " "), "--add-rich-rule") {
+			added++
+		}
+	}
+	if added != 2 {
+		t.Fatalf("the accept-all rule was added %d times (want runtime and permanent): %q", added, r.calls)
 	}
 }
 

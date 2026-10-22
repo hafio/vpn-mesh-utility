@@ -43,7 +43,7 @@ IMAGE_TAG="${IMAGE_TAG//+/-}"
 DIST_TARGETS=(linux/amd64 linux/arm64 windows/amd64)
 
 # Packages whose tests own golden files (`regen` rewrites them with -update).
-REGEN_PKGS=(./internal/server/planner ./internal/server/phone ./internal/server/ui ./internal/agent/firewall ./internal/agent/wg ./internal/agent/localui ./deploy ./cmd/meshctl)
+REGEN_PKGS=(./internal/server/planner ./internal/server/phone ./internal/server/ui ./internal/agent/firewall ./internal/agent/wg ./internal/agent/localui ./internal/agent/policy ./deploy ./cmd/meshctl)
 
 # -race needs cgo + a C compiler; on by default here for `test`, disable with
 # MESHCTL_RACE=0 (dev.ps1 defaults it off -- the windows runner's cgo is the
