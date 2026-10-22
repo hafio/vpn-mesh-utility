@@ -11,7 +11,9 @@
 // route; the second sends what is left to table 51820, unless it carries the
 // interface's fwmark -- WireGuard's own UDP, which must take the normal path.
 // IPv6 gets the same two rules and a blackhole default in table 51820, so
-// exit mode never leaks IPv6 around the tunnel (amendment A11). A kernel
+// exit mode never leaks IPv6 around the tunnel (amendment A11) -- or, when
+// the exit carries IPv6 (M8: ::/0 on its peer), a default dev wg0 there
+// too, so IPv6 goes through the exit as IPv4 does. A kernel
 // with IPv6 but without IPv6 policy routing (some NAS kernels) has no rules
 // to manage: exit mode then carries IPv4 only and says so (amendment A45).
 //
@@ -93,6 +95,8 @@ type Policy interface {
 	AddRule(r Rule) error
 	DelRule(r Rule) error
 	Routes() ([]Route, error)
+	// AddRoute replaces the table's default route of r's family: there is
+	// one per family.
 	AddRoute(r Route) error
 	DelRoute(r Route) error
 	// IPv6 is what the host has of IPv6.
@@ -121,7 +125,8 @@ var ErrIPv6Unguarded = errors.New("exit mode carries IPv4 only: this kernel has 
 	"bypasses the exit; turn IPv6 off on this host (sysctl net.ipv6.conf.all.disable_ipv6=1) to keep it from leaking")
 
 // Desired is what exit mode through link needs; nothing when on is false.
-func Desired(link string, on, ipv6 bool) ([]Rule, []Route) {
+// ipv6 is a host with IPv6 policy routing, via6 an exit that carries IPv6.
+func Desired(link string, on, ipv6, via6 bool) ([]Rule, []Route) {
 	if !on {
 		return nil, nil
 	}
@@ -136,7 +141,10 @@ func Desired(link string, on, ipv6 bool) ([]Rule, []Route) {
 			Rule{Family: f, Priority: PriorityTunnel, Table: proto.RouteTable, SuppressPrefixlen: -1, NotMark: proto.FwMark})
 	}
 	routes := []Route{{Family: IPv4, Link: link}}
-	if ipv6 {
+	switch {
+	case ipv6 && via6:
+		routes = append(routes, Route{Family: IPv6, Link: link})
+	case ipv6:
 		routes = append(routes, Route{Family: IPv6})
 	}
 	return rules, routes
@@ -146,10 +154,10 @@ func Desired(link string, on, ipv6 bool) ([]Rule, []Route) {
 // Routes are added before rules, so the table is ready when traffic is sent
 // to it, and rules are removed before routes. It returns how many changes it
 // made, and ErrIPv6Unguarded once IPv4 is in place on a host whose IPv6 it
-// cannot hold back.
-func Sync(p Policy, link string, on bool) (int, error) {
+// cannot hold back. via6 is an exit that carries IPv6 (M8).
+func Sync(p Policy, link string, on, via6 bool) (int, error) {
 	v6 := p.IPv6()
-	wantRules, wantRoutes := Desired(link, on, v6 == V6Policy)
+	wantRules, wantRoutes := Desired(link, on, v6 == V6Policy, via6)
 	haveRules, err := p.Rules()
 	if err != nil {
 		return 0, err
@@ -184,7 +192,8 @@ func Sync(p Policy, link string, on bool) (int, error) {
 		}
 	}
 	for _, r := range haveRoutes {
-		if !slices.Contains(wantRoutes, r) {
+		replaced := slices.ContainsFunc(wantRoutes, func(w Route) bool { return w.Family == r.Family })
+		if !slices.Contains(wantRoutes, r) && !replaced {
 			if err := p.DelRoute(r); err != nil {
 				return n, err
 			}

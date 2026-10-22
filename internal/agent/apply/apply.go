@@ -149,12 +149,32 @@ type StepError struct {
 func (e *StepError) Error() string { return fmt.Sprintf("apply step %s: %v", e.Step, e.Err) }
 func (e *StepError) Unwrap() error { return e.Err }
 
+// Endpoint failover (M8): how long a dialling peer may go without a
+// handshake on the endpoint it is on before Failover tries its other one --
+// staleAfter after the last handshake (a tunnel with keepalive renews it
+// every two minutes), retryAfter after the endpoint was set without one.
+const (
+	staleAfter = 3 * time.Minute
+	retryAfter = 45 * time.Second
+)
+
 // Engine applies configs one at a time.
 type Engine struct {
 	d  Deps
 	mu sync.Mutex
 	// dnsOff is the node's own `meshctl dns off`.
 	dnsOff bool
+	// dial is each dialling peer that has a fallback endpoint (M8), by key.
+	dial map[wg.Key]*dialing
+}
+
+// dialing is how a peer with two endpoints is reached: on which, and since
+// when.
+type dialing struct {
+	name              string
+	primary, fallback netip.AddrPort
+	onFallback        bool
+	since             time.Time
 }
 
 // New returns an engine.
@@ -165,7 +185,7 @@ func New(d Deps) *Engine {
 	if d.Now == nil {
 		d.Now = time.Now
 	}
-	return &Engine{d: d}
+	return &Engine{d: d, dial: map[wg.Key]*dialing{}}
 }
 
 // Apply runs the steps for cfg.
@@ -220,6 +240,7 @@ func (e *Engine) Apply(ctx context.Context, cfg proto.NodeConfig) (Result, error
 	if err != nil {
 		return fail(StepValidate, err)
 	}
+	e.keepEndpoints(cfg, &dev)
 	want, err := routes.Desired(cfg)
 	if err != nil {
 		return fail(StepValidate, err)
@@ -257,10 +278,15 @@ func (e *Engine) Apply(ctx context.Context, cfg proto.NodeConfig) (Result, error
 	// 6. Exit mode: the policy rules follow the config, so exit off (every
 	// server's case) removes rules a previous config left.
 	// Where the platform has no policy routing (Windows), the host does it.
+	// The exit carries IPv6 when its peer has ::/0 (M8; never on a host
+	// without IPv6, forHost took it away).
 	exitOn := cfg.Exit != nil && cfg.Exit.Via != ""
+	via6 := exitOn && slices.ContainsFunc(cfg.Peers, func(p proto.Peer) bool {
+		return p.Name == cfg.Exit.Via && slices.Contains(p.AllowedIPs, "::/0")
+	})
 	switch router, ok := e.d.Host.(wg.ExitRouter); {
 	case e.d.Exit != nil:
-		n, err := exitmode.Sync(e.d.Exit, e.d.Iface, exitOn)
+		n, err := exitmode.Sync(e.d.Exit, e.d.Iface, exitOn, via6)
 		res.Changes += n
 		switch {
 		case errors.Is(err, exitmode.ErrIPv6Unguarded):
@@ -407,6 +433,94 @@ func forHost(cfg proto.NodeConfig, ipv6 bool) (proto.NodeConfig, error) {
 		cfg.Containers = &k
 	}
 	return cfg, nil
+}
+
+// keepEndpoints keeps each dialling peer on the endpoint Failover chose:
+// the device dials a peer's fallback while Failover has it there, until a
+// config gives the peer other endpoints. Only a peer the node keeps alive
+// (a spoke's servers) is followed: an idle server-to-server tunnel has no
+// handshakes to judge it by. The caller holds mu.
+func (e *Engine) keepEndpoints(cfg proto.NodeConfig, dev *wg.Device) {
+	now, seen := e.d.Now(), map[wg.Key]bool{}
+	for _, p := range cfg.Peers {
+		k, err := wg.ParseKey(p.PublicKey)
+		primary, perr := netip.ParseAddrPort(p.Endpoint)
+		fallback, ferr := netip.ParseAddrPort(p.Fallback)
+		if err != nil || perr != nil || ferr != nil || p.Keepalive == 0 {
+			continue
+		}
+		seen[k] = true
+		d := e.dial[k]
+		if d == nil || d.primary != primary || d.fallback != fallback {
+			d = &dialing{name: p.Name, primary: primary, fallback: fallback, since: now}
+			e.dial[k] = d
+		}
+		if !d.onFallback {
+			continue
+		}
+		for i := range dev.Peers {
+			if dev.Peers[i].PublicKey == k {
+				dev.Peers[i].Endpoint = fallback
+			}
+		}
+	}
+	for k := range e.dial {
+		if !seen[k] {
+			delete(e.dial, k)
+		}
+	}
+}
+
+// Failover moves each dialling peer whose endpoint has gone without a
+// handshake for too long (staleAfter, retryAfter) to its other endpoint
+// (M8): a spoke whose IPv4 path to a server is broken tries the server's
+// IPv6 endpoint, and back. It returns what it moved, "<peer> to
+// <endpoint>", sorted.
+func (e *Engine) Failover() ([]string, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if len(e.dial) == 0 {
+		return nil, nil
+	}
+	_, stats, err := e.d.Host.Device(e.d.Iface)
+	if err != nil {
+		return nil, err
+	}
+	last := map[wg.Key]time.Time{}
+	for _, s := range stats {
+		last[s.PublicKey] = s.LastHandshake
+	}
+	now := e.d.Now()
+	var (
+		c     wg.Change
+		moved []string
+		which []*dialing
+	)
+	for k, d := range e.dial {
+		switch h := last[k]; {
+		case h.After(d.since) && now.Sub(h) < staleAfter:
+			continue // it answers on this endpoint
+		case !h.After(d.since) && now.Sub(d.since) < retryAfter:
+			continue // not long enough on this endpoint to judge it
+		}
+		ep := d.fallback
+		if d.onFallback {
+			ep = d.primary
+		}
+		c.Peers = append(c.Peers, wg.PeerChange{PublicKey: k, Endpoint: &ep})
+		moved, which = append(moved, d.name+" to "+ep.String()), append(which, d)
+	}
+	if len(moved) == 0 {
+		return nil, nil
+	}
+	slices.Sort(moved)
+	if err := e.d.Host.Configure(e.d.Iface, c); err != nil {
+		return nil, fmt.Errorf("dial %s: %w", strings.Join(moved, ", "), err)
+	}
+	for _, d := range which {
+		d.onFallback, d.since = !d.onFallback, now
+	}
+	return moved, nil
 }
 
 // SetDNSOff records the node's own `meshctl dns on|off`; the next apply

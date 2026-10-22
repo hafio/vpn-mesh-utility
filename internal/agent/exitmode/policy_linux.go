@@ -161,7 +161,10 @@ func toRoute(r Route) (*netlink.Route, error) {
 	if err != nil {
 		return nil, fmt.Errorf("look up interface %s: %w", r.Link, err)
 	}
-	nr.LinkIndex, nr.Scope = l.Attrs().Index, netlink.SCOPE_LINK
+	nr.LinkIndex = l.Attrs().Index
+	if r.Family == IPv4 {
+		nr.Scope = netlink.SCOPE_LINK // IPv6 routes have no scope
+	}
 	return nr, nil
 }
 

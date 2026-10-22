@@ -10,7 +10,9 @@
 //
 // Forwarding is two firewalld policies the agent owns by name (amendment A4):
 // meshctl-relay (mesh to mesh, on a server that relays between spokes) and
-// meshctl-exit (mesh to public with masquerade, on an exit server). They are
+// meshctl-exit (mesh to public with masquerade, on an exit server; an exit
+// with IPv6 also masquerades the mesh's IPv6 prefix by a rich rule, since
+// firewalld's policy masquerade is IPv4 only, M8). They are
 // written --permanent and loaded with one --reload, created when the config
 // asks for them, put back as a whole when they were changed, and deleted
 // when it no longer does. Policy masquerade needs firewalld's nftables
@@ -60,7 +62,7 @@ type Firewall struct {
 	// synced records the policies last made to match in this process; they
 	// are checked again only when the wanted set changes.
 	synced   bool
-	policies []string
+	policies []policy
 }
 
 type applied struct {
@@ -190,6 +192,16 @@ type policy struct {
 	name            string
 	ingress, egress string
 	masquerade      bool
+	// masquerade6 is the IPv6 source an exit masquerades (M8), "" for none.
+	masquerade6 string
+}
+
+// rich is p's rich rules, in firewalld's own spelling.
+func (p policy) rich() []string {
+	if p.masquerade6 == "" {
+		return nil
+	}
+	return []string{fmt.Sprintf(`rule family="ipv6" source address="%s" masquerade`, p.masquerade6)}
 }
 
 var (
@@ -202,13 +214,15 @@ var (
 	policies   = []policy{relayPolicy, exitPolicy}
 )
 
-func wantedPolicies(fw proto.Firewall) []string {
-	var out []string
+func wantedPolicies(fw proto.Firewall) []policy {
+	var out []policy
 	if fw.Relay {
-		out = append(out, relayPolicy.name)
+		out = append(out, relayPolicy)
 	}
 	if fw.ExitGateway {
-		out = append(out, exitPolicy.name)
+		exit := exitPolicy
+		exit.masquerade6 = fw.Exit6
+		out = append(out, exit)
 	}
 	return out
 }
@@ -227,6 +241,9 @@ func (p policy) create() [][]string {
 	if p.masquerade {
 		argv = append(argv, at("--add-masquerade"))
 	}
+	for _, r := range p.rich() {
+		argv = append(argv, at("--add-rich-rule="+r))
+	}
 	return argv
 }
 
@@ -234,22 +251,30 @@ func (p policy) create() [][]string {
 // agent made it.
 func (p policy) matches(info string) bool {
 	kv := map[string]string{}
+	var rich []string
 	for _, line := range strings.Split(info, "\n") {
-		if k, v, ok := strings.Cut(strings.TrimSpace(line), ":"); ok {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "rule ") {
+			rich = append(rich, line) // under "rich rules:", one a line
+			continue
+		}
+		if k, v, ok := strings.Cut(line, ":"); ok {
 			kv[k] = strings.TrimSpace(v)
 		}
 	}
+	slices.Sort(rich)
 	masq := "no"
 	if p.masquerade {
 		masq = "yes"
 	}
-	return kv["target"] == "ACCEPT" && kv["ingress-zones"] == p.ingress && kv["egress-zones"] == p.egress && kv["masquerade"] == masq
+	return kv["target"] == "ACCEPT" && kv["ingress-zones"] == p.ingress && kv["egress-zones"] == p.egress && kv["masquerade"] == masq &&
+		slices.Equal(rich, p.rich())
 }
 
 // syncPolicies makes the agent's policies exactly want and returns how many
 // changes it made. It asks firewalld on the first apply in this process and
 // whenever want changes.
-func (f *Firewall) syncPolicies(ctx context.Context, want []string) (int, error) {
+func (f *Firewall) syncPolicies(ctx context.Context, want []policy) (int, error) {
 	if f.synced && slices.Equal(f.policies, want) {
 		return 0, nil
 	}
@@ -261,7 +286,11 @@ func (f *Firewall) syncPolicies(ctx context.Context, want []string) (int, error)
 	n := 0
 	for _, p := range policies {
 		var argv [][]string
-		wanted, exists := slices.Contains(want, p.name), slices.Contains(have, p.name)
+		i := slices.IndexFunc(want, func(w policy) bool { return w.name == p.name })
+		wanted, exists := i >= 0, slices.Contains(have, p.name)
+		if wanted {
+			p = want[i] // with what this config adds to it
+		}
 		switch {
 		case wanted && exists:
 			info, err := f.Run.Run(ctx, []string{program, "--permanent", "--info-policy=" + p.name})
@@ -449,6 +478,10 @@ func check(fw proto.Firewall) error {
 	add(err)
 	if fw.Bridge != "" {
 		_, err = validate.Enum("firewall.bridge", fw.Bridge, proto.ContainerBridge)
+		add(err)
+	}
+	if fw.Exit6 != "" {
+		_, err = validate.Prefix6("firewall.exit6", fw.Exit6)
 		add(err)
 	}
 	for i, r := range fw.Rules {

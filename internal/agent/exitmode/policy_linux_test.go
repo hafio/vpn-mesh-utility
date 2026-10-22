@@ -15,7 +15,7 @@ import (
 )
 
 func TestKernelShapes(t *testing.T) {
-	rules, rts := Desired("wg0", true, true)
+	rules, rts := Desired("wg0", true, true, false)
 	tunnel := toRule(rules[1])
 	if tunnel.Protocol != routes.Protocol || !tunnel.Invert || tunnel.Mark != proto.FwMark || tunnel.Table != proto.RouteTable ||
 		tunnel.Priority != PriorityTunnel || tunnel.SuppressPrefixlen != -1 {
@@ -73,7 +73,7 @@ func TestKernelPolicyWithoutPrivilege(t *testing.T) {
 	if _, err := p.Routes(); err != nil {
 		t.Fatalf("Routes = %v", err)
 	}
-	want, routesWanted := Desired("lo", true, p.IPv6() == V6Policy)
+	want, routesWanted := Desired("lo", true, p.IPv6() == V6Policy, false)
 	for _, err := range []error{p.AddRule(want[1]), p.DelRule(want[1]), p.AddRoute(routesWanted[0]), p.DelRoute(routesWanted[0])} {
 		if err == nil || (!strings.Contains(err.Error(), "table 51820") && !strings.Contains(err.Error(), "lookup 51820")) {
 			t.Errorf("an unprivileged change = %v", err)

@@ -373,7 +373,15 @@ the exit server's peer; step 6 adds, for IPv4 and IPv6:
 | 32765 | `not from all fwmark 0xca6c lookup 51820` |
 
 and in table 51820 `default dev wg0` (IPv4) and a blackhole default (IPv6, so nothing leaks
-around the tunnel; amendment A11). Every specific route of the main table still wins; WireGuard's
+around the tunnel; amendment A11) -- or, when the exit carries IPv6 (M8: `::/0` on its peer, an
+exit with public IPv6 for a node with IPv6), `default dev wg0` for IPv6 as well; the route is
+replaced in place when the exit changes, so table 51820 is never without one. The exit
+masquerades the mesh's IPv6 prefix (`firewall.exit6`) with the rich rule `rule family="ipv6"
+source address="<prefix>" masquerade` in its `meshctl-exit` policy, since firewalld's policy
+masquerade is IPv4 only. On Windows the split default routes `::/1` and `8000::/1` go into the
+tunnel and are carried when the exit's peer has `::/0`, dropped when not; the tunnel's IPv6
+socket is bound to the interface of the host's IPv6 default route (its packets dropped while
+there is none, never sent into the tunnel). Every specific route of the main table still wins; WireGuard's
 own UDP carries fwmark 51820 and takes the normal path. Switching exits moves `0.0.0.0/0` between
 peers and leaves the rules alone, so no connection drops; exit off removes them. The rules and
 routes carry protocol 201, so only the agent's own are ever listed or removed (amendment A27).
@@ -381,6 +389,15 @@ A kernel with IPv6 but without IPv6 policy routing (it refuses IPv6 rule dumps w
 as some NAS kernels built without IPV6_MULTIPLE_TABLES do) has no IPv6 rules to manage: step 6
 handles IPv4 alone, and with an exit on it is degraded (`exit`), not fatal, since IPv6 can then
 neither go through the exit nor be held back (amendment A45).
+
+**Endpoint failover** (M8). A server peer may come with a `fallback` endpoint in the other
+family. At every heartbeat the agent looks at each peer it keeps alive (a spoke's servers) that
+has one: when the endpoint it dials has had no handshake for 3 minutes, or none at all 45 seconds
+after it was set, the agent dials the other one instead, and back the same way; a re-apply keeps
+the choice until a config gives the peer other endpoints. A laptop on an IPv4-only network thus
+reaches a server over IPv4, one behind IPv6-only access over IPv6, without a setting. Server to
+server tunnels are idle between packets, so they are not judged; the planner gives them the
+endpoint of the first family both servers have.
 
 **Safe apply** (server nodes, spec S6.4, amendment A15): a config the server pushes over a
 previous one is applied at once and written to `config.pending.json`; `config.json` stays the last

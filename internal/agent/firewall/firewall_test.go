@@ -401,6 +401,52 @@ func TestForwardingPolicies(t *testing.T) {
 	}
 }
 
+// An exit with IPv6 (M8) masquerades the mesh's IPv6 prefix by a rich rule
+// in its policy: firewalld's policy masquerade is IPv4 only.
+func TestExitPolicyMasqueradesIPv6(t *testing.T) {
+	r := freshHost()
+	f := newFirewall(t, r)
+	cfg := testfix.ServerConfig()
+	cfg.Firewall.ExitGateway, cfg.Firewall.Exit6 = true, testfix.MeshCIDR6
+	if _, err := f.Apply(context.Background(), cfg.Firewall); err != nil {
+		t.Fatal(err)
+	}
+	rule := `rule family="ipv6" source address="` + testfix.MeshCIDR6 + `" masquerade`
+	add := []string{"firewall-cmd", "--permanent", "--policy=meshctl-exit", "--add-rich-rule=" + rule}
+	if !slices.ContainsFunc(r.mutations(), func(m []string) bool { return slices.Equal(m, add) }) {
+		t.Fatalf("no IPv6 masquerade in %q", r.mutations())
+	}
+
+	// A restarted agent finds it in place; without the rule it is put back.
+	info := policyInfo("meshctl-exit", "public", "yes") + "\t" + rule + "\n"
+	r.answers["firewall-cmd --permanent --get-policies"] = "meshctl-exit\n"
+	r.answers["firewall-cmd --permanent --info-policy=meshctl-exit"] = info
+	r.calls = nil
+	restarted := &Firewall{Run: r, Dir: f.Dir, Iface: "wg0", ready: true}
+	if n, err := restarted.Apply(context.Background(), cfg.Firewall); err != nil || n != 0 {
+		t.Fatalf("after restart: %d, %v, mutations %q", n, err, r.mutations())
+	}
+	r.answers["firewall-cmd --permanent --info-policy=meshctl-exit"] = policyInfo("meshctl-exit", "public", "yes")
+	restarted = &Firewall{Run: r, Dir: f.Dir, Iface: "wg0", ready: true}
+	if n, err := restarted.Apply(context.Background(), cfg.Firewall); err != nil || n != 2 {
+		t.Fatalf("repair = %d, %v", n, err)
+	}
+	// The exit loses its IPv6: the policy goes back to IPv4 only.
+	r.answers["firewall-cmd --permanent --info-policy=meshctl-exit"] = info
+	cfg.Firewall.Exit6 = ""
+	r.calls = nil
+	if n, err := restarted.Apply(context.Background(), cfg.Firewall); err != nil || n != 2 ||
+		slices.ContainsFunc(r.mutations(), func(m []string) bool { return strings.Contains(strings.Join(m, " "), "rich-rule") }) {
+		t.Fatalf("without IPv6 = %d, %v, mutations %q", n, err, r.mutations())
+	}
+	// A hostile prefix never reaches firewall-cmd.
+	r.calls = nil
+	cfg.Firewall.Exit6 = testfix.MeshCIDR6 + `" accept`
+	if _, err := newFirewall(t, r).Apply(context.Background(), cfg.Firewall); err == nil || !strings.Contains(err.Error(), "firewall.exit6") || len(r.calls) != 0 {
+		t.Fatalf("hostile exit6 = %v, calls %q", err, r.calls)
+	}
+}
+
 func TestPolicyFailureIsReported(t *testing.T) {
 	r := freshHost()
 	r.errs = map[string]error{"firewall-cmd --permanent --policy=meshctl-exit --add-masquerade": errors.New("INVALID_ZONE: masquerade cannot be used")}

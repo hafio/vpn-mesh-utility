@@ -563,8 +563,18 @@ func mutate[T entry](p *Policy, method string, list *[]T, x T) error {
 
 func (p *Policy) AddRule(r exitmode.Rule) error   { return mutate(p, "AddRule", &p.rules, r) }
 func (p *Policy) DelRule(r exitmode.Rule) error   { return mutate(p, "DelRule", &p.rules, r) }
-func (p *Policy) AddRoute(r exitmode.Route) error { return mutate(p, "AddRoute", &p.routes, r) }
 func (p *Policy) DelRoute(r exitmode.Route) error { return mutate(p, "DelRoute", &p.routes, r) }
+
+// AddRoute replaces the table's default route of r's family, as netlink's
+// RouteReplace does.
+func (p *Policy) AddRoute(r exitmode.Route) error {
+	p.mu.Lock()
+	if p.failure("AddRoute") == nil {
+		p.routes = slices.DeleteFunc(p.routes, func(x exitmode.Route) bool { return x.Family == r.Family && x != r })
+	}
+	p.mu.Unlock()
+	return mutate(p, "AddRoute", &p.routes, r)
+}
 
 // Install puts a rule in place as if something else had added it.
 func (p *Policy) Install(r exitmode.Rule) {

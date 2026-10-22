@@ -912,6 +912,13 @@ func (r *runner) statusLoop(ctx context.Context) {
 		case <-t.C:
 		case <-r.statusKick:
 		}
+		// A server that stopped answering on one endpoint is tried on its
+		// other (M8), at every heartbeat, whether the server answers or not.
+		if moved, err := r.engine.Failover(); err != nil {
+			r.log.Warn("endpoint failover", "err", err)
+		} else if len(moved) > 0 {
+			r.log.Info("a server did not answer on its endpoint; dialling its other one", "peers", moved)
+		}
 		sentAt := r.d.Now()
 		rep := r.report()
 		resp, err := r.cl.Status(ctx, rep)

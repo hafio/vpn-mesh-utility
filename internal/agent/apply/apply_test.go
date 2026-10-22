@@ -11,6 +11,7 @@ import (
 
 	"github.com/hafio/vpn-mesh-utility/internal/agent/agentfake"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/apply"
+	"github.com/hafio/vpn-mesh-utility/internal/agent/exitmode"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/policy"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/wg"
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
@@ -102,6 +103,11 @@ func TestDualStack(t *testing.T) {
 	if _, ok := r.s.Values[proto.SysctlIPv6Forward]; !ok {
 		t.Error("the IPv6 sysctl was not set on a host with IPv6")
 	}
+	// vps-2 has public IPv6, so the exit carries it.
+	six := exitmode.Route{Family: exitmode.IPv6, Link: "wg0"}
+	if table, _ := r.p.Routes(); !slices.Contains(table, six) {
+		t.Errorf("exit table %v: IPv6 goes through vps-2", table)
+	}
 	before := r.mutations()
 	if res, err := r.e.Apply(context.Background(), cfg); err != nil || res.Changes != 0 || r.mutations() != before {
 		t.Fatalf("second dual apply = %+v, %v", res, err)
@@ -145,6 +151,9 @@ func TestDualStack(t *testing.T) {
 	if _, ok := r.s.Values[proto.SysctlIPv6Forward]; ok || r.s.Values[proto.SysctlSrcValidMark] != "1" {
 		t.Errorf("sysctls without IPv6: %v", r.s.Values)
 	}
+	if table, _ := r.p.Routes(); slices.Contains(table, six) {
+		t.Errorf("exit table %v: no IPv6 through the exit without IPv6", table)
+	}
 	if cfg.Interface.Address6 == "" || !slices.Contains(cfg.Peers[0].AllowedIPs, testfix.VPS1.MeshIP6+"/128") || len(cfg.Sysctl) != 2 {
 		t.Error("Apply changed the caller's config")
 	}
@@ -157,6 +166,66 @@ func TestDualStack(t *testing.T) {
 		t.Fatalf("an IPv6-only node without IPv6 = %v", err)
 	} else if step, _ := apply.IsStepError(err); step != apply.StepValidate || r.mutations() != 0 {
 		t.Fatalf("step %q, %d host changes", step, r.mutations())
+	}
+}
+
+// A spoke's server that does not answer on its endpoint is dialled on its
+// other one (M8), and back when that one goes quiet; a server that answers
+// stays where it is, and a re-apply keeps what failover chose.
+func TestEndpointFailover(t *testing.T) {
+	r := newRig(t)
+	now := testfix.Epoch
+	e := apply.New(apply.Deps{Host: r.h, Routes: r.r, Exit: r.p, Sysctl: r.s, Iface: "wg0", Key: r.key, Now: func() time.Time { return now }})
+	ctx := context.Background()
+	cfg := testfix.DualSpokeConfig("") // only vps-2 has an IPv6 endpoint
+	if _, err := e.Apply(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	vps2, _ := wg.ParseKey(testfix.WGKey(testfix.VPS2.Key))
+	endpoint := func() string {
+		t.Helper()
+		dev, _ := r.h.DeviceOf("wg0")
+		for _, p := range dev.Peers {
+			if p.PublicKey == vps2 {
+				return p.Endpoint.String()
+			}
+		}
+		return ""
+	}
+	if moved, err := e.Failover(); err != nil || moved != nil {
+		t.Fatalf("at once = %v, %v", moved, err)
+	}
+	now = now.Add(46 * time.Second)
+	if moved, err := e.Failover(); err != nil || !slices.Equal(moved, []string{"vps-2 to " + testfix.VPS2.Endpoint6}) || endpoint() != testfix.VPS2.Endpoint6 {
+		t.Fatalf("no handshake on IPv4 = %v, %v, endpoint %s", moved, err, endpoint())
+	}
+	if res, err := e.Apply(ctx, cfg); err != nil || res.Changes != 0 || endpoint() != testfix.VPS2.Endpoint6 {
+		t.Fatalf("a re-apply = %+v, %v, endpoint %s", res, err, endpoint())
+	}
+	// It answers on IPv6, then stops.
+	r.h.Stats = []wg.PeerStats{{PublicKey: vps2, LastHandshake: now.Add(time.Second)}}
+	now = now.Add(2 * time.Minute)
+	if moved, _ := e.Failover(); moved != nil {
+		t.Fatalf("an answering server moved: %v", moved)
+	}
+	now = now.Add(time.Minute + time.Second)
+	if moved, _ := e.Failover(); !slices.Equal(moved, []string{"vps-2 to " + testfix.VPS2.Endpoint}) || endpoint() != testfix.VPS2.Endpoint {
+		t.Fatalf("stale on IPv6 = %v, endpoint %s", moved, endpoint())
+	}
+	now = now.Add(time.Minute)
+	r.h.Fail = "Configure"
+	if _, err := e.Failover(); err == nil || !strings.Contains(err.Error(), "dial vps-2") {
+		t.Fatalf("a failed move = %v", err)
+	}
+	r.h.Fail = ""
+	// Without a fallback there is nothing to fail over to.
+	cfg.Peers[1].Fallback = ""
+	if _, err := e.Apply(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Hour)
+	if moved, err := e.Failover(); err != nil || moved != nil || endpoint() != testfix.VPS2.Endpoint {
+		t.Fatalf("without a fallback = %v, %v, endpoint %s", moved, err, endpoint())
 	}
 }
 
