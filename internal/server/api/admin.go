@@ -254,7 +254,8 @@ func (s *Nodes) Network(ctx context.Context, name, runtime string) (NetworkInfo,
 		runtime = deploy.RuntimeDocker
 	}
 	setup, err := deploy.MeshNetworkSetup(deploy.NetworkParams{Runtime: runtime, Host: k.Mode == proto.ModeHost,
-		Network: k.Network, Range: k.Range, Bridge: k.Bridge, Gateway: k.Gateway, Zone: in.ZoneName(), Resolvers: planner.ServerIPs(in)})
+		Network: k.Network, Range: k.Range, Bridge: k.Bridge, Gateway: k.Gateway, Zone: in.ZoneName(), Resolvers: planner.ServerIPs(in),
+		Network6: k.Network6, Range6: k.Range6, Bridge6: k.Bridge6})
 	if err != nil {
 		return NetworkInfo{}, invalid(err)
 	}
@@ -277,7 +278,7 @@ func (s *Nodes) containerCompose(n store.Node, in planner.Input, o ComposeOption
 		Node: n.Name, Server: s.serverURL, Version: s.version, Hub: n.Role == string(proto.RoleServer),
 		ListenPort: n.ListenPort, Backend: o.Backend, Runtime: o.Runtime, DataDir: o.DataDir, NoNames: o.NoNames,
 		Network: k.Network, Subnet: k.Subnet, Range: k.Range, Bridge: k.Bridge, Gateway: k.Gateway, Zone: in.ZoneName(),
-		Resolvers: planner.ServerIPs(in),
+		Resolvers: planner.ServerIPs(in), Network6: k.Network6, Range6: k.Range6, Bridge6: k.Bridge6,
 	}
 	if p.Hub {
 		ep, err := netip.ParseAddrPort(n.Endpoint)

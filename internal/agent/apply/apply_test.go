@@ -522,6 +522,44 @@ func TestContainersStep(t *testing.T) {
 	}
 }
 
+// The containers' IPv6 (M8): the gateway answers neighbour discovery for
+// the node's own IPv6 address and every one it routes over wg0; a kernel
+// without IPv6 policy routing degrades the step, and the resolver answers
+// the containers on the IPv4 gateway all the same.
+func TestContainersStepWithIPv6(t *testing.T) {
+	cfg := testfix.DualSpokeConfig("")
+	cfg.Exit, cfg.DNS = nil, meshDNS()
+	cfg.Containers = testfix.Containers6(proto.ModeContainer)
+	cfg.Sysctl = []proto.Sysctl{{Key: proto.SysctlProxyARP, Value: "1"}, {Key: proto.SysctlIPForward, Value: "1"},
+		{Key: proto.SysctlIPv6Forward, Value: "1"}, {Key: proto.SysctlProxyNDP, Value: "1"}}
+	r := newRig(t)
+	n := agentfake.NewNet()
+	n.Attach("eth1", netip.MustParsePrefix("10.77.128.128/16"))
+	r.e = apply.New(apply.Deps{Host: r.h, Routes: r.r, Exit: r.p, Sysctl: r.s, DNS: r.dns, Containers: n, Iface: "wg0", Key: r.key})
+	if res, err := r.e.Apply(context.Background(), cfg); err != nil || len(res.Degraded) != 0 || !n.HasBlackhole6() {
+		t.Fatalf("Apply = %+v, %v; calls %v", res, err, n.Calls)
+	}
+	var want []netip.Addr
+	for _, a := range []string{testfix.VPS1.MeshIP6, testfix.VPS2.MeshIP6, testfix.VPS3.MeshIP6, testfix.NAS.MeshIP6, testfix.Laptop.MeshIP6} {
+		want = append(want, netip.MustParseAddr(a))
+	}
+	if got := n.ProxiesOf("eth1"); !slices.Equal(got, want) {
+		t.Fatalf("proxy entries = %v, want %v", got, want)
+	}
+
+	unrouted := agentfake.NewNet()
+	unrouted.NoIPv6Rules = true
+	unrouted.Attach("eth1", netip.MustParsePrefix("10.77.128.128/16"))
+	r.e = apply.New(apply.Deps{Host: r.h, Routes: r.r, Exit: r.p, Sysctl: r.s, DNS: r.dns, Containers: unrouted, Iface: "wg0", Key: r.key})
+	res, err := r.e.Apply(context.Background(), cfg)
+	if err != nil || !slices.Equal(res.Degraded, []string{apply.StepContainers}) || !strings.Contains(strings.Join(res.Errors, " "), "IPv6 policy routing") {
+		t.Fatalf("without IPv6 policy routing = %+v, %v", res, err)
+	}
+	if w, _ := r.dns.Last(); w.Also != netip.MustParseAddr(cfg.Containers.Gateway) {
+		t.Fatalf("the IPv4 gateway is up, yet DNS does not answer on it: %+v", w)
+	}
+}
+
 func TestExitModeOnSwitchOff(t *testing.T) {
 	r := newRig(t)
 	allowed := func(peer string) []netip.Prefix {

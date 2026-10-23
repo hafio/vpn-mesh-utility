@@ -74,6 +74,10 @@ type ContainerParams struct {
 	// Resolvers are the servers' mesh IPs: a Swarm service's resolvers,
 	// since its tasks run on several nodes and each node's gateway differs.
 	Resolvers []string
+	// The containers' IPv6, when it is on the mesh (M8, opt-in): the mesh's
+	// IPv6 prefix, the range handed out and the bridge's address; all three
+	// or none.
+	Network6, Range6, Bridge6 string
 }
 
 // The compose file as a typed value, so yaml.v3 does every bit of quoting
@@ -167,10 +171,29 @@ func RenderContainerCompose(p ContainerParams) ([]byte, error) {
 		_, err = validate.IPv4(fmt.Sprintf("resolvers[%d]", i), r)
 		keep(err)
 	}
+	keep(checkIPv6(p.Network6, p.Range6, p.Bridge6))
 	if err := errors.Join(errs...); err != nil {
 		return nil, fmt.Errorf("render the compose file: %w", err)
 	}
 	return renderContainer(p)
+}
+
+// checkIPv6 checks the IPv6 side of a container network (M8): all of it,
+// or none.
+func checkIPv6(network6, range6, bridge6 string) error {
+	if network6 == "" && range6 == "" && bridge6 == "" {
+		return nil
+	}
+	var errs []error
+	for _, f := range [][2]string{{"network6", network6}, {"range6", range6}} {
+		if _, err := validate.Prefix6(f[0], f[1]); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if _, err := validate.IPv6("bridge6", bridge6); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
 }
 
 // RuntimeSocket is where the container-mode agent finds the runtime's API
@@ -207,8 +230,9 @@ func renderContainer(p ContainerParams) ([]byte, error) {
 		volumes = append(volumes, hostSocket(p.Runtime)+":"+RuntimeSocket+":ro")
 	}
 	// The gateway forwards between wg0 and the containers and answers ARP
-	// for every mesh address it routes; /proc/sys is read-only in a
-	// container, so the runtime sets both, in the agent's namespace only.
+	// for every mesh address it routes -- and, with IPv6 (M8), neighbour
+	// discovery; /proc/sys is read-only in a container, so the runtime sets
+	// them, in the agent's namespace only.
 	svc := containerService{
 		Image:       lit(Image + ":" + strings.TrimPrefix(p.Version, "v")),
 		Command:     command,
@@ -232,6 +256,11 @@ func renderContainer(p ContainerParams) ([]byte, error) {
 			Retries:     3,
 			StartPeriod: "10s",
 		},
+	}
+	if p.Network6 != "" {
+		svc.Sysctls["net.ipv6.conf.all.disable_ipv6"] = "0"
+		svc.Sysctls["net.ipv6.conf.all.forwarding"] = "1"
+		svc.Sysctls["net.ipv6.conf.all.proxy_ndp"] = "1"
 	}
 	if p.Backend != ContainerKernel {
 		svc.Devices = []string{"/dev/net/tun:/dev/net/tun"}
@@ -275,6 +304,8 @@ type NetworkParams struct {
 	Zone    string
 	// Resolvers are the servers' mesh IPs, for a Swarm service.
 	Resolvers []string
+	// The containers' IPv6 (M8, opt-in), as ContainerParams has it.
+	Network6, Range6, Bridge6 string
 }
 
 // NetworkSetup is what a node's operator runs and writes to put containers
@@ -313,6 +344,7 @@ func MeshNetworkSetup(p NetworkParams) (NetworkSetup, error) {
 		_, err = validate.IPv4(fmt.Sprintf("resolvers[%d]", i), r)
 		keep(err)
 	}
+	keep(checkIPv6(p.Network6, p.Range6, p.Bridge6))
 	if err := errors.Join(errs...); err != nil {
 		return NetworkSetup{}, fmt.Errorf("the mesh network's commands: %w", err)
 	}
@@ -330,14 +362,24 @@ func MeshNetworkSetup(p NetworkParams) (NetworkSetup, error) {
 // (inhibit_ipv4), masquerades nothing and filters no port the mesh may
 // reach (nat-unprotected; the agent's guard keeps the subnet to the mesh),
 // Podman attaches to it unmanaged. Swarm needs a config-only network on
-// each node and one swarm-scoped network from it.
+// each node and one swarm-scoped network from it. With the containers'
+// IPv6 (M8, the 8a trial) the network is dual stack: the mesh's IPv6 prefix
+// on the link too, the node's /112 upper half handed out, the bridge at
+// ::1 -- each IPv6 value after its IPv4 one, as Podman pairs them -- and a
+// host-mode Docker bridge leaves IPv6 unfiltered too (the guard holds it).
 func networkCommands(p NetworkParams) []string {
 	ipam := fmt.Sprintf("--subnet %s --ip-range %s --gateway %s", p.Network, p.Range, p.Bridge)
+	if p.Network6 != "" {
+		ipam += fmt.Sprintf(" --ipv6 --subnet %s --ip-range %s --gateway %s", p.Network6, p.Range6, p.Bridge6)
+	}
 	docker := []string{"-o com.docker.network.bridge.name=" + MeshBridge}
 	if p.Host {
 		docker = []string{
 			"-o com.docker.network.bridge.name=" + MeshBridge + " -o com.docker.network.bridge.inhibit_ipv4=true",
 			"-o com.docker.network.bridge.enable_ip_masquerade=false -o com.docker.network.bridge.gateway_mode_ipv4=nat-unprotected",
+		}
+		if p.Network6 != "" {
+			docker[1] += " -o com.docker.network.bridge.gateway_mode_ipv6=nat-unprotected"
 		}
 	}
 	switch {
@@ -433,10 +475,16 @@ func containerHeader(p ContainerParams) []string {
 		fmt.Sprintf("meshctl agent for %q in container mode (amendment A37), a %s.", p.Node, role),
 		"Only containers on the " + MeshNetwork + " network are on the mesh; the host is not.",
 		backend,
-		"",
-		"1. Create the mesh network (" + p.Runtime + "):",
 	}
-	lines = append(lines, networkCommands(NetworkParams{Runtime: p.Runtime, Network: p.Network, Range: p.Range, Bridge: p.Bridge})...)
+	if p.Network6 != "" {
+		lines = append(lines, "IPv6: the containers get addresses from "+p.Range6+" too; the agent answers neighbour discovery for the mesh.")
+	}
+	lines = append(lines,
+		"",
+		"1. Create the mesh network ("+p.Runtime+"):",
+	)
+	lines = append(lines, networkCommands(NetworkParams{Runtime: p.Runtime, Network: p.Network, Range: p.Range, Bridge: p.Bridge,
+		Network6: p.Network6, Range6: p.Range6, Bridge6: p.Bridge6})...)
 	lines = append(lines,
 		"2. Join once, with the node's join token (web UI, `meshctl node add` or `node token`):",
 		fmt.Sprintf("  MESHCTL_TOKEN=<token> %s run --rm -e MESHCTL_TOKEN %s \\", compose, ContainerService),

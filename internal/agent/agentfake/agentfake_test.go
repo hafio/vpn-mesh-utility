@@ -310,12 +310,28 @@ func TestNetHasKernelSemantics(t *testing.T) {
 	if rules, err := n.Rules(); err != nil || !slices.Equal(rules, []containers.Rule{r}) {
 		t.Fatalf("Rules = %v, %v", rules, err)
 	}
-	if err := n.SetBlackhole(true); err != nil || !n.HasBlackhole() {
+	if err := n.SetBlackhole(false, true); err != nil || !n.HasBlackhole() || n.HasBlackhole6() {
 		t.Fatalf("SetBlackhole = %v", err)
 	}
-	if on, err := n.Blackhole(); err != nil || !on {
+	if on, err := n.Blackhole(false); err != nil || !on {
 		t.Fatalf("Blackhole = %v, %v", on, err)
 	}
+	if on, err := n.Blackhole(true); err != nil || on {
+		t.Fatalf("Blackhole(IPv6) = %v, %v", on, err)
+	}
+	// A kernel without IPv6 policy routing refuses IPv6 rules.
+	r6 := containers.Rule{Priority: 1000, IPv6: true, Iif: "lo", Table: containers.MainTable}
+	if ok, err := n.IPv6Rules(); err != nil || !ok {
+		t.Fatalf("IPv6Rules = %v, %v", ok, err)
+	}
+	n.NoIPv6Rules = true
+	if ok, _ := n.IPv6Rules(); ok {
+		t.Fatal("IPv6Rules with NoIPv6Rules")
+	}
+	if err := n.AddRule(r6); err == nil || !strings.Contains(err.Error(), "not supported") {
+		t.Fatalf("an IPv6 rule without IPv6 policy routing = %v", err)
+	}
+	n.NoIPv6Rules = false
 
 	if err := n.AddAddr("eth1", netip.MustParsePrefix("10.77.128.2/16")); err == nil {
 		t.Fatal("an address went to a missing interface")
@@ -342,8 +358,47 @@ func TestNetHasKernelSemantics(t *testing.T) {
 	if created, err := n.EnsureBridge("meshctl0"); err != nil || created {
 		t.Fatalf("EnsureBridge again = %v, %v", created, err)
 	}
+	far := netip.MustParseAddr("fd10:77::2:1")
+	if err := n.AddProxy("eth9", far); err == nil {
+		t.Fatal("a proxy entry went to a missing interface")
+	}
+	if _, err := n.Proxies("eth9"); err == nil {
+		t.Fatal("Proxies of a missing interface succeeded")
+	}
+	if err := n.AddProxy("eth1", far); err != nil || !slices.Equal(n.ProxiesOf("eth1"), []netip.Addr{far}) {
+		t.Fatalf("AddProxy = %v; %v", err, n.ProxiesOf("eth1"))
+	}
+	if err := n.AddProxy("eth1", far); err == nil || !strings.Contains(err.Error(), "file exists") {
+		t.Fatalf("a proxy entry twice = %v", err)
+	}
+	if err := n.DelProxy("eth1", far); err != nil || len(n.ProxiesOf("eth1")) != 0 {
+		t.Fatalf("DelProxy = %v", err)
+	}
+	if err := n.DelProxy("eth1", far); err == nil || !strings.Contains(err.Error(), "no such entry") {
+		t.Fatalf("removing a missing proxy entry = %v", err)
+	}
+	if err := n.SetBlackhole(true, true); err != nil || !n.HasBlackhole6() {
+		t.Fatalf("SetBlackhole(IPv6) = %v", err)
+	}
+	sub6 := netip.MustParsePrefix("fd10:77::8000:0/112")
+	if err := n.SetDropped(sub6, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.SetDropped(sub6, true); err == nil || !strings.Contains(err.Error(), "file exists") {
+		t.Fatalf("dropping twice = %v", err)
+	}
+	if dropped, err := n.Dropped(); err != nil || !slices.Equal(dropped, []netip.Prefix{sub6}) {
+		t.Fatalf("Dropped = %v, %v", dropped, err)
+	}
+	if err := n.SetDropped(sub6, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.SetDropped(sub6, false); err == nil || !strings.Contains(err.Error(), "no such route") {
+		t.Fatalf("undropping twice = %v", err)
+	}
 	if want := []string{"add rule 1000: iif lo lookup 254", "remove rule 1000: iif lo lookup 254", "blackhole true",
-		"addr eth1 10.77.128.2/16", "bridge meshctl0"}; !slices.Equal(n.Calls, want) {
+		"addr eth1 10.77.128.2/16", "bridge meshctl0", "proxy eth1 fd10:77::2:1", "unproxy eth1 fd10:77::2:1",
+		"ipv6 blackhole true", "drop fd10:77::8000:0/112", "undrop fd10:77::8000:0/112"}; !slices.Equal(n.Calls, want) {
 		t.Fatalf("Calls = %q", n.Calls)
 	}
 
@@ -352,8 +407,11 @@ func TestNetHasKernelSemantics(t *testing.T) {
 	for name, err := range map[string]error{
 		"AddRule":      n.AddRule(r),
 		"DelRule":      n.DelRule(r),
-		"SetBlackhole": n.SetBlackhole(false),
+		"SetBlackhole": n.SetBlackhole(false, false),
 		"AddAddr":      n.AddAddr("eth1", netip.MustParsePrefix("10.77.128.3/16")),
+		"AddProxy":     n.AddProxy("eth1", far),
+		"DelProxy":     n.DelProxy("eth1", far),
+		"SetDropped":   n.SetDropped(sub6, true),
 	} {
 		if !errors.Is(err, boom) {
 			t.Errorf("%s with Fail = %v", name, err)
@@ -365,14 +423,20 @@ func TestNetHasKernelSemantics(t *testing.T) {
 	if _, err := n.Rules(); err != nil {
 		t.Errorf("Fail alone must leave the queries alone: %v", err)
 	}
-	for _, method := range []string{"Rules", "Blackhole", "LinkHolding", "Addrs"} {
+	for _, method := range []string{"Rules", "Blackhole", "LinkHolding", "Addrs", "IPv6Rules", "Proxies", "Dropped"} {
 		n.FailOn = method
 		var err error
 		switch method {
 		case "Rules":
 			_, err = n.Rules()
+		case "IPv6Rules":
+			_, err = n.IPv6Rules()
+		case "Proxies":
+			_, err = n.Proxies("eth1")
+		case "Dropped":
+			_, err = n.Dropped()
 		case "Blackhole":
-			_, err = n.Blackhole()
+			_, err = n.Blackhole(false)
 		case "LinkHolding":
 			_, err = n.LinkHolding(sub, "")
 		case "Addrs":

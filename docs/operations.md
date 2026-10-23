@@ -331,7 +331,16 @@ the address a family adds is allocated, the one it drops is freed. `--ip6` and `
 an IPv6 address as `--ip` and `--mesh-ip` do; `--endpoint6 [2001:db8::10]:51820` publishes a
 server's IPv6 endpoint, which spokes dial when IPv4 does not work (a server's join finds it
 itself, or takes `agent join --endpoint6`); `--containers6` puts a node's
-containers' IPv6 on the mesh beside their IPv4. `meshctl ipv6 off` takes every IPv6 address away
+containers' IPv6 on the mesh beside their IPv4: its /112,
+the upper half handed out; `node compose` and `node network` then create the mesh network dual
+stack (`--ipv6 --subnet <prefix> --ip-range <half> --gateway <::1>` after the IPv4 values), and a
+container-mode agent's compose file sets `disable_ipv6=0`, IPv6 forwarding and proxy NDP in its
+namespace. Recreate the network and the agent's container after turning it on. The agent isolates
+the containers' IPv6 as their IPv4 and answers neighbour discovery for the mesh's nodes; their
+IPv6 reaches every node (containers on other nodes over IPv6: to come). It needs the kernel's IPv6
+policy routing: where `ip -6 rule` fails (some NAS kernels), the agent drops the containers'
+IPv6, the containers step reports degraded and they keep IPv4 only -- turn `--containers6` off
+there. `meshctl ipv6 off` takes every IPv6 address away
 again (make IPv6-only nodes dual first, and remove IPv6-only DNS records), and the mesh stays
 IPv4 only across restarts until `meshctl ipv6 auto` or a prefix. A prefix that holds
 addresses is changed by going off first. When a node's agent reports that its host cannot use

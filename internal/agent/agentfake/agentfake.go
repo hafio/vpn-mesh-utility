@@ -591,13 +591,18 @@ func (p *Policy) InstallRoute(r exitmode.Route) {
 	p.routes = append(p.routes, r)
 }
 
-// Net is a fake containers.Net: the agent's rules, the blackhole table,
-// interface addresses and bridges.
+// Net is a fake containers.Net: the agent's rules of both families, the
+// blackhole table, interface addresses, proxy neighbour entries and
+// bridges.
 type Net struct {
-	mu    sync.Mutex
-	rules []containers.Rule
-	hole  bool
-	addrs map[string][]netip.Prefix
+	mu      sync.Mutex
+	rules   []containers.Rule
+	hole    map[bool]bool // by family, true for IPv6
+	addrs   map[string][]netip.Prefix
+	proxies map[string][]netip.Addr
+	dropped []netip.Prefix
+	// NoIPv6Rules is a kernel without IPv6 policy routing.
+	NoIPv6Rules bool
 	// Calls lists the mutating calls in order ("add rule 1000: ...").
 	Calls []string
 	// Fail makes the named method fail (FailOn), or with FailOn empty every
@@ -607,7 +612,9 @@ type Net struct {
 }
 
 // NewNet returns a host with no interfaces.
-func NewNet() *Net { return &Net{addrs: map[string][]netip.Prefix{}} }
+func NewNet() *Net {
+	return &Net{hole: map[bool]bool{}, addrs: map[string][]netip.Prefix{}, proxies: map[string][]netip.Addr{}}
+}
 
 // Attach gives an interface an address, as a runtime attaching the agent
 // to a network does.
@@ -631,15 +638,31 @@ func (n *Net) AddrsOf(link string) []netip.Prefix {
 	return slices.Clone(n.addrs[link])
 }
 
-// HasBlackhole reports the blackhole route, for assertions.
+// HasBlackhole reports the IPv4 blackhole route, for assertions.
 func (n *Net) HasBlackhole() bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	return n.hole
+	return n.hole[false]
+}
+
+// HasBlackhole6 reports the IPv6 blackhole route, for assertions.
+func (n *Net) HasBlackhole6() bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.hole[true]
+}
+
+// ProxiesOf returns an interface's proxy neighbour entries, for
+// assertions.
+func (n *Net) ProxiesOf(link string) []netip.Addr {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return slices.Clone(n.proxies[link])
 }
 
 func (n *Net) failure(method string) error {
-	mutating := slices.Contains([]string{"AddRule", "DelRule", "SetBlackhole", "AddAddr", "EnsureBridge"}, method)
+	mutating := slices.Contains([]string{"AddRule", "DelRule", "SetBlackhole", "AddAddr", "EnsureBridge", "AddProxy", "DelProxy",
+		"SetDropped"}, method)
 	if n.FailOn == method || n.FailOn == "" && mutating {
 		return n.Fail
 	}
@@ -662,6 +685,9 @@ func (n *Net) AddRule(r containers.Rule) error {
 	defer n.mu.Unlock()
 	if err := n.failure("AddRule"); err != nil {
 		return err
+	}
+	if r.IPv6 && n.NoIPv6Rules {
+		return fmt.Errorf("add %s: address family not supported by protocol", r)
 	}
 	if slices.Contains(n.rules, r) {
 		return fmt.Errorf("add %s: file exists", r)
@@ -686,20 +712,105 @@ func (n *Net) DelRule(r containers.Rule) error {
 	return nil
 }
 
-func (n *Net) Blackhole() (bool, error) {
+func (n *Net) IPv6Rules() (bool, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	return n.hole, n.failure("Blackhole")
+	return !n.NoIPv6Rules, n.failure("IPv6Rules")
 }
 
-func (n *Net) SetBlackhole(on bool) error {
+func (n *Net) Blackhole(ipv6 bool) (bool, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.hole[ipv6], n.failure("Blackhole")
+}
+
+func (n *Net) SetBlackhole(ipv6, on bool) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if err := n.failure("SetBlackhole"); err != nil {
 		return err
 	}
-	n.hole = on
-	n.record(fmt.Sprintf("blackhole %v", on))
+	n.hole[ipv6] = on
+	if ipv6 {
+		n.record(fmt.Sprintf("ipv6 blackhole %v", on))
+	} else {
+		n.record(fmt.Sprintf("blackhole %v", on))
+	}
+	return nil
+}
+
+func (n *Net) Proxies(link string) ([]netip.Addr, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if err := n.failure("Proxies"); err != nil {
+		return nil, err
+	}
+	if _, ok := n.addrs[link]; !ok {
+		return nil, fmt.Errorf("look up interface %s: no such interface", link)
+	}
+	return slices.Clone(n.proxies[link]), nil
+}
+
+func (n *Net) AddProxy(link string, a netip.Addr) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if err := n.failure("AddProxy"); err != nil {
+		return err
+	}
+	if _, ok := n.addrs[link]; !ok {
+		return fmt.Errorf("look up interface %s: no such interface", link)
+	}
+	if slices.Contains(n.proxies[link], a) {
+		return fmt.Errorf("proxy %s on %s: file exists", a, link)
+	}
+	n.proxies[link] = append(n.proxies[link], a)
+	n.record("proxy " + link + " " + a.String())
+	return nil
+}
+
+func (n *Net) Dropped() ([]netip.Prefix, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if err := n.failure("Dropped"); err != nil {
+		return nil, err
+	}
+	return slices.Clone(n.dropped), nil
+}
+
+func (n *Net) SetDropped(p netip.Prefix, on bool) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if err := n.failure("SetDropped"); err != nil {
+		return err
+	}
+	i := slices.Index(n.dropped, p)
+	switch {
+	case on && i >= 0:
+		return fmt.Errorf("drop %s: file exists", p)
+	case on:
+		n.dropped = append(n.dropped, p)
+		n.record("drop " + p.String())
+	case i < 0:
+		return fmt.Errorf("stop dropping %s: no such route", p)
+	default:
+		n.dropped = slices.Delete(n.dropped, i, i+1)
+		n.record("undrop " + p.String())
+	}
+	return nil
+}
+
+func (n *Net) DelProxy(link string, a netip.Addr) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if err := n.failure("DelProxy"); err != nil {
+		return err
+	}
+	i := slices.Index(n.proxies[link], a)
+	if i < 0 {
+		return fmt.Errorf("proxy %s on %s: no such entry", a, link)
+	}
+	n.proxies[link] = slices.Delete(n.proxies[link], i, i+1)
+	n.record("unproxy " + link + " " + a.String())
 	return nil
 }
 

@@ -162,13 +162,21 @@ wg0 reaches only the node's subnet and never the bridge address, from the mesh s
 subnet reaches the mesh, and everything else forwarded is blackholed -- so the host reaches no
 mesh address (the gateway does not even answer its ARP), no mesh peer reaches the host or the
 gateway's egress network, and a peer that routes a foreign address to the gateway gets nowhere
-(the M6 trial's R0-R7, and `TestContainerNetworks` in e2e).
+(the M6 trial's R0-R7, and `TestContainerNetworks` in e2e). The containers' IPv6 (M8, opt-in)
+is held by the same rules for IPv6, which need the kernel's IPv6 policy routing. Without it the
+agent fails closed: it leaves the IPv6 side out (no gateway address, no proxy entries) and puts
+a blackhole route for the node's /112 in the main table, so although the compose file turns IPv6
+forwarding on and the runtime gives the network its IPv6, nothing a peer routes to the /112
+(the bridge address included) is forwarded, and with no one answering neighbour discovery for
+the mesh the containers and the host send nothing into it; the step reports degraded until the
+node's `--containers6` is turned off.
 
 **Host mode with containers.** The host is on the mesh and routes the subnet on the bridge
 `meshctl0` the agent owns. A runtime that lets anyone who routes to the host reach its containers
 (Docker's `nat-unprotected`, which the mesh needs so its peers reach unpublished ports) must not
 open them to the host's LAN: four policy rules let only wg0, the bridge and the host itself reach
-the subnet, and blackhole it from every other interface (the trial's G1-G5; e2e's LAN host). One
+the subnet, and blackhole it from every other interface (the trial's G1-G5; e2e's LAN host); the
+IPv6 rules do the same for the /112, and IPv6 from the bridge reaches the mesh's prefix only. One
 consequence: a port published on the host for a container on the mesh network is not reachable
 through that network from outside; publish it on the container's other network. Every value written into the file passes
 `internal/validate` (`TestContainerComposeRefusesHostileValues`), and below the validators the

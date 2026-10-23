@@ -349,8 +349,22 @@ mesh, a relaying hub forwards wg0 to wg0, and anything else forwarded meets a bl
 bridge `meshctl0` (it makes it when it is missing, holds `bridge` on it, and turns on its
 forwarding and proxy ARP and wg0's forwarding), and four rules let only wg0, the bridge and the
 host itself reach the subnet. Every rule carries protocol 201 at a priority of its own (1000-1006,
-5200-5203), so exit mode's rules and the host's are never touched; without a `containers`
-section the rules and the blackhole route go, the addresses and the bridge stay.
+5200-5204), so exit mode's rules and the host's are never touched; without a `containers`
+section the rules and the blackhole route go, the addresses and the bridge stay. With the
+containers' IPv6 (`subnet6`, M8) the same rules hold for IPv6 (`ip -6 rule`, an IPv6 blackhole
+default in table 51821) with the node's /112 and the mesh's IPv6 prefix: the gateway claims
+`gateway6` (::2) beside .2, a host-mode bridge gets `bridge6` (::1) and proxy NDP, and IPv6 from
+the bridge may go only to the mesh -- anything else is refused at once (rule 5204, unreachable),
+since Docker makes the mesh bridge its containers' IPv6 default route and an app would otherwise
+wait seconds before falling back to IPv4. A container sees the whole IPv6 prefix on its link,
+and IPv6 has no proxy ARP, so the mesh side answers neighbour discovery by one proxy entry per
+mesh address: the node's own IPv6 address and every single IPv6 address in its peers' allowed
+IPs (other nodes' container addresses: to come, from the mesh view's names). A kernel without
+IPv6 policy routing cannot isolate IPv6: the step sets up IPv4, leaves the IPv6 side out, drops
+the /112 by a blackhole route of its own in the main table (device-less, so the routes step,
+which keeps wg0's, never touches it) and is degraded, saying to take the containers' IPv6 off
+(`--containers6=false`); the IPv6 address and entries of a network whose IPv6 went stay, as its
+addresses do.
 
 **The drift check** applies the config on the interface again every 5 minutes, after the firewall
 step forgets what it saw: zone, interface binding (at runtime too), the recorded rules at

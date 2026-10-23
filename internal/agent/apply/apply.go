@@ -367,17 +367,19 @@ func (e *Engine) Apply(ctx context.Context, cfg proto.NodeConfig) (Result, error
 		}
 	}
 	// 10. The container network: optional, and before DNS, whose resolver
-	// answers the containers on their gateway address.
+	// answers the containers on their gateway address. Without IPv6 policy
+	// routing its IPv4 side is up all the same.
 	var also netip.Addr
 	switch {
 	case e.d.Containers != nil:
-		n, err := containers.Sync(e.d.Containers, e.d.Sysctl, cfg.Containers, e.d.Iface)
+		n, err := containers.Sync(e.d.Containers, e.d.Sysctl, cfg.Containers, e.d.Iface, proxied(cfg, addrs))
 		res.Changes += n
 		if err != nil {
 			res.Degraded = append(res.Degraded, StepContainers)
 			res.Errors = append(res.Errors, err.Error())
 			e.d.Log.Warn("containers step failed; the tunnel stays up", "err", err)
-		} else if cfg.Containers != nil {
+		}
+		if cfg.Containers != nil && (err == nil || errors.Is(err, containers.ErrIPv6Unrouted)) {
 			also, _ = netip.ParseAddr(cfg.Containers.Gateway) // validated in step 1
 		}
 	case cfg.Containers != nil:
@@ -445,6 +447,27 @@ func forHost(cfg proto.NodeConfig, ipv6 bool) (proto.NodeConfig, error) {
 		cfg.Containers = &k
 	}
 	return cfg, nil
+}
+
+// proxied is what the containers' side of the node answers neighbour
+// discovery for (M8): the node's own IPv6 mesh address and every single
+// IPv6 address it routes over the tunnel, sorted.
+func proxied(cfg proto.NodeConfig, addrs []netip.Prefix) []netip.Addr {
+	var out []netip.Addr
+	for _, a := range addrs {
+		if a.Addr().Is6() {
+			out = append(out, a.Addr())
+		}
+	}
+	for _, p := range cfg.Peers {
+		for _, s := range p.AllowedIPs {
+			if pf, err := netip.ParsePrefix(s); err == nil && pf.Addr().Is6() && pf.IsSingleIP() {
+				out = append(out, pf.Addr())
+			}
+		}
+	}
+	slices.SortFunc(out, netip.Addr.Compare)
+	return slices.Compact(out)
 }
 
 // keepEndpoints keeps each dialling peer on the endpoint Failover chose:

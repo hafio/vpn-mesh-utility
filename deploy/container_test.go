@@ -39,6 +39,12 @@ var containerVariants = map[string]func() ContainerParams{
 		p.Resolvers = []string{"10.77.0.1", "10.77.0.2"}
 		return p
 	},
+	// M8: the containers' IPv6 on the mesh too.
+	"dual": func() ContainerParams {
+		p := containerParams(false)
+		p.Network6, p.Range6, p.Bridge6 = "fd10:77::/64", "fd10:77::8000:8000/113", "fd10:77::8000:1"
+		return p
+	},
 }
 
 // parseContainer parses a rendered file and returns its document and the
@@ -122,6 +128,10 @@ func TestContainerComposePosture(t *testing.T) {
 			"sysctls":      map[string]any{"net.ipv4.ip_forward": "1", "net.ipv4.conf.all.proxy_arp": "1"},
 			"networks":     []any{"egress", MeshNetwork},
 		}
+		if p.Network6 != "" {
+			exact["sysctls"] = map[string]any{"net.ipv4.ip_forward": "1", "net.ipv4.conf.all.proxy_arp": "1",
+				"net.ipv6.conf.all.disable_ipv6": "0", "net.ipv6.conf.all.forwarding": "1", "net.ipv6.conf.all.proxy_ndp": "1"}
+		}
 		if p.Backend == "" {
 			exact["command"] = []any{"agent", "run", "--data", "/data", "--wg-backend", ContainerAuto}
 		}
@@ -181,6 +191,8 @@ func TestContainerComposeHeader(t *testing.T) {
 		"swarm": {"docker network create --config-only --subnet 10.77.0.0/16 --ip-range 10.77.128.128/25 --gateway 10.77.128.1 meshctl-mesh-config",
 			"--scope swarm --attachable --config-from meshctl-mesh-config meshctl-mesh", "the host's module", "Names: none",
 			"dns: [10.77.0.1, 10.77.0.2]", "its dns is the servers"},
+		"dual": {"--gateway 10.77.128.1 --ipv6 --subnet fd10:77::/64 --ip-range fd10:77::8000:8000/113 --gateway fd10:77::8000:1",
+			"IPv6: the containers get addresses from fd10:77::8000:8000/113"},
 	} {
 		out, err := RenderContainerCompose(containerVariants[name]())
 		if err != nil {
@@ -242,6 +254,41 @@ func TestHostModeNetworkSetup(t *testing.T) {
 	if s, err := MeshNetworkSetup(p); err != nil || !strings.HasPrefix(s.Commands[0], "  docker network create") {
 		t.Errorf("the default runtime = %v, %v", s, err)
 	}
+	// The containers' IPv6 (M8): dual stack, each IPv6 value after its IPv4
+	// one; Docker leaves IPv6 unfiltered and unmasqueraded too.
+	p.Network6, p.Range6, p.Bridge6 = "fd10:77::/64", "fd10:77::8000:8000/113", "fd10:77::8000:1"
+	ipam6 := "--subnet 10.77.0.0/16 --ip-range 10.77.128.128/25 --gateway 10.77.128.1 --ipv6 --subnet fd10:77::/64 " +
+		"--ip-range fd10:77::8000:8000/113 --gateway fd10:77::8000:1"
+	for runtime, want := range map[string][]string{
+		RuntimeDocker: {ipam6, "gateway_mode_ipv6=nat-unprotected"},
+		RuntimePodman: {ipam6, "mode=unmanaged"},
+		RuntimeSwarm:  {ipam6, "gateway_mode_ipv6=nat-unprotected"},
+	} {
+		p.Runtime = runtime
+		s, err := MeshNetworkSetup(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, w := range want {
+			if text := strings.Join(s.Commands, "\n"); !strings.Contains(text, w) {
+				t.Errorf("%s with IPv6: the commands lack %q:\n%s", runtime, w, text)
+			}
+		}
+	}
+	p.Runtime = RuntimeDocker
+	for name, edit := range map[string]func(*NetworkParams){
+		"network6 only": func(p *NetworkParams) { p.Range6, p.Bridge6 = "", "" },
+		"network6":      func(p *NetworkParams) { p.Network6 = "fd10:77::/64 $(id)" },
+		"range6 IPv4":   func(p *NetworkParams) { p.Range6 = "10.77.128.128/25" },
+		"bridge6":       func(p *NetworkParams) { p.Bridge6 = "fd10:77::8000:1;reboot" },
+	} {
+		q := p
+		edit(&q)
+		if _, err := MeshNetworkSetup(q); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	p.Network6, p.Range6, p.Bridge6 = "", "", ""
 	for name, edit := range map[string]func(*NetworkParams){
 		"runtime": func(p *NetworkParams) { p.Runtime = "lxc" },
 		"network": func(p *NetworkParams) { p.Network = "10.77.0.0/16 $(id)" },
@@ -281,6 +328,8 @@ func TestContainerComposeRefusesHostileValues(t *testing.T) {
 		"zone ending in .local":    func(p *ContainerParams) { p.Zone = "corp.local" },
 		"newline in the node name": func(p *ContainerParams) { p.Node = "box\nprivileged: true" },
 		"resolver garbage":         func(p *ContainerParams) { p.Resolvers = []string{"10.77.0.1, 1.1.1.1"} },
+		"half an IPv6 side":        func(p *ContainerParams) { p.Network6 = "fd10:77::/64" },
+		"range6 with a command":    func(p *ContainerParams) { p.Network6, p.Range6, p.Bridge6 = "fd::/64", "$(id)", "fd::1" },
 	}
 	for name, edit := range cases {
 		p := containerParams(false)

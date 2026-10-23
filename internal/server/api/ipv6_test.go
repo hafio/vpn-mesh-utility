@@ -493,3 +493,36 @@ func TestDefaultIPv6(t *testing.T) {
 		t.Fatal("a store failure was not reported")
 	}
 }
+
+// A container network with IPv6 (M8): the compose file and the network
+// commands carry it, a node without it neither.
+func TestContainerNetworksWithIPv6(t *testing.T) {
+	h := newHarness(t)
+	h.seedServers(t)
+	s, ctx := h.nodes(), context.Background()
+	if _, err := s.SetIPv6(ctx, cli(), IPv6Request{Prefix: testfix.MeshCIDR6}); err != nil {
+		t.Fatal(err)
+	}
+	for _, req := range []NodeAddRequest{
+		{Name: "box", Role: "spoke", Mode: proto.ModeContainer, Containers6: true},
+		{Name: "pc", Role: "spoke", Containers: true, Containers6: true},
+		{Name: "four", Role: "spoke", Containers: true},
+	} {
+		if _, err := s.Add(ctx, cli(), req); err != nil {
+			t.Fatalf("add %s: %v", req.Name, err)
+		}
+	}
+	ipam6 := "--ipv6 --subnet " + testfix.MeshCIDR6 + " --ip-range fd10:77::8000:8000/113 --gateway fd10:77::8000:1"
+	f, err := s.Compose(ctx, "box", ComposeOptions{})
+	if err != nil || !strings.Contains(f.YAML, ipam6) || !strings.Contains(f.YAML, "net.ipv6.conf.all.proxy_ndp") {
+		t.Fatalf("box's compose file = %v\n%s", err, f.YAML)
+	}
+	n, err := s.Network(ctx, "pc", "docker")
+	if text := strings.Join(n.Commands, "\n"); err != nil || !strings.Contains(text, "--ipv6 --subnet "+testfix.MeshCIDR6) ||
+		!strings.Contains(text, "gateway_mode_ipv6=nat-unprotected") {
+		t.Fatalf("pc's network = %v\n%s", err, text)
+	}
+	if n, err := s.Network(ctx, "four", "docker"); err != nil || strings.Contains(strings.Join(n.Commands, "\n"), "--ipv6") {
+		t.Fatalf("a network without IPv6 = %v\n%v", err, n.Commands)
+	}
+}

@@ -9,7 +9,6 @@
   "16": "net/http.ResponseWriter",
   "19": "Dir",
   "20": "ServerConfig",
-  "22": "net/netip.Prefix",
   "26": "lab",
   "27": "Snapshot",
   "29": "Command reference",
@@ -20,7 +19,6 @@
   "48": "README.md",
   "51": "otherNet",
   "63": "service_test.go",
-  "87": "fetchwintun/main_test.go",
   "98": "userspace",
   "101": "serveRuntime"
 }
