@@ -157,8 +157,9 @@ type inspected struct {
 	} `json:"Config"`
 	NetworkSettings struct {
 		Networks map[string]struct {
-			IPAddress string   `json:"IPAddress"`
-			Aliases   []string `json:"Aliases"`
+			IPAddress         string   `json:"IPAddress"`
+			GlobalIPv6Address string   `json:"GlobalIPv6Address"`
+			Aliases           []string `json:"Aliases"`
 		} `json:"Networks"`
 	} `json:"NetworkSettings"`
 }
@@ -187,12 +188,13 @@ func (r *Runtime) List(ctx context.Context) ([]Container, error) {
 			return nil, err
 		}
 		n, ok := in.NetworkSettings.Networks[proto.MeshNetwork]
-		ip, perr := netip.ParseAddr(n.IPAddress)
-		if !ok || perr != nil || in.ID != l.ID {
+		ip, _ := netip.ParseAddr(n.IPAddress)
+		ip6, _ := netip.ParseAddr(n.GlobalIPv6Address) // M8; "" without IPv6
+		if !ok || (!ip.IsValid() && !ip6.IsValid()) || in.ID != l.ID {
 			continue
 		}
 		out = append(out, Container{ID: in.ID, Name: in.Name, Hostname: in.Config.Hostname, Domainname: in.Config.Domainname,
-			Labels: in.Config.Labels, IP: ip, Aliases: n.Aliases})
+			Labels: in.Config.Labels, IP: ip, IP6: ip6, Aliases: n.Aliases})
 	}
 	return out, nil
 }

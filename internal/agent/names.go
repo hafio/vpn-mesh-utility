@@ -35,10 +35,37 @@ type nameServer interface {
 	SetNames(names []proto.MeshName)
 }
 
-// setNames hands the mesh view's container names to the resolver.
+// setNames hands the mesh view's container names to the resolver, and
+// their IPv6 addresses to the engine (M8): when those change, proxyLoop
+// applies the config again, so the containers' side answers neighbour
+// discovery for them.
 func (r *runner) setNames(ns []proto.MeshName) {
 	if s, ok := r.d.DNS.(nameServer); ok {
 		s.SetNames(ns)
+	}
+	if r.engine.SetMeshNames(ns) {
+		kick(r.proxyKick)
+	}
+}
+
+// proxyLoop applies the config again whenever the mesh's containers' IPv6
+// addresses change. A pass that fails is the drift check's to retry.
+func (r *runner) proxyLoop(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-r.proxyKick:
+		}
+		res, err := r.reapply(ctx, r.engine.Apply)
+		switch {
+		case ctx.Err() != nil:
+			return
+		case err != nil:
+			r.log.Error("the containers' side could not follow the mesh's containers; the drift check tries again", "err", err)
+		case res.Changes > 0:
+			r.log.Info("the containers' side follows the mesh's containers", "changes", res.Changes)
+		}
 	}
 }
 
@@ -59,19 +86,18 @@ func (r *runner) openRuntime() {
 	r.log.Info("reading the containers' names from the container runtime", "socket", sock)
 }
 
-// containerSubnet is the applied config's container network; invalid while
-// the node's containers are not on the mesh.
-func (r *runner) containerSubnet() netip.Prefix {
+// containerSubnets are the applied config's container network and its
+// IPv6 side (M8); invalid while the node's containers are not on the mesh,
+// or have no IPv6.
+func (r *runner) containerSubnets() (netip.Prefix, netip.Prefix) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.applied == nil || r.applied.Containers == nil {
-		return netip.Prefix{}
+		return netip.Prefix{}, netip.Prefix{}
 	}
-	p, err := netip.ParsePrefix(r.applied.Containers.Subnet)
-	if err != nil {
-		return netip.Prefix{}
-	}
-	return p
+	p, _ := netip.ParsePrefix(r.applied.Containers.Subnet)
+	p6, _ := netip.ParsePrefix(r.applied.Containers.Subnet6)
+	return p, p6
 }
 
 // namesLoop keeps the server's copy of this node's container names
@@ -113,7 +139,7 @@ func (r *runner) namesLoop(ctx context.Context) {
 		}
 		drain(changed)
 		drain(r.namesKick)
-		subnet := r.containerSubnet()
+		subnet, subnet6 := r.containerSubnets()
 		if !subnet.IsValid() {
 			continue
 		}
@@ -127,7 +153,7 @@ func (r *runner) namesLoop(ctx context.Context) {
 			continue
 		}
 		lastErr = ""
-		want, over := names.Of(cs, subnet)
+		want, over := names.Of(cs, subnet, subnet6)
 		if over > 0 {
 			r.log.Warn("more containers' names than one report carries; the rest are left out", "left_out", over, "max", proto.MaxNames)
 		}

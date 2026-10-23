@@ -2,7 +2,6 @@ package api
 
 import (
 	"cmp"
-	"encoding/binary"
 	"fmt"
 	"net/http"
 	"net/netip"
@@ -44,16 +43,33 @@ type NameSet struct {
 	Entries []NameEntry
 }
 
-// containerAddr reports whether ip may be a container's on the node's /24:
-// not the network or broadcast address, the runtime's bridge (.1) or the
-// gateway (.2).
-func containerAddr(subnet netip.Prefix, ip netip.Addr) bool {
-	if !subnet.IsValid() || !subnet.Addr().Is4() || !subnet.Contains(ip) {
+// containerAddr reports whether ip may be one of n's containers': on its
+// /24, or its /112 (M8), and not the network address, the runtime's bridge
+// (.1, ::1), the gateway (.2, ::2) or IPv4's broadcast address.
+func containerAddr(n store.Node, ip netip.Addr) bool {
+	subnet, _ := netip.ParsePrefix(n.ContainerSubnet)
+	if ip.Is6() {
+		subnet, _ = netip.ParsePrefix(n.ContainerSubnet6)
+	}
+	if !subnet.IsValid() || !ip.IsValid() || subnet.Addr().Is4() != ip.Is4() || !subnet.Contains(ip) {
 		return false
 	}
-	base, a := subnet.Masked().Addr().As4(), ip.As4()
-	host := binary.BigEndian.Uint32(a[:]) - binary.BigEndian.Uint32(base[:])
-	return host > 2 && host < 1<<(32-subnet.Bits())-1
+	base := subnet.Masked().Addr()
+	if ip == base || ip == base.Next() || ip == base.Next().Next() {
+		return false
+	}
+	return ip.Is6() || subnet.Contains(ip.Next())
+}
+
+// notContainerAddr says why ip is not one of n's containers'.
+func notContainerAddr(n store.Node, ip string) string {
+	subnet := n.ContainerSubnet
+	if a, err := netip.ParseAddr(ip); err == nil && a.Is6() {
+		if subnet = n.ContainerSubnet6; subnet == "" {
+			return fmt.Sprintf("%s is IPv6, and the node's containers have no IPv6 on the mesh (`meshctl node set %s --containers6`)", ip, n.Name)
+		}
+	}
+	return fmt.Sprintf("%s is not a container address of the node's network %s", ip, subnet)
 }
 
 // PublishNames decides which reported names are published. zone is the
@@ -81,14 +97,13 @@ func PublishNames(zone string, domains []string, serverHost string, nodes []stor
 			continue // removed a moment ago; the cascade takes its names
 		}
 		e := NameEntry{Node: n.Name, Name: c.Name, Kind: c.Kind, IP: c.IP}
-		subnet, _ := netip.ParsePrefix(n.ContainerSubnet)
 		ip, _ := netip.ParseAddr(c.IP)
 		label, inZone := strings.CutSuffix(c.Name, "."+zone)
 		extra := !inZone && slices.ContainsFunc(domains, func(d string) bool { return strings.HasSuffix(c.Name, "."+d) })
 		switch {
 		case n.Disabled:
 			e.Dropped = "the node is disabled"
-		case !containerAddr(subnet, ip):
+		case !containerAddr(n, ip):
 			e.Dropped = "the node's container network no longer holds " + c.IP
 		case c.Name == zone:
 			e.Dropped = "is the zone itself"
@@ -198,8 +213,7 @@ func (a *api) names(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, invalid(err))
 		return
 	}
-	subnet, err := netip.ParsePrefix(node.ContainerSubnet)
-	if err != nil {
+	if node.ContainerSubnet == "" {
 		a.fail(w, r, errorf(http.StatusConflict, proto.CodeConflict,
 			"node %q has no container network, so its containers have no names on the mesh; `meshctl node set %s --containers` gives it one",
 			node.Name, node.Name))
@@ -210,9 +224,8 @@ func (a *api) names(w http.ResponseWriter, r *http.Request) {
 	err = a.DB.Tx(r.Context(), func(tx *store.Tx) error {
 		var keep []store.ContainerName
 		for _, n := range req.Names {
-			if ip, _ := netip.ParseAddr(n.IP); !containerAddr(subnet, ip) {
-				resp.Dropped = append(resp.Dropped, proto.DroppedName{Name: n.Name, IP: n.IP,
-					Reason: fmt.Sprintf("%s is not a container address of the node's network %s", n.IP, subnet)})
+			if ip, _ := netip.ParseAddr(n.IP); !containerAddr(node, ip) {
+				resp.Dropped = append(resp.Dropped, proto.DroppedName{Name: n.Name, IP: n.IP, Reason: notContainerAddr(node, n.IP)})
 				continue
 			}
 			keep = append(keep, store.ContainerName{Name: n.Name, IP: n.IP, Kind: n.Kind})

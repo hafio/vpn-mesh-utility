@@ -17,18 +17,38 @@ import (
 	"github.com/hafio/vpn-mesh-utility/internal/testfix"
 )
 
+// A container's address is on the node's /24 or, with the containers'
+// IPv6 (M8), its /112; neither the network's own addresses nor another
+// family's lookalike count.
 func TestContainerAddr(t *testing.T) {
-	subnet := netip.MustParsePrefix(testfix.ContainerSubnet)
+	n := store.Node{Name: "nas", ContainerSubnet: testfix.ContainerSubnet, ContainerSubnet6: testfix.ContainerSubnet6}
 	for ip, want := range map[string]bool{
 		"10.77.128.0": false, "10.77.128.1": false, "10.77.128.2": false, "10.77.128.255": false,
 		"10.77.128.3": true, "10.77.128.129": true, "10.77.128.254": true, "10.77.129.130": false, "10.77.0.5": false,
+		"fd10:77::8000:0": false, "fd10:77::8000:1": false, "fd10:77::8000:2": false, "fd10:77::8000:3": true,
+		"fd10:77::8000:ffff": true, "fd10:77::8001:3": false, "::ffff:10.77.128.129": false,
 	} {
-		if got := containerAddr(subnet, netip.MustParseAddr(ip)); got != want {
+		if got := containerAddr(n, netip.MustParseAddr(ip)); got != want {
 			t.Errorf("containerAddr(%s) = %v, want %v", ip, got, want)
 		}
 	}
-	if containerAddr(netip.Prefix{}, netip.MustParseAddr("10.77.128.129")) {
+	if containerAddr(store.Node{}, netip.MustParseAddr("10.77.128.129")) || containerAddr(n, netip.Addr{}) {
 		t.Error("a node without a container network has no container addresses")
+	}
+	v4 := store.Node{Name: "nas", ContainerSubnet: testfix.ContainerSubnet}
+	if containerAddr(v4, netip.MustParseAddr("fd10:77::8000:3")) {
+		t.Error("a node whose containers have no IPv6 has no IPv6 container addresses")
+	}
+	for ip, want := range map[string]string{
+		"10.77.129.5":     "10.77.129.5 is not a container address of the node's network 10.77.128.0/24",
+		"fd10:77::8000:3": "fd10:77::8000:3 is IPv6, and the node's containers have no IPv6 on the mesh (`meshctl node set nas --containers6`)",
+	} {
+		if got := notContainerAddr(v4, ip); got != want {
+			t.Errorf("notContainerAddr(%s) = %q, want %q", ip, got, want)
+		}
+	}
+	if got := notContainerAddr(n, "fd10:77::8001:3"); !strings.Contains(got, "network fd10:77::8000:0/112") {
+		t.Errorf("notContainerAddr(IPv6 off the /112) = %q", got)
 	}
 }
 
@@ -36,7 +56,7 @@ func TestContainerAddr(t *testing.T) {
 // zone and the server's own address keep their names; a name in the zone
 // is one label; a node whose network moved, or that is disabled, has none.
 func TestPublishNames(t *testing.T) {
-	nas := store.Node{ID: testfix.NAS.ID, Name: testfix.NAS.Name, ContainerSubnet: testfix.ContainerSubnet}
+	nas := store.Node{ID: testfix.NAS.ID, Name: testfix.NAS.Name, ContainerSubnet: testfix.ContainerSubnet, ContainerSubnet6: testfix.ContainerSubnet6}
 	laptop := store.Node{ID: testfix.Laptop.ID, Name: testfix.Laptop.Name, ContainerSubnet: "10.77.129.0/24"}
 	old := store.Node{ID: 9, Name: "old", ContainerSubnet: "10.77.130.0/24", Disabled: true}
 	vps1 := store.Node{ID: testfix.VPS1.ID, Name: testfix.VPS1.Name}
@@ -47,6 +67,8 @@ func TestPublishNames(t *testing.T) {
 	}
 	set := PublishNames("mesh", []string{"example.lan"}, "api.mesh", nodes, records, []store.ContainerName{
 		at(nas, "web", proto.NameService, "10.77.128.130"),
+		at(nas, "web", proto.NameService, "fd10:77::8000:8002"), // M8: published beside its IPv4
+		at(laptop, "cache", proto.NameService, "fd10:77::8001:8002"),
 		at(nas, "web", proto.NameService, "10.77.128.129"),
 		at(nas, "web", proto.NameHostname, "10.77.128.129"), // the same name twice: published once
 		at(nas, "web.mesh", proto.NameHostname, "10.77.128.131"),
@@ -68,6 +90,7 @@ func TestPublishNames(t *testing.T) {
 		{Name: "web", Node: "nas", IP: "10.77.128.129"},
 		{Name: "web", Node: "nas", IP: "10.77.128.130"},
 		{Name: "web", Node: "nas", IP: "10.77.128.131"},
+		{Name: "web", Node: "nas", IP: "fd10:77::8000:8002"},
 		{Name: "web.example.lan", Node: "nas", IP: "10.77.128.130"},
 	}
 	if !slices.Equal(set.Published, want) {
@@ -88,6 +111,7 @@ func TestPublishNames(t *testing.T) {
 		"nas/a.b.mesh":        "is neither a single name in the zone mesh (<name> or <name>.mesh) nor in an extra domain (Settings)",
 		"nas/example.lan":     "is an extra domain itself",
 		"laptop/db":           "the node's container network no longer holds 10.77.128.133",
+		"laptop/cache":        "the node's container network no longer holds fd10:77::8001:8002",
 		"old/db":              "the node is disabled",
 	} {
 		if dropped[key] != reason {
@@ -98,7 +122,7 @@ func TestPublishNames(t *testing.T) {
 	if len(dropped) != 0 {
 		t.Errorf("dropped for no reason the test knows: %v", dropped)
 	}
-	if len(set.Entries) != 15 || set.Entries[0].Name != "a.b.mesh" {
+	if len(set.Entries) != 17 || set.Entries[0].Name != "a.b.mesh" {
 		t.Errorf("Entries (every reported name of a known node, by name) = %v", set.Entries)
 	}
 	resolves := map[string]string{}
@@ -219,6 +243,38 @@ func TestNamesEndpoint(t *testing.T) {
 	// An empty report clears them.
 	if w, eb := h.putNames(t, testfix.NAS, testfix.Epoch.Add(3*time.Second)); w.Code != 200 || len(h.storedNames(t)) != 0 {
 		t.Fatalf("clearing: %d %s", w.Code, eb.Message)
+	}
+}
+
+// With the containers' IPv6 (M8) a report's IPv6 addresses on the node's
+// /112 are kept and published beside the IPv4 ones; one off it is
+// dropped, saying why.
+func TestNamesEndpointWithIPv6(t *testing.T) {
+	h := newHarness(t)
+	if err := h.st.Tx(context.Background(), func(tx *store.Tx) error { return tx.SetSetting(store.SettingMeshCIDR6, testfix.MeshCIDR6) }); err != nil {
+		t.Fatal(err)
+	}
+	nas := containerNAS()
+	nas.MeshIP6, nas.ContainerSubnet6 = testfix.NAS.MeshIP6, testfix.ContainerSubnet6
+	h.seed(t, storeNode(testfix.VPS1, true), storeNode(testfix.VPS2, true), storeNode(testfix.VPS3, true), nas)
+	w, eb := h.putNames(t, testfix.NAS, testfix.Epoch, proto.ContainerName{Name: "web", Kind: proto.NameService, IP: "10.77.128.129"},
+		proto.ContainerName{Name: "web", Kind: proto.NameService, IP: "fd10:77::8000:8001"},
+		proto.ContainerName{Name: "db", Kind: proto.NameService, IP: "fd10:77::8001:5"})
+	if w.Code != 200 {
+		t.Fatalf("names: %d %s", w.Code, eb.Message)
+	}
+	var resp proto.NamesResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || resp.Stored != 2 || len(resp.Dropped) != 1 ||
+		!strings.Contains(resp.Dropped[0].Reason, "network "+testfix.ContainerSubnet6) {
+		t.Fatalf("response %+v, %v", resp, err)
+	}
+	w, eb = serve(h.pub, signed(http.MethodGet, proto.PathMesh, nil, testfix.VPS1, testfix.Epoch.Add(time.Second)))
+	var v proto.MeshView
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &v) != nil || v.Validate() != nil {
+		t.Fatalf("mesh: %d %s %s", w.Code, eb.Message, w.Body)
+	}
+	if want := []proto.MeshName{{Name: "web", Node: "nas", IP: "10.77.128.129"}, {Name: "web", Node: "nas", IP: "fd10:77::8000:8001"}}; !slices.Equal(v.Names, want) {
+		t.Fatalf("mesh view names = %v, want %v", v.Names, want)
 	}
 }
 

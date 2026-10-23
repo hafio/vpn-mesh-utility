@@ -41,7 +41,8 @@ const MaxNames = 512
 
 // ContainerName is one name of one container on the node's mesh network.
 // Name is lower case: one label ("web"), or a dotted name the container
-// was given ("web.example.home.arpa").
+// was given ("web.example.home.arpa"). IP is of either family: a container
+// with IPv6 on the mesh (M8) has its name once per address.
 type ContainerName struct {
 	Name string `json:"name"`
 	Kind string `json:"kind"`
@@ -72,7 +73,7 @@ func (r *NamesRequest) Validate() error {
 		if _, err := validate.Enum(field+".kind", n.Kind, NameKinds...); err != nil {
 			errs = append(errs, err)
 		}
-		ip, err := validate.IPv4(field+".ip", n.IP)
+		ip, err := validate.IP(field+".ip", n.IP)
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -127,7 +128,7 @@ func validateMeshNames(names []MeshName) []error {
 		if _, err := validate.Name(field+".node", n.Node); err != nil {
 			errs = append(errs, err)
 		}
-		if _, err := validate.IPv4(field+".ip", n.IP); err != nil {
+		if _, err := validate.IP(field+".ip", n.IP); err != nil {
 			errs = append(errs, err)
 		}
 	}

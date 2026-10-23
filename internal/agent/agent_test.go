@@ -1349,6 +1349,30 @@ func TestMeshNamesReachTheResolver(t *testing.T) {
 	eventually(t, "the server's names after the nudge", func() bool { return slices.Equal(r.dns.Names(), view.Names) })
 }
 
+// The mesh view's containers' IPv6 addresses reach the containers' side
+// (M8): when the server says the names changed, the agent applies its
+// config again and the bridge answers neighbour discovery for them too.
+func TestMeshNamesReachTheNeighbourEntries(t *testing.T) {
+	cfg := testfix.DualSpokeConfig("")
+	cfg.Exit = nil
+	cfg.Containers = testfix.Containers6(proto.ModeHost)
+	cfg.Sysctl = []proto.Sysctl{{Key: proto.SysctlIPForward, Value: "1"}, {Key: proto.SysctlIPv6Forward, Value: "1"}}
+	dir, pub := newDir(t)
+	f, srv := newFakeServer(t, pub, cfg, nil)
+	enrollAs(t, dir, srv.URL, testfix.Laptop)
+	nt := agentfake.NewNet()
+	startWith(t, dir, "", func(d *Deps) { d.Containers, d.MeshEvery = nt, time.Hour })
+	answers := func(a string) func() bool {
+		return func() bool { return slices.Contains(nt.ProxiesOf(proto.ContainerBridge), netip.MustParseAddr(a)) }
+	}
+	eventually(t, "the bridge to answer for vps-1", answers(testfix.VPS1.MeshIP6))
+	view := testfix.MeshView()
+	view.Names = []proto.MeshName{{Name: "db", Node: testfix.NAS.Name, IP: "fd10:77::8001:8002"}}
+	f.setMesh(&view)
+	f.nudge <- struct{}{}
+	eventually(t, "the bridge to answer for the NAS's container", answers("fd10:77::8001:8002"))
+}
+
 // The runtime socket: off reads none, a path is used as given, and auto
 // takes one of the usual places or none.
 func TestOpenRuntime(t *testing.T) {

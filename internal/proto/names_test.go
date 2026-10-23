@@ -12,6 +12,7 @@ func validNames() proto.NamesRequest {
 		{Name: "Web", Kind: proto.NameService, IP: "10.77.128.129"},
 		{Name: "web.example.home.arpa.", Kind: proto.NameHostname, IP: "10.77.128.129"},
 		{Name: "web", Kind: proto.NameService, IP: "10.77.128.130"},
+		{Name: "web", Kind: proto.NameService, IP: "fd10:77::8000:8002"},
 	}}
 }
 
@@ -40,7 +41,9 @@ func TestNamesRequestRejects(t *testing.T) {
 		"underscore":         {func(r *proto.NamesRequest) { r.Names[0].Name = "my_web" }, "names[0].name"},
 		"empty name":         {func(r *proto.NamesRequest) { r.Names[2].Name = "" }, "names[2].name"},
 		"unknown kind":       {func(r *proto.NamesRequest) { r.Names[1].Kind = "label" }, "names[1].kind"},
-		"address not IPv4":   {func(r *proto.NamesRequest) { r.Names[2].IP = "fd00::1" }, "names[2].ip"},
+		"not an address":     {func(r *proto.NamesRequest) { r.Names[2].IP = "web" }, "names[2].ip"},
+		"IPv4 in IPv6":       {func(r *proto.NamesRequest) { r.Names[3].IP = "::ffff:10.77.128.130" }, "names[3].ip"},
+		"IPv6 with a zone":   {func(r *proto.NamesRequest) { r.Names[3].IP = "fe80::1%eth0" }, "names[3].ip"},
 		"listed twice":       {func(r *proto.NamesRequest) { r.Names[2].IP = "10.77.128.129" }, "listed twice"},
 		"twice, other kinds": {func(r *proto.NamesRequest) { r.Names[2].IP, r.Names[2].Kind = "10.77.128.129", proto.NameAlias }, "listed twice"},
 		"too many": {func(r *proto.NamesRequest) {

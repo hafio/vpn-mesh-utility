@@ -166,6 +166,9 @@ type Engine struct {
 	dnsOff bool
 	// dial is each dialling peer that has a fallback endpoint (M8), by key.
 	dial map[wg.Key]*dialing
+	// names6 are the mesh's containers' IPv6 addresses (the mesh view's
+	// names, M8), sorted, which the containers' side answers for too.
+	names6 []netip.Addr
 }
 
 // dialing is how a peer with two endpoints is reached: on which, and since
@@ -372,7 +375,7 @@ func (e *Engine) Apply(ctx context.Context, cfg proto.NodeConfig) (Result, error
 	var also netip.Addr
 	switch {
 	case e.d.Containers != nil:
-		n, err := containers.Sync(e.d.Containers, e.d.Sysctl, cfg.Containers, e.d.Iface, proxied(cfg, addrs))
+		n, err := containers.Sync(e.d.Containers, e.d.Sysctl, cfg.Containers, e.d.Iface, proxied(cfg, addrs, e.names6))
 		res.Changes += n
 		if err != nil {
 			res.Degraded = append(res.Degraded, StepContainers)
@@ -450,10 +453,11 @@ func forHost(cfg proto.NodeConfig, ipv6 bool) (proto.NodeConfig, error) {
 }
 
 // proxied is what the containers' side of the node answers neighbour
-// discovery for (M8): the node's own IPv6 mesh address and every single
-// IPv6 address it routes over the tunnel, sorted.
-func proxied(cfg proto.NodeConfig, addrs []netip.Prefix) []netip.Addr {
-	var out []netip.Addr
+// discovery for (M8): the node's own IPv6 mesh address, every single IPv6
+// address it routes over the tunnel and the mesh's containers' (names6),
+// sorted.
+func proxied(cfg proto.NodeConfig, addrs []netip.Prefix, names6 []netip.Addr) []netip.Addr {
+	out := slices.Clone(names6)
 	for _, a := range addrs {
 		if a.Addr().Is6() {
 			out = append(out, a.Addr())
@@ -556,6 +560,27 @@ func (e *Engine) Failover() ([]string, error) {
 		d.onFallback, d.since = !d.onFallback, now
 	}
 	return moved, nil
+}
+
+// SetMeshNames takes the mesh view's container names (M8): the containers'
+// side of the node answers neighbour discovery for their IPv6 addresses
+// too, from the next apply on. It reports whether those addresses changed.
+func (e *Engine) SetMeshNames(ns []proto.MeshName) bool {
+	var addrs []netip.Addr
+	for _, n := range ns {
+		if a, err := netip.ParseAddr(n.IP); err == nil && a.Is6() {
+			addrs = append(addrs, a)
+		}
+	}
+	slices.SortFunc(addrs, netip.Addr.Compare)
+	addrs = slices.Compact(addrs)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if slices.Equal(addrs, e.names6) {
+		return false
+	}
+	e.names6 = addrs
+	return true
 }
 
 // SetDNSOff records the node's own `meshctl dns on|off`; the next apply

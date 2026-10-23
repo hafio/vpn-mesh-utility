@@ -546,6 +546,18 @@ func TestContainersStepWithIPv6(t *testing.T) {
 	if got := n.ProxiesOf("eth1"); !slices.Equal(got, want) {
 		t.Fatalf("proxy entries = %v, want %v", got, want)
 	}
+	// The mesh view's containers' IPv6 addresses join them from the next
+	// apply; the node's own containers and IPv4 names do not.
+	far := netip.MustParseAddr("fd10:77::8001:8002")
+	names := []proto.MeshName{{Name: "db", Node: "nas", IP: far.String()}, {Name: "db", Node: "nas", IP: "10.77.129.130"},
+		{Name: "web", Node: "laptop", IP: "fd10:77::8000:8001"}, {Name: "db", Node: "nas", IP: far.String()}}
+	if !r.e.SetMeshNames(names) || r.e.SetMeshNames(slices.Clone(names)) {
+		t.Fatal("SetMeshNames must report a change once")
+	}
+	if res, err := r.e.Apply(context.Background(), cfg); err != nil || res.Changes != 1 || !slices.Contains(n.ProxiesOf("eth1"), far) ||
+		slices.Contains(n.ProxiesOf("eth1"), netip.MustParseAddr("fd10:77::8000:8001")) {
+		t.Fatalf("Apply with the names = %+v, %v; entries %v", res, err, n.ProxiesOf("eth1"))
+	}
 
 	unrouted := agentfake.NewNet()
 	unrouted.NoIPv6Rules = true

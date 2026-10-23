@@ -337,7 +337,8 @@ stack (`--ipv6 --subnet <prefix> --ip-range <half> --gateway <::1>` after the IP
 container-mode agent's compose file sets `disable_ipv6=0`, IPv6 forwarding and proxy NDP in its
 namespace. Recreate the network and the agent's container after turning it on. The agent isolates
 the containers' IPv6 as their IPv4 and answers neighbour discovery for the mesh's nodes; their
-IPv6 reaches every node (containers on other nodes over IPv6: to come). It needs the kernel's IPv6
+IPv6 reaches every node, and the named containers of other nodes (by the mesh view's names: with
+`--no-names` a node's containers are reached over IPv4 only). It needs the kernel's IPv6
 policy routing: where `ip -6 rule` fails (some NAS kernels), the agent drops the containers'
 IPv6, the containers step reports degraded and they keep IPv4 only -- turn `--containers6` off
 there. `meshctl ipv6 off` takes every IPv6 address away

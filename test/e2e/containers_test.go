@@ -35,13 +35,14 @@ func (l *lab) out(space string, args ...string) string {
 	return string(out)
 }
 
-// fakeRuntime serves a Docker-compatible API on a unix socket with one
-// container, web, on the mesh network at ip (amendment A38), and returns the
-// socket's path. Its event stream stays open and silent.
-func (l *lab) fakeRuntime(ip string) string {
+// fakeRuntime serves, for the agent in space, a Docker-compatible API on a
+// unix socket with one container, the compose service service, on the mesh
+// network at ip and ip6 (amendment A38; M8), and returns the socket's path.
+// Its event stream stays open and silent.
+func (l *lab) fakeRuntime(space, service, ip, ip6 string) string {
 	l.t.Helper()
 	const id = "5eb5eb5eb5eb0000000000000000000000000000000000000000000000000000"
-	path := filepath.Join(l.dir, "runtime.sock")
+	path := filepath.Join(l.dir, "runtime-"+space+".sock")
 	ln, err := net.Listen("unix", path)
 	if err != nil {
 		l.t.Fatal(err)
@@ -51,9 +52,10 @@ func (l *lab) fakeRuntime(ip string) string {
 		_ = json.NewEncoder(w).Encode([]map[string]string{{"Id": id}})
 	})
 	mux.HandleFunc("GET /containers/"+id+"/json", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"Id": id, "Name": "/shop-web-1",
-			"Config":          map[string]any{"Hostname": id[:12], "Labels": map[string]string{"com.docker.compose.service": "web"}},
-			"NetworkSettings": map[string]any{"Networks": map[string]any{"meshctl-mesh": map[string]any{"IPAddress": ip}}}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"Id": id, "Name": "/shop-" + service + "-1",
+			"Config": map[string]any{"Hostname": id[:12], "Labels": map[string]string{"com.docker.compose.service": service}},
+			"NetworkSettings": map[string]any{"Networks": map[string]any{
+				"meshctl-mesh": map[string]any{"IPAddress": ip, "GlobalIPv6Address": ip6}}}})
 	})
 	mux.HandleFunc("GET /events", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -74,7 +76,9 @@ func (l *lab) fakeRuntime(ip string) string {
 // the container in l is attached. A LAN host in m routes to pc's
 // containers through k, which the guard must refuse. box's runtime calls
 // its container web, which every node resolves (amendment A38). Both
-// nodes' containers have IPv6 on the mesh too (M8).
+// nodes' containers have IPv6 on the mesh too (M8); pc's runtime calls its
+// container db, and the two reach each other over IPv6 by their names'
+// addresses.
 func TestContainerNetworks(t *testing.T) {
 	l := newLab(t)
 	l.startServer()
@@ -101,7 +105,8 @@ func TestContainerNetworks(t *testing.T) {
 	l.sh("ip", "netns", "exec", ns("h"), "sysctl", "-qw", "net.ipv4.ip_forward=1", "net.ipv4.conf.all.proxy_arp=1",
 		"net.ipv6.conf.all.forwarding=1", "net.ipv6.conf.all.proxy_ndp=1")
 
-	l.runtimes["h"] = l.fakeRuntime("10.77.128.130")
+	l.runtimes["h"] = l.fakeRuntime("h", "web", "10.77.128.130", "fd10:77::8000:8002")
+	l.runtimes["k"] = l.fakeRuntime("k", "db", "10.77.129.130", "fd10:77::8001:8002")
 	l.enroll(box, "--role", "spoke", "--mode", "container", "--containers6", "--hub", "vps-1")
 	l.enroll(pc, "--role", "spoke", "--containers", "--containers6", "--hub", "vps-2")
 
@@ -171,6 +176,16 @@ func TestContainerNetworks(t *testing.T) {
 		t.Error("pc's host cannot reach its own container")
 	}
 	eventually(t, 10*time.Second, "vps-1 to reach pc's container over IPv6", func() bool { return l.ping("a", "fd10:77::8001:8002") })
+	// Containers on two nodes over IPv6: each side answers neighbour
+	// discovery for the other's container, whose address the mesh view's
+	// names carry (the AAAA records are the same names).
+	eventually(t, 30*time.Second, "web.mesh's AAAA at vps-2", func() bool {
+		ip, err := l.resolveAAAA("b", "10.77.0.2", "web.mesh.")
+		return err == nil && ip == "fd10:77::8000:8002"
+	})
+	eventually(t, 30*time.Second, "box's and pc's containers to reach each other over IPv6", func() bool {
+		return l.ping("j", "fd10:77::8001:8002") && l.ping("l", "fd10:77::8000:8002")
+	})
 
 	// pc's host has IPv6 to the internet, its containers do not: one whose
 	// IPv6 default route is the bridge is refused at once, so an app falls

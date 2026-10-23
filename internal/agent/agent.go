@@ -197,8 +197,10 @@ type runner struct {
 	// meshKick asks for the mesh view, namesKick for the containers' names.
 	meshKick  chan struct{}
 	namesKick chan struct{}
-	// scheduleKick says policyNext changed.
+	// scheduleKick says policyNext changed; proxyKick that the mesh's
+	// containers' IPv6 addresses did (M8).
 	scheduleKick chan struct{}
+	proxyKick    chan struct{}
 
 	// cfgMu orders the config transitions -- apply, confirm, rollback -- and
 	// the files that record them.
@@ -295,7 +297,7 @@ func Run(ctx context.Context, d Deps) error {
 	r := &runner{
 		d: d, dir: dir, enr: enr, cl: cl, backend: backend,
 		log:      d.Log.With("node", enr.Name),
-		syncKick: make(chan struct{}, 1), statusKick: make(chan struct{}, 1),
+		syncKick: make(chan struct{}, 1), statusKick: make(chan struct{}, 1), proxyKick: make(chan struct{}, 1),
 		meshKick: make(chan struct{}, 1), namesKick: make(chan struct{}, 1), scheduleKick: make(chan struct{}, 1),
 		engine: apply.New(apply.Deps{Host: host, Routes: d.Routes, Exit: d.Exit, Sysctl: d.Sysctl, MeshFirewall: d.MeshFirewall,
 			Firewall: d.Firewall, DNS: d.DNS, Containers: d.Containers, Iface: Interface, Key: wg.Key(keys.WG), Log: d.Log, Now: d.Now}),
@@ -360,7 +362,7 @@ func Run(ctx context.Context, d Deps) error {
 	r.log.Info("meshctl agent running", "server", enr.Server, "node_id", enr.NodeID, "version", d.Version, "wg_backend", backend)
 
 	for _, loop := range []func(context.Context){r.syncLoop, r.eventsLoop, r.pollLoop, r.statusLoop, r.safeLoop, r.reassertLoop, r.meshLoop,
-		r.namesLoop, r.scheduleLoop} {
+		r.namesLoop, r.scheduleLoop, r.proxyLoop} {
 		loops.Add(1)
 		go func() {
 			defer loops.Done()

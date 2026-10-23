@@ -55,15 +55,23 @@ func inspectOf(id, ip string, aliases ...string) map[string]any {
 		"NetworkSettings": map[string]any{"Networks": map[string]any{proto.MeshNetwork: map[string]any{"IPAddress": ip, "Aliases": aliases}}}}
 }
 
+// withIPv6 gives an inspected container an IPv6 address on the mesh
+// network (M8).
+func withIPv6(c map[string]any, ip6 string) map[string]any {
+	c["NetworkSettings"].(map[string]any)["Networks"].(map[string]any)[proto.MeshNetwork].(map[string]any)["GlobalIPv6Address"] = ip6
+	return c
+}
+
 // Only GETs; a listed ID that is not one never reaches a path; a container
-// gone since the listing, or not on the mesh network, is skipped.
+// gone since the listing, or not on the mesh network, is skipped; its IPv6
+// address there comes with it.
 func TestList(t *testing.T) {
 	rt, f := serveRuntime(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/containers/json":
 			_ = json.NewEncoder(w).Encode([]map[string]string{{"Id": id1}, {"Id": "../../images"}, {"Id": id2}, {"Id": id3}})
 		case "/containers/" + id1 + "/json":
-			_ = json.NewEncoder(w).Encode(inspectOf(id1, "10.77.128.129", "shop"))
+			_ = json.NewEncoder(w).Encode(withIPv6(inspectOf(id1, "10.77.128.129", "shop"), "fd10:77::8000:8001"))
 		case "/containers/" + id2 + "/json":
 			http.Error(w, `{"message":"No such container"}`, http.StatusNotFound)
 		case "/containers/" + id3 + "/json":
@@ -79,6 +87,7 @@ func TestList(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(got) != 1 || got[0].ID != id1 || got[0].IP != netip.MustParseAddr("10.77.128.129") || got[0].Aliases[0] != "shop" ||
+		got[0].IP6 != netip.MustParseAddr("fd10:77::8000:8001") ||
 		got[0].Labels[LabelComposeService] != "web" || got[0].Name != "/app-aaaa" {
 		t.Fatalf("List = %+v", got)
 	}

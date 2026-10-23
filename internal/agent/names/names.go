@@ -13,7 +13,6 @@ package names
 
 import (
 	"cmp"
-	"encoding/binary"
 	"net/netip"
 	"slices"
 	"strings"
@@ -30,14 +29,15 @@ const (
 )
 
 // Container is one container on the mesh network, as the runtime reports
-// it: IP and Aliases are its address and aliases on that network.
+// it: IP, IP6 (M8; invalid when the network has no IPv6) and Aliases are
+// its addresses and aliases on that network.
 type Container struct {
 	ID         string
 	Name       string
 	Hostname   string
 	Domainname string
 	Labels     map[string]string
-	IP         netip.Addr
+	IP, IP6    netip.Addr
 	Aliases    []string
 }
 
@@ -77,39 +77,49 @@ func (c Container) isID(s string) bool {
 	return len(s) >= 12 && strings.HasPrefix(c.ID, strings.ToLower(s))
 }
 
-// hostAddr reports whether ip may be a container's on subnet: not the
-// network or broadcast address, the runtime's bridge (.1) or the gateway
-// (.2), which is the agent itself in container mode.
+// hostAddr reports whether ip may be a container's on subnet, of its
+// family: not the network address, the runtime's bridge (.1, ::1), the
+// gateway (.2, ::2), which is the agent itself in container mode, or
+// IPv4's broadcast address.
 func hostAddr(subnet netip.Prefix, ip netip.Addr) bool {
-	if !subnet.IsValid() || !subnet.Addr().Is4() || !ip.Is4() || !subnet.Contains(ip) {
+	if !subnet.IsValid() || !ip.IsValid() || subnet.Addr().Is4() != ip.Is4() || !subnet.Contains(ip) {
 		return false
 	}
-	base, a := subnet.Masked().Addr().As4(), ip.As4()
-	host := binary.BigEndian.Uint32(a[:]) - binary.BigEndian.Uint32(base[:])
-	return host > 2 && host < 1<<(32-subnet.Bits())-1
+	base := subnet.Masked().Addr()
+	if ip == base || ip == base.Next() || ip == base.Next().Next() {
+		return false
+	}
+	return ip.Is6() || subnet.Contains(ip.Next())
 }
 
-// Of returns the names of the containers whose address is on subnet --
-// valid, lower case, each name and address once, sorted by name and
-// address -- and how many were left out over proto.MaxNames.
-func Of(cs []Container, subnet netip.Prefix) ([]proto.ContainerName, int) {
+// Of returns the names of the containers whose address is on subnet or
+// subnet6 (M8; invalid when the containers have no IPv6) -- valid, lower
+// case, each name and address once, sorted by name and address -- and how
+// many were left out over proto.MaxNames.
+func Of(cs []Container, subnet, subnet6 netip.Prefix) ([]proto.ContainerName, int) {
 	seen := map[proto.ContainerName]bool{}
 	var out []proto.ContainerName
 	for _, c := range cs {
-		if !hostAddr(subnet, c.IP) {
-			continue
+		var ips []netip.Addr
+		if hostAddr(subnet, c.IP) {
+			ips = append(ips, c.IP)
+		}
+		if hostAddr(subnet6, c.IP6) {
+			ips = append(ips, c.IP6)
 		}
 		for _, n := range c.candidates() {
 			name, err := validate.Hostname("name", n.Name)
 			if err != nil {
 				continue
 			}
-			key := proto.ContainerName{Name: name, IP: c.IP.String()}
-			if seen[key] {
-				continue
+			for _, ip := range ips {
+				key := proto.ContainerName{Name: name, IP: ip.String()}
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				out = append(out, proto.ContainerName{Name: name, Kind: n.Kind, IP: key.IP})
 			}
-			seen[key] = true
-			out = append(out, proto.ContainerName{Name: name, Kind: n.Kind, IP: key.IP})
 		}
 	}
 	slices.SortFunc(out, func(a, b proto.ContainerName) int {

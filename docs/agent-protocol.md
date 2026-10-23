@@ -258,8 +258,9 @@ each name once per address. `kind` says where it came from: `service` (the compo
 `swarm` (the Swarm service without its stack's prefix), `container` (the container's name),
 `alias` (a network alias) or `hostname` (the hostname, or hostname.domainname). The list replaces
 what the server held; an empty one clears it. A node without a container network is refused
-(409). The server keeps a name only when its address is one of the node's containers' (in its
-/24, not .0, .1, .2 or .255), and publishes it only when it cannot shadow anything: a name in the
+(409). An address is of either family: a container with IPv6 on the mesh (M8) has each name once
+per address, so 512 entries are 256 such names. The server keeps a name only when its address is one of the node's containers' (in its
+/24, not .0, .1, .2 or .255; in its /112, not ::0, ::1 or ::2), and publishes it only when it cannot shadow anything: a name in the
 zone is one label (`web`, or `web.<zone>`, which is the same), any other name lies inside an
 extra domain (not the domain itself), a node's name, a custom record's and the server's own
 address stay theirs, and a disabled node's names are not published. Names
@@ -359,7 +360,8 @@ since Docker makes the mesh bridge its containers' IPv6 default route and an app
 wait seconds before falling back to IPv4. A container sees the whole IPv6 prefix on its link,
 and IPv6 has no proxy ARP, so the mesh side answers neighbour discovery by one proxy entry per
 mesh address: the node's own IPv6 address and every single IPv6 address in its peers' allowed
-IPs (other nodes' container addresses: to come, from the mesh view's names). A kernel without
+IPs, and every IPv6 address of the mesh view's container names (other nodes' containers; a
+change to those applies the config again). A kernel without
 IPv6 policy routing cannot isolate IPv6: the step sets up IPv4, leaves the IPv6 side out, drops
 the /112 by a blackhole route of its own in the main table (device-less, so the routes step,
 which keeps wg0's, never touches it) and is degraded, saying to take the containers' IPv6 off

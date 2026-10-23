@@ -11,7 +11,7 @@ import (
 // The agent checks the server's mesh view before it caches or shows it.
 func TestMeshViewValidate(t *testing.T) {
 	v := testfix.MeshView()
-	v.Names = testfix.MeshNames()
+	v.Names = append(testfix.MeshNames(), proto.MeshName{Name: "web", Node: testfix.NAS.Name, IP: "fd10:77::8000:8002"}) // M8
 	if err := v.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +32,8 @@ func TestMeshViewValidate(t *testing.T) {
 		"too many nodes":     {func(v *proto.MeshView) { v.Nodes = make([]proto.MeshNode, 1<<16+1) }, "at most 65536"},
 		"name injected":      {func(v *proto.MeshView) { v.Names[0].Name = "db\nx" }, "names[0].name"},
 		"name of no node":    {func(v *proto.MeshView) { v.Names[1].Node = "Laptop" }, "names[1].node"},
-		"name not IPv4":      {func(v *proto.MeshView) { v.Names[2].IP = "web" }, "names[2].ip"},
+		"name not an IP":     {func(v *proto.MeshView) { v.Names[2].IP = "web" }, "names[2].ip"},
+		"IPv4 in IPv6 name":  {func(v *proto.MeshView) { v.Names[3].IP = "::ffff:10.77.128.130" }, "names[3].ip"},
 		"too many names":     {func(v *proto.MeshView) { v.Names = make([]proto.MeshName, 1<<16+1) }, "names: at most"},
 	} {
 		t.Run(name, func(t *testing.T) {
