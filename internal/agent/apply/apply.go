@@ -234,8 +234,12 @@ func (e *Engine) Apply(ctx context.Context, cfg proto.NodeConfig) (Result, error
 		return fail(StepValidate, errors.New("the config gives the interface no address"))
 	}
 	// The node's own address for the resolver and the mesh firewall: its
-	// IPv4 one, the IPv6 one on an IPv6-only node.
-	self := addrs[0].Addr()
+	// IPv4 one, the IPv6 one on an IPv6-only node; self6 is the IPv6 one
+	// beside an IPv4 one, where the resolver listens too.
+	self, self6 := addrs[0].Addr(), netip.Addr{}
+	if len(addrs) > 1 {
+		self6 = addrs[1].Addr()
+	}
 	dev, err := wg.Desired(cfg, e.d.Key)
 	if err != nil {
 		return fail(StepValidate, err)
@@ -383,7 +387,7 @@ func (e *Engine) Apply(ctx context.Context, cfg proto.NodeConfig) (Result, error
 	// 11. DNS: optional. The resolver binds the address step 3 put on the
 	// interface, and the containers' gateway.
 	if e.d.DNS != nil {
-		state, n, err := e.d.DNS.Apply(ctx, dns.Want{Iface: e.d.Iface, IP: self, Also: also, Config: cfg.DNS, Exit: exitOn,
+		state, n, err := e.d.DNS.Apply(ctx, dns.Want{Iface: e.d.Iface, IP: self, IP6: self6, Also: also, Config: cfg.DNS, Exit: exitOn,
 			Off: e.dnsOff})
 		res.Changes += n
 		res.DNS = state

@@ -358,12 +358,14 @@ runtime, the policies. Whatever changed underneath the agent -- wg0 moved to ano
 removed by hand, a route or the interface deleted -- is put back and logged; an unchanged host
 costs only the checks.
 
-**DNS** (step 11): the resolver binds UDP and TCP 53 on the node's mesh IP and answers the zone
-authoritatively: A records, NODATA for another type of a name it has, NXDOMAIN for one it has not.
+**DNS** (step 11): the resolver binds UDP and TCP 53 on the node's mesh IP -- and on its IPv6 one
+too when it has both (M8) -- and answers the zone authoritatively: A and AAAA records (both for
+ANY), NODATA for another type of a name it has (an AAAA of a name with no IPv6), NXDOMAIN for one it
+has not.
 A name outside the zone is forwarded to `upstream` (over the transport the query came on) when
 `split` is false or the source is in `forward_for`, and REFUSED otherwise. On Linux it then
-registers with systemd-resolved over the system bus, on wg0 only: the mesh IP as the link's DNS
-server and `~mesh` as its routing domain, plus `~.` and default-route in exit mode, with DNSSEC,
+registers with systemd-resolved over the system bus, on wg0 only: the mesh IP (and the IPv6 one)
+as the link's DNS servers and `~mesh` as its routing domain, plus `~.` and default-route in exit mode, with DNSSEC,
 LLMNR and mDNS off for the link. It compares what resolved holds first, so a repeat changes
 nothing, and never starts resolved where it is not running. The registration is taken back on
 `dns off` and when the agent stops. An agent in another network namespace than the host's (the

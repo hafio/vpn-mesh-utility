@@ -182,7 +182,12 @@ replaces the key and the previous profile stops working (amendment A6). Two kind
 
 - mesh only (no `--exit`): only mesh addresses go through the tunnel;
 - via an exit (`--exit vps-2`, an exit-capable server): all of the phone's traffic, IPv6
-  included, goes through that server.
+  included, goes through that server (and out of it when the server has public IPv6; dropped
+  there when not).
+
+On a dual-stack mesh the profile gives the phone both mesh addresses and both of its hub's
+resolvers (`Address = 10.77.3.1/32, fd...::3:1/128`); a phone added `--family ipv4` gets the IPv4
+side alone. A profile made before the mesh had IPv6 has none: make a new one.
 
 Either way the phone sends its DNS lookups to its hub's resolver, which answers `.mesh` names and
 forwards the rest upstream. The phone gets an address from 10.77.3.0/24 and reaches spokes
@@ -354,7 +359,8 @@ NAS container), readable by group `meshctl` too.
 
 ## 6. DNS
 
-Every server and spoke answers the `mesh` zone on its mesh IP, port 53: one name per node
+Every server and spoke answers the `mesh` zone on its mesh IP, port 53 (and on its IPv6 mesh IP,
+with AAAA records beside the A ones, on a dual-stack mesh): one name per node
 (`vps-1.mesh`, `nas.mesh`) and the custom records of the web UI's DNS page -- an alias that
 follows a node's mesh IP, or a fixed mesh IP. The answers come from the node's cached config, so
 `nas.mesh` keeps resolving while the server is down. Names of the other zones are REFUSED, so

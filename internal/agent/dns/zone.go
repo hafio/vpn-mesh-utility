@@ -27,10 +27,11 @@ const (
 type zone struct {
 	// apex is the zone's own name, fully qualified ("mesh.").
 	apex string
-	// names holds every name in the zone, lower case and fully qualified.
-	// An empty non-terminal (office.mesh. above printer.office.mesh.) has
-	// the zero address: it exists, but has no record.
-	names      map[string]netip.Addr
+	// names holds every name in the zone, lower case and fully qualified,
+	// with its IPv4 and IPv6 addresses (M8: A and AAAA records). An empty
+	// non-terminal (office.mesh. above printer.office.mesh.) has neither:
+	// it exists, but has no record.
+	names      map[string]hostAddrs
 	upstream   []string
 	split      bool
 	forwardFor []netip.Prefix
@@ -38,27 +39,45 @@ type zone struct {
 	domains []string
 }
 
+// hostAddrs are a name's addresses, the zero Addr for a family it has none
+// of.
+type hostAddrs struct{ v4, v6 netip.Addr }
+
+func (h hostAddrs) list() []netip.Addr {
+	var out []netip.Addr
+	for _, a := range []netip.Addr{h.v4, h.v6} {
+		if a.IsValid() {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
 func newZone(d *proto.DNS, upstreamPort int) (*zone, error) {
 	if _, err := validate.Zone("dns: zone", d.Zone); err != nil {
 		return nil, err
 	}
 	apex := d.Zone + "."
-	z := &zone{apex: apex, names: map[string]netip.Addr{apex: {}}, split: d.Split}
+	z := &zone{apex: apex, names: map[string]hostAddrs{apex: {}}, split: d.Split}
 	for _, r := range d.Records {
-		// A name without an IPv4 address (an IPv6-only node, M8) has no A
-		// record: it answers like the names above it.
-		var ip netip.Addr
+		// A record has an IPv4 address, an IPv6 one (M8) or both.
+		var h hostAddrs
+		var err error
 		if r.IP != "" {
-			var err error
-			if ip, err = netip.ParseAddr(r.IP); err != nil || !ip.Is4() {
+			if h.v4, err = netip.ParseAddr(r.IP); err != nil || !h.v4.Is4() {
 				return nil, fmt.Errorf("dns: record %q: %q is not an IPv4 address", r.Name, r.IP)
 			}
 		}
+		if r.IP6 != "" {
+			if h.v6, err = netip.ParseAddr(r.IP6); err != nil || !h.v6.Is6() || h.v6.Is4In6() {
+				return nil, fmt.Errorf("dns: record %q: %q is not an IPv6 address", r.Name, r.IP6)
+			}
+		}
 		name := strings.ToLower(r.Name) + "." + apex
-		z.names[name] = ip
+		z.names[name] = h
 		for p := parent(name); p != apex; p = parent(p) {
 			if _, ok := z.names[p]; !ok {
-				z.names[p] = netip.Addr{}
+				z.names[p] = hostAddrs{}
 			}
 		}
 	}
@@ -138,33 +157,46 @@ func (z *zone) answer(req *mdns.Msg, src netip.Addr, t *nameTable) (resp *mdns.M
 		return resp, false
 	}
 	resp.Authoritative = true
-	ip, ok := z.names[name]
-	var addrs []netip.Addr
-	if !ip.IsValid() {
-		addrs = t.lookup(strings.TrimSuffix(name, "."+z.apex))
+	h, ok := z.names[name]
+	rrs := records(q, h.list(), ttl)
+	if h.list() == nil {
+		addrs := t.lookup(strings.TrimSuffix(name, "."+z.apex))
 		ok = ok || len(addrs) > 0
+		rrs = records(q, addrs, nameTTL)
 	}
 	switch {
 	case q.Qclass != mdns.ClassINET && q.Qclass != mdns.ClassANY:
 		resp.Authoritative, resp.Rcode = false, mdns.RcodeRefused
 	case !ok:
 		resp.Rcode, resp.Ns = mdns.RcodeNameError, []mdns.RR{z.soa()}
-	case len(addrs) > 0 && (q.Qtype == mdns.TypeA || q.Qtype == mdns.TypeANY):
-		for _, a := range addrs {
-			resp.Answer = append(resp.Answer, &mdns.A{Hdr: mdns.RR_Header{Name: q.Name, Rrtype: mdns.TypeA, Class: mdns.ClassINET, Ttl: nameTTL},
-				A: net.IP(a.AsSlice())})
-		}
-	case ip.IsValid() && (q.Qtype == mdns.TypeA || q.Qtype == mdns.TypeANY):
-		// The name as asked: resolvers that randomise its case check it.
-		resp.Answer = []mdns.RR{&mdns.A{Hdr: mdns.RR_Header{Name: q.Name, Rrtype: mdns.TypeA, Class: mdns.ClassINET, Ttl: ttl},
-			A: net.IP(ip.AsSlice())}}
+	case len(rrs) > 0:
+		resp.Answer = rrs
 	case name == z.apex && q.Qtype == mdns.TypeSOA:
 		resp.Answer = []mdns.RR{z.soa()}
 	default:
-		// The name exists without a record of this type (AAAA, say).
+		// The name exists without a record of this type (AAAA of an IPv4
+		// name, say).
 		resp.Ns = []mdns.RR{z.soa()}
 	}
 	return resp, false
+}
+
+// records are the A and AAAA records of addrs that q asks for (ANY: both),
+// named as asked: resolvers that randomise its case check it.
+func records(q mdns.Question, addrs []netip.Addr, ttl uint32) []mdns.RR {
+	var out []mdns.RR
+	for _, a := range addrs {
+		hdr := mdns.RR_Header{Name: q.Name, Class: mdns.ClassINET, Ttl: ttl}
+		switch {
+		case a.Is4() && (q.Qtype == mdns.TypeA || q.Qtype == mdns.TypeANY):
+			hdr.Rrtype = mdns.TypeA
+			out = append(out, &mdns.A{Hdr: hdr, A: net.IP(a.AsSlice())})
+		case a.Is6() && (q.Qtype == mdns.TypeAAAA || q.Qtype == mdns.TypeANY):
+			hdr.Rrtype = mdns.TypeAAAA
+			out = append(out, &mdns.AAAA{Hdr: hdr, AAAA: net.IP(a.AsSlice())})
+		}
+	}
+	return out
 }
 
 // answerDomain answers a name in an extra domain (amendment A39): a
@@ -179,11 +211,8 @@ func (z *zone) answerDomain(req, resp *mdns.Msg, name string, t *nameTable) (*md
 		return nil, true
 	case q.Qclass != mdns.ClassINET && q.Qclass != mdns.ClassANY:
 		resp.Rcode = mdns.RcodeRefused
-	case q.Qtype == mdns.TypeA || q.Qtype == mdns.TypeANY:
-		for _, a := range addrs {
-			resp.Answer = append(resp.Answer, &mdns.A{Hdr: mdns.RR_Header{Name: q.Name, Rrtype: mdns.TypeA, Class: mdns.ClassINET, Ttl: nameTTL},
-				A: net.IP(a.AsSlice())})
-		}
+	default:
+		resp.Answer = records(q, addrs, nameTTL)
 	}
 	// Another type of a container's name: no record, and no authority over
 	// the domain to say more.
@@ -211,7 +240,7 @@ func newNameTable(names []proto.MeshName) *nameTable {
 	}
 	for _, n := range names {
 		ip, err := netip.ParseAddr(n.IP)
-		if err != nil || !ip.Is4() {
+		if err != nil || ip.Is4In6() {
 			continue // validated by the client
 		}
 		name := strings.ToLower(n.Name)

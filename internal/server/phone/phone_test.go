@@ -98,6 +98,7 @@ func TestRenderRefuses(t *testing.T) {
 		"key not base64":    func(p *Profile) { p.PrivateKey = strings.Repeat("!", 44) },
 		"no dns":            func(p *Profile) { p.DNS = netip.Addr{} },
 		"ipv6 dns":          func(p *Profile) { p.DNS = netip.MustParseAddr("fd00::1") },
+		"dns6 without ipv6": func(p *Profile) { p.DNS6 = netip.MustParseAddr(testfix.VPS1.MeshIP6) },
 		"exit not a choice": func(p *Profile) { p.Exit = testfix.VPS1.Name },
 		"no exit choices":   func(p *Profile) { p.Config.Exit, p.Exit = nil, testfix.VPS2.Name },
 	}
@@ -116,9 +117,59 @@ func TestRenderRefuses(t *testing.T) {
 	}
 }
 
+// dualPhone is the phone's config on the dual-stack mesh (M8): its IPv6
+// address, the hub's peer carrying the IPv6 prefix too, the others their
+// /128s.
+func dualPhone() proto.NodeConfig {
+	c := testfix.PhoneConfig()
+	c.Interface.Address6 = testfix.Phone.MeshIP6 + "/128"
+	for i, n := range []testfix.Node{testfix.VPS1, testfix.VPS2, testfix.VPS3} {
+		add := n.MeshIP6 + "/128"
+		if n.Name == testfix.VPS1.Name {
+			add = testfix.MeshCIDR6
+		}
+		c.Peers[i].AllowedIPs = append(c.Peers[i].AllowedIPs, add)
+	}
+	return c
+}
+
+// A dual phone's profile has both addresses and both of the hub's
+// resolvers; an IPv6-only one asks the hub over IPv6 (M8).
+func TestDualStackProfile(t *testing.T) {
+	priv := aliceKey(t)
+	got, err := Render(Profile{Config: dualPhone(), PrivateKey: priv, DNS: netip.MustParseAddr(testfix.VPS1.MeshIP),
+		DNS6: netip.MustParseAddr(testfix.VPS1.MeshIP6)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden(t, "dual.golden.conf", got)
+	six := dualPhone()
+	six.Interface.Address = ""
+	got, err = Render(Profile{Config: six, PrivateKey: priv, DNS: netip.MustParseAddr(testfix.VPS1.MeshIP6)})
+	if err != nil || !strings.Contains(got, "Address = "+testfix.Phone.MeshIP6+"/128\nDNS = "+testfix.VPS1.MeshIP6+"\n") {
+		t.Fatalf("an IPv6-only phone = %v\n%s", err, got)
+	}
+	if _, err := Render(Profile{Config: six, PrivateKey: priv, DNS: netip.MustParseAddr(testfix.VPS1.MeshIP)}); err == nil {
+		t.Fatal("an IPv6-only phone was given an IPv4 resolver")
+	}
+}
+
 func TestHub(t *testing.T) {
 	if hub, ok := Hub(testfix.PhoneConfig()); !ok || hub != testfix.VPS1.Name {
 		t.Fatalf("Hub = %q, %v", hub, ok)
+	}
+	// A server's container network is no mesh route; an IPv6-only phone's
+	// hub carries the IPv6 prefix alone (M8).
+	withContainers := testfix.PhoneConfig()
+	withContainers.Peers[0], withContainers.Peers[1] = withContainers.Peers[1], withContainers.Peers[0]
+	withContainers.Peers[0].AllowedIPs = append(withContainers.Peers[0].AllowedIPs, testfix.ContainerSubnet)
+	if hub, ok := Hub(withContainers); !ok || hub != testfix.VPS1.Name {
+		t.Fatalf("Hub with a server's containers = %q, %v", hub, ok)
+	}
+	six := proto.NodeConfig{Peers: []proto.Peer{{Name: "vps-3", AllowedIPs: []string{testfix.VPS3.MeshIP6 + "/128", testfix.ContainerSubnet6}},
+		{Name: "vps-1", AllowedIPs: []string{testfix.MeshCIDR6}}}}
+	if hub, ok := Hub(six); !ok || hub != testfix.VPS1.Name {
+		t.Fatalf("Hub of an IPv6-only phone = %q, %v", hub, ok)
 	}
 	if hub, ok := Hub(proto.NodeConfig{Peers: []proto.Peer{{Name: "vps-1", AllowedIPs: []string{"10.77.0.1/32", "0.0.0.0/0"}}}}); ok {
 		t.Fatalf("Hub found %q in a config without a mesh route", hub)

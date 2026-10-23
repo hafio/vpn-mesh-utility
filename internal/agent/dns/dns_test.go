@@ -124,7 +124,8 @@ func TestZoneAnswersContainerNames(t *testing.T) {
 		{Name: "nas", Node: "laptop", IP: "10.77.129.131"},
 		{Name: "office", Node: "nas", IP: "10.77.128.140"},
 		{Name: "web.example.org", Node: "nas", IP: "10.77.128.132"},
-		{Name: "bad", Node: "nas", IP: "fd00::1"},
+		{Name: "bad", Node: "nas", IP: "::ffff:10.77.128.1"}, // an IPv4 address in disguise: dropped
+		{Name: "six", Node: "nas", IP: "fd10:77::8000:8005"},
 	})
 	laptop := netip.MustParseAddr("10.77.2.1")
 	addrs := func(name string, qtype uint16) ([]string, *mdns.Msg) {
@@ -160,6 +161,14 @@ func TestZoneAnswersContainerNames(t *testing.T) {
 	resp, _ := z.answer(query("nas.mesh.", mdns.TypeA), laptop, names)
 	if len(resp.Answer) != 1 || resp.Answer[0].(*mdns.A).A.String() != "10.77.1.1" || resp.Answer[0].Header().Ttl != ttl {
 		t.Errorf("nas.mesh = %v; the node's record must win", resp.Answer)
+	}
+	// A container's IPv6 name (M8) has an AAAA record and no A.
+	if resp, _ := z.answer(query("six.mesh.", mdns.TypeAAAA), laptop, names); len(resp.Answer) != 1 ||
+		resp.Answer[0].(*mdns.AAAA).AAAA.String() != "fd10:77::8000:8005" {
+		t.Errorf("six.mesh AAAA = %v", resp.Answer)
+	}
+	if got, resp := addrs("six.mesh.", mdns.TypeA); len(got) != 0 || resp.Rcode != mdns.RcodeSuccess || len(resp.Ns) != 1 {
+		t.Errorf("six.mesh A = %v, %v; want NODATA", got, resp)
 	}
 	for _, name := range []string{"ghost.mesh.", "web.example.org.mesh.", "bad.mesh.", "db.laptop.mesh."} {
 		if resp, _ := z.answer(query(name, mdns.TypeA), laptop, names); resp.Rcode != mdns.RcodeNameError {
@@ -565,5 +574,92 @@ func TestSameRegistration(t *testing.T) {
 		if same(a, c) {
 			t.Errorf("%+v is not %+v", c, a)
 		}
+	}
+}
+
+// Dual stack (M8): AAAA records beside A ones, both for ANY, NODATA for a
+// family a name has none of; a container's IPv6 name too.
+func TestZoneAnswersAAAA(t *testing.T) {
+	d := meshDNS(true)
+	d.Records[0].IP6 = "fd10:77::1:1" // nas
+	d.Records = append(d.Records, proto.Record{Name: "pad", IP6: "fd10:77::2:2"})
+	z, err := newZone(d, 53)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := newNameTable([]proto.MeshName{{Name: "web", Node: "box", IP: "10.77.128.5"}, {Name: "web", Node: "box", IP: "fd10:77::8000:8005"}})
+	laptop := netip.MustParseAddr("10.77.2.1")
+	for _, c := range []struct {
+		name  string
+		qtype uint16
+		want  []string
+	}{
+		{"nas.mesh.", mdns.TypeAAAA, []string{"fd10:77::1:1"}},
+		{"nas.mesh.", mdns.TypeANY, []string{"10.77.1.1", "fd10:77::1:1"}},
+		{"pad.mesh.", mdns.TypeAAAA, []string{"fd10:77::2:2"}},
+		{"pad.mesh.", mdns.TypeA, nil},
+		{"vps-1.mesh.", mdns.TypeAAAA, nil},
+		{"web.mesh.", mdns.TypeAAAA, []string{"fd10:77::8000:8005"}},
+		{"web.box.mesh.", mdns.TypeA, []string{"10.77.128.5"}},
+	} {
+		resp, _ := z.answer(query(c.name, c.qtype), laptop, names)
+		var got []string
+		for _, rr := range resp.Answer {
+			switch r := rr.(type) {
+			case *mdns.A:
+				got = append(got, r.A.String())
+			case *mdns.AAAA:
+				got = append(got, r.AAAA.String())
+			}
+		}
+		if resp.Rcode != mdns.RcodeSuccess || strings.Join(got, " ") != strings.Join(c.want, " ") || (got == nil) != (len(resp.Ns) == 1) {
+			t.Errorf("%s %s = rcode %d, %v, %d authority; want %v", c.name, mdns.TypeToString[c.qtype], resp.Rcode, got, len(resp.Ns), c.want)
+		}
+	}
+	d.Records[0].IP6 = "10.77.1.1"
+	if _, err := newZone(d, 53); err == nil || !strings.Contains(err.Error(), "not an IPv6 address") {
+		t.Errorf("an IPv4 address as a record's IPv6 one = %v", err)
+	}
+}
+
+// A node with both families (M8) has a second listener on its IPv6 mesh
+// address, answering the same zone, and registers both with the host.
+func TestServiceAnswersOverIPv6(t *testing.T) {
+	if c, err := net.ListenPacket("udp", "[::1]:0"); err != nil {
+		t.Skipf("this host has no IPv6 loopback: %v", err)
+	} else {
+		_ = c.Close()
+	}
+	up, _ := upstream(t)
+	reg := newRegistrar()
+	s := &Service{Registrar: reg, UpstreamPort: up}
+	t.Cleanup(func() { s.Close(context.Background(), "wg0") })
+	ctx, lo, lo6 := context.Background(), netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("::1")
+	d := meshDNS(true)
+	d.Records[0].IP6 = "fd10:77::1:1"
+	w := Want{Iface: "wg0", IP: lo, IP6: lo6, Config: d}
+	if state, n, err := s.Apply(ctx, w); err != nil || state != proto.DNSOn || n != 4 {
+		t.Fatalf("Apply = %q, %d, %v; want on, 4 (zone, both resolvers, registration)", state, n, err)
+	}
+	if r := reg.link("wg0"); !same(r, Registration{DNS: []netip.Addr{lo, lo6}, Domains: []Domain{{Name: "mesh", RouteOnly: true}}}) {
+		t.Fatalf("registered %+v", r)
+	}
+	s.mu.Lock()
+	at6 := s.res6.addr
+	s.mu.Unlock()
+	resp, _, err := (&mdns.Client{Timeout: 3 * time.Second}).Exchange(query("nas.mesh.", mdns.TypeAAAA), at6.String())
+	if err != nil || len(resp.Answer) != 1 || resp.Answer[0].(*mdns.AAAA).AAAA.String() != "fd10:77::1:1" {
+		t.Fatalf("AAAA over IPv6 = %v, %v", resp, err)
+	}
+	if _, n, err := s.Apply(ctx, w); err != nil || n != 0 {
+		t.Fatalf("the same apply = %d, %v", n, err)
+	}
+	w.IP6 = netip.Addr{}
+	if _, n, err := s.Apply(ctx, w); err != nil || n != 2 {
+		t.Fatalf("without IPv6 = %d, %v; want the listener and the registration", n, err)
+	}
+	w.IP6 = netip.MustParseAddr("2001:db8::1")
+	if _, _, err := s.Apply(ctx, w); err == nil || !strings.Contains(err.Error(), "answer the mesh over IPv6") {
+		t.Fatalf("an IPv6 address the host does not have = %v", err)
 	}
 }

@@ -755,11 +755,12 @@ func (l *lab) wgQuick(space, profile string) string {
 	t := l.t
 	t.Helper()
 	var (
-		key       wgtypes.Key
-		addr, dns string
-		peers     []wgtypes.PeerConfig
-		routes    []string
-		err       error
+		key    wgtypes.Key
+		addrs  []string
+		dns    string
+		peers  []wgtypes.PeerConfig
+		routes []string
+		err    error
 	)
 	mtu := "1420"
 	for _, line := range strings.Split(profile, "\n") {
@@ -774,9 +775,9 @@ func (l *lab) wgQuick(space, profile string) string {
 		case "PrivateKey":
 			key, err = wgtypes.ParseKey(v)
 		case "Address":
-			addr = v
+			addrs = strings.Split(v, ", ") // both families (M8)
 		case "DNS":
-			dns = v
+			dns, _, _ = strings.Cut(v, ", ") // the hub's IPv4 resolver comes first
 		case "MTU":
 			mtu = v
 		case "PublicKey":
@@ -790,7 +791,7 @@ func (l *lab) wgQuick(space, profile string) string {
 					t.Fatalf("AllowedIPs %q: %v", a, perr)
 				}
 				p.AllowedIPs = append(p.AllowedIPs, *n)
-				if n.IP.To4() != nil {
+				if a != "::/0" { // the namespace has no IPv6 internet to route
 					routes = append(routes, a)
 				}
 			}
@@ -815,13 +816,23 @@ func (l *lab) wgQuick(space, profile string) string {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	l.sh("ip", "-n", ns(space), "addr", "add", addr, "dev", "wg0")
+	for _, a := range addrs {
+		add := []string{"ip", "-n", ns(space), "addr", "add", a, "dev", "wg0"}
+		if strings.Contains(a, ":") {
+			add = append(add, "nodad")
+		}
+		l.sh(add...)
+	}
 	l.sh("ip", "-n", ns(space), "link", "set", "wg0", "mtu", mtu, "up")
 	for _, r := range routes {
+		family := "-4"
+		if strings.Contains(r, ":") {
+			family = "-6"
+		}
 		if r == "0.0.0.0/0" {
 			r = "default"
 		}
-		l.sh("ip", "-n", ns(space), "route", "add", r, "dev", "wg0")
+		l.sh("ip", family, "-n", ns(space), "route", "add", r, "dev", "wg0")
 	}
 	return dns
 }

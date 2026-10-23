@@ -110,11 +110,12 @@ func (s *Nodes) Phone(ctx context.Context, by Actor, name string, req PhoneReque
 		if err != nil {
 			return err
 		}
-		dns, err := netip.ParseAddr(hub.MeshIP)
+		// The hub's resolver over the phone's families (M8): IPv4 first.
+		dns, dns6, err := phoneDNS(*cfg, hub)
 		if err != nil {
-			return fmt.Errorf("hub %s has no usable mesh IP %q: %w", hub.Name, hub.MeshIP, err)
+			return err
 		}
-		if out.Profile, err = phone.Render(phone.Profile{Config: *cfg, PrivateKey: priv, DNS: dns, Exit: req.Exit}); err != nil {
+		if out.Profile, err = phone.Render(phone.Profile{Config: *cfg, PrivateKey: priv, DNS: dns, DNS6: dns6, Exit: req.Exit}); err != nil {
 			return err
 		}
 		// The profile the phone holds: when its config changes later, the
@@ -151,4 +152,22 @@ func withHandshake(tx *store.Tx, info *NodeInfo) error {
 	var err error
 	info.LastHandshake, err = tx.LastHandshakeWith(info.ID)
 	return err
+}
+
+// phoneDNS is the hub's resolver as a phone's profile names it: the hub's
+// IPv4 mesh IP for a phone with IPv4, else its IPv6 one, and the IPv6 one
+// beside it for a phone with both (M8).
+func phoneDNS(cfg proto.NodeConfig, hub store.Node) (netip.Addr, netip.Addr, error) {
+	v4, err4 := netip.ParseAddr(hub.MeshIP)
+	v6, err6 := netip.ParseAddr(hub.MeshIP6)
+	has4, has6 := cfg.Interface.Address != "" && err4 == nil, cfg.Interface.Address6 != "" && err6 == nil
+	switch {
+	case has4 && has6:
+		return v4, v6, nil
+	case has4:
+		return v4, netip.Addr{}, nil
+	case has6:
+		return v6, netip.Addr{}, nil
+	}
+	return netip.Addr{}, netip.Addr{}, fmt.Errorf("hub %s has no mesh IP in a family the phone %s has", hub.Name, cfg.Node.Name)
 }

@@ -52,8 +52,10 @@ type Profile struct {
 	// PrivateKey is NewKey's private half.
 	PrivateKey string
 	// DNS is the hub's mesh IP: its resolver answers the mesh zone and
-	// forwards everything else for its phones (amendment A12).
-	DNS netip.Addr
+	// forwards everything else for its phones (amendment A12) -- its IPv6
+	// one for an IPv6-only phone. DNS6 is the hub's IPv6 mesh IP beside it,
+	// for a phone with both families (M8); invalid for none.
+	DNS, DNS6 netip.Addr
 	// Exit is the server the phone's internet goes through, one of the
 	// config's exit choices; empty is the mesh-only profile.
 	Exit string
@@ -71,8 +73,13 @@ func Render(p Profile) (string, error) {
 	if k, err := base64.StdEncoding.DecodeString(p.PrivateKey); err != nil || len(k) != 32 {
 		return "", errors.New("the private key is not a WireGuard key (base64 of 32 bytes)")
 	}
-	if !p.DNS.Is4() {
-		return "", fmt.Errorf("the DNS server %q is not an IPv4 address", p.DNS)
+	switch {
+	case !p.DNS.IsValid():
+		return "", errors.New("the profile has no DNS server")
+	case p.DNS.Is4() && c.Interface.Address == "", p.DNS.Is6() && c.Interface.Address6 == "":
+		return "", fmt.Errorf("the DNS server %s is of a family the phone has no address of", p.DNS)
+	case p.DNS6.IsValid() && (!p.DNS6.Is6() || c.Interface.Address6 == ""):
+		return "", fmt.Errorf("the second DNS server %s must be an IPv6 address of a phone with IPv6", p.DNS6)
 	}
 	if p.Exit != "" && (c.Exit == nil || !slices.Contains(c.Exit.Choices, p.Exit)) {
 		var choices []string
@@ -86,8 +93,12 @@ func Render(p Profile) (string, error) {
 	line := func(key string, value any) { fmt.Fprintf(&b, "%s = %v\n", key, value) }
 	b.WriteString("[Interface]\n")
 	line("PrivateKey", p.PrivateKey)
-	line("Address", c.Interface.Address)
-	line("DNS", p.DNS)
+	line("Address", joinSet(c.Interface.Address, c.Interface.Address6))
+	dns := p.DNS.String()
+	if p.DNS6.IsValid() {
+		dns += ", " + p.DNS6.String()
+	}
+	line("DNS", dns)
 	line("MTU", c.Interface.MTU)
 	for _, peer := range c.Peers {
 		allowed := peer.AllowedIPs
@@ -107,12 +118,23 @@ func Render(p Profile) (string, error) {
 	return b.String(), nil
 }
 
+// joinSet is the non-empty values, comma-separated: wg-quick's list.
+func joinSet(values ...string) string {
+	return strings.Join(slices.DeleteFunc(values, func(v string) bool { return v == "" }), ", ")
+}
+
 // Hub is the peer that carries the whole mesh: the phone's hub, whose
-// resolver the profile uses.
+// resolver the profile uses. Its allowed IPs hold the mesh CIDR (a /22 or
+// wider) or its IPv6 prefix (a /64 or wider), which no other peer's do: a
+// server's container network is a /24 or a /112.
 func Hub(c proto.NodeConfig) (string, bool) {
 	for _, peer := range c.Peers {
 		for _, a := range peer.AllowedIPs {
-			if pf, err := netip.ParsePrefix(a); err == nil && pf.Bits() < 32 && pf.Bits() > 0 {
+			pf, err := netip.ParsePrefix(a)
+			if err != nil || pf.Bits() == 0 {
+				continue
+			}
+			if (pf.Addr().Is4() && pf.Bits() <= 22) || (pf.Addr().Is6() && pf.Bits() <= 64) {
 				return peer.Name, true
 			}
 		}

@@ -182,6 +182,16 @@ fingerprints), settings, DNS records and the mesh firewall (each group, object, 
 a policy with its place and schedule, the schedules' zone); nodes are matched by id. `TestCompareSeesThroughTheMigration`: a
 snapshot from before the mesh firewall compares by the policies its rules became.
 
+## `internal/server/phone`
+
+| Test | Covers |
+| --- | --- |
+| `TestNewKey` | a phone's key pair from 32 bytes of randomness, clamped as wg(8) does, the public half its X25519 |
+| `TestProfiles` | `testdata/mesh-only.golden.conf` and `via-exit.golden.conf`: the profile in wg-quick's format, the full tunnel only in the exit's peer and never in the computed config |
+| `TestDualStackProfile` | M8, `testdata/dual.golden.conf`: both addresses and both of the hub's resolvers; an IPv6-only phone asks its hub over IPv6, never over IPv4 |
+| `TestRenderRefuses` | a spoke's config, an injected endpoint, a key that is not one, no resolver, a resolver of a family the phone has no address of, an exit that is no choice; no error carries the private key |
+| `TestHub` | the peer carrying the mesh CIDR, not a server's container /24 listed first, or the IPv6 prefix for an IPv6-only phone; a config with none |
+
 ## `internal/server/api`
 
 Tests run the real handlers on a fresh store with `testfix.Clock`. `countingDB` wraps the store
@@ -350,6 +360,7 @@ and `Policy.Fail`/`FailOn` inject a failure into one method, also while an agent
 | `dns` | `TestZoneAnswersExtraDomains` | extra domains (amendment A39): a container's name there answered (case kept, TTL 10 s, not authoritative), NOERROR for another type, every other name there forwarded from a split node too, a domain that is not extra still refused, CHAOS refused; the host registers the zone and the domains |
 | `dns` | `TestZoneAnswersContainerNames` | container names (amendment A38): `web.mesh` every node's addresses, rotated, `web.nas.mesh` one node's, TTL 10 s; NODATA for another type; a node's record wins; a container may fill an empty non-terminal; dotted and non-IPv4 names, and another node's, are NXDOMAIN |
 | `dns` | `TestZoneAnswers`, `TestNewZoneRejects` | A records (the name's case kept), NODATA for another type and for an empty non-terminal, NXDOMAIN with an SOA, the apex SOA; other zones REFUSED in split mode, forwarded in exit mode and for a `forward_for` phone; another class REFUSED, two questions FORMERR; a section that does not parse; an IPv6-only name without an A record (M8) |
+| | `TestZoneAnswersAAAA`, `TestServiceAnswersOverIPv6` | M8: AAAA records beside A ones, both for ANY, NODATA for a family a name has none of, a container's IPv6 name; an IPv4 address as a record's IPv6 one refused; a second listener on the node's IPv6 mesh address (skipped without an IPv6 loopback), both addresses registered, stopped when the node loses IPv6, a bind failure named |
 | | `TestServiceAnswersTheContainers`, `TestServiceAnswersAndRegisters` | on a loopback socket against a loopback upstream: the zone over UDP and TCP, REFUSED then forwarded after exit mode came on, SERVFAIL with the upstream gone; the registration (`~mesh`, plus `~.` and default-route in exit mode) set once and left alone on a repeat; `dns off` takes it back and the resolver keeps answering; no DNS section stops both |
 | | `TestServiceWithoutAResolverToRegisterWith`, `TestServiceRegistrationFailuresAreReported`, `TestServiceBinding`, `TestSameRegistration` | no registrar or resolved not running: `unavailable` (`off` when turned off) and nothing written; a failing read, set or revert named, with the resolver still answering; a taken port and a foreign address reported before any registration; a resolver that died is started again; registrations compared as sets, `mesh.`/`MESH`/`""`/`.` normalised |
 | | `TestClassifyBusErrors`, `TestRegistrarNeedsTheInterface` (Linux) | resolved's absence on the bus is `unavailable`, a refusal names CAP_NET_ADMIN; a missing interface fails before anything reaches resolved |

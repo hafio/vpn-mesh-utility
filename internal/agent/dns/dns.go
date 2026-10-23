@@ -2,8 +2,9 @@
 // the node's mesh IP that answers the mesh zone from the synced records, and
 // the host's split-DNS registration that sends .mesh lookups to it.
 //
-// The resolver answers A records of the zone, NODATA for other types of a
-// name it has and NXDOMAIN for one it has not. A query for another zone is
+// The resolver answers A and AAAA records of the zone (M8), NODATA for
+// other types of a name it has and NXDOMAIN for one it has not; it listens
+// on each of the node's mesh addresses. A query for another zone is
 // forwarded to the upstream resolvers only in exit mode (every lookup of
 // the node goes through the tunnel then) or from a phone that uses this
 // node as its resolver (forward_for); otherwise it is REFUSED, so the
@@ -67,10 +68,11 @@ type Registrar interface {
 // Want is what one apply asks of the DNS step.
 type Want struct {
 	Iface string
-	// IP is the node's mesh IP, which the resolver binds, and Also its
-	// containers' gateway address, which it binds too (invalid: none).
-	IP   netip.Addr
-	Also netip.Addr
+	// IP is the node's mesh IP, which the resolver binds; IP6 its IPv6 one
+	// when it has both (M8), and Also its containers' gateway address,
+	// which it binds too (invalid: none).
+	IP, IP6 netip.Addr
+	Also    netip.Addr
 	// Config is the config's DNS section; nil stops the resolver and takes
 	// the registration back.
 	Config *proto.DNS
@@ -92,6 +94,8 @@ type Service struct {
 
 	mu  sync.Mutex
 	res *resolver
+	// res6 answers on the node's IPv6 mesh address beside its IPv4 one (M8).
+	res6 *resolver
 	// also answers the containers on their gateway address (amendment A37).
 	also       *resolver
 	last       *proto.DNS
@@ -157,40 +161,47 @@ func (s *Service) Apply(ctx context.Context, w Want) (string, int, error) {
 		n++
 		s.log().Info("resolver answering the mesh zone", "addr", r.addr)
 	}
-	c, err := s.serveAlso(w.Also)
-	n += c
-	if err != nil {
-		return "", n, err
+	for _, l := range []struct {
+		slot **resolver
+		addr netip.Addr
+		what string
+	}{{&s.res6, w.IP6, "the mesh over IPv6"}, {&s.also, w.Also, "the containers"}} {
+		c, err := s.serveAlso(l.slot, l.addr, l.what)
+		n += c
+		if err != nil {
+			return "", n, err
+		}
 	}
 	state, c, err := s.register(ctx, w)
 	return state, n + c, err
 }
 
-// serveAlso keeps the second listener on the containers' gateway address,
-// or stops it when there is none; the caller holds mu.
-func (s *Service) serveAlso(a netip.Addr) (int, error) {
+// serveAlso keeps one more listener in slot on a -- the node's IPv6 mesh
+// address, or the containers' gateway address -- or stops it when there is
+// none; the caller holds mu.
+func (s *Service) serveAlso(slot **resolver, a netip.Addr, what string) (int, error) {
 	if !a.IsValid() {
-		if s.also == nil {
+		if *slot == nil {
 			return 0, nil
 		}
-		s.also.close()
-		s.also = nil
+		(*slot).close()
+		*slot = nil
 		return 1, nil
 	}
 	want := netip.AddrPortFrom(a, s.Port)
-	if s.also != nil && !s.also.dead() && s.also.want == want {
+	if *slot != nil && !(*slot).dead() && (*slot).want == want {
 		return 0, nil
 	}
-	if s.also != nil {
-		s.also.close()
-		s.also = nil
+	if *slot != nil {
+		(*slot).close()
+		*slot = nil
 	}
 	r, err := serve(want, s)
 	if err != nil {
-		return 0, fmt.Errorf("dns: answer the containers on %s: %w (is another DNS server using port %d there?)", want, err, s.Port)
+		return 0, fmt.Errorf("dns: answer %s on %s: %w (is another DNS server using port %d there?)", what, want, err, s.Port)
 	}
-	s.also = r
-	s.log().Info("resolver answering the containers", "addr", r.addr)
+	*slot = r
+	s.log().Info("resolver answering "+what, "addr", r.addr)
 	return 1, nil
 }
 
@@ -203,6 +214,9 @@ func desired(w Want) Registration {
 		zone, extra = w.Config.Zone, w.Config.Domains
 	}
 	r := Registration{DNS: []netip.Addr{w.IP}, Domains: []Domain{{Name: zone, RouteOnly: true}}}
+	if w.IP6.IsValid() {
+		r.DNS = append(r.DNS, w.IP6) // the host may ask over either family (M8)
+	}
 	for _, d := range extra {
 		r.Domains = append(r.Domains, Domain{Name: d, RouteOnly: true})
 	}
@@ -287,10 +301,12 @@ func (s *Service) register(ctx context.Context, w Want) (string, int, error) {
 // returns how many of the two it did.
 func (s *Service) stopLocked(ctx context.Context, iface string) int {
 	n := 0
-	if s.also != nil {
-		s.also.close()
-		s.also = nil
-		n++
+	for _, slot := range []**resolver{&s.res6, &s.also} {
+		if *slot != nil {
+			(*slot).close()
+			*slot = nil
+			n++
+		}
 	}
 	if s.res != nil {
 		s.res.close()
