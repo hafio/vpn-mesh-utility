@@ -258,9 +258,9 @@
     "semantic_hash": ""
   },
   "docs/test.md": {
-    "mtime": 1792730549.0641963,
-    "seen": 1792730863.6893957,
-    "ast_hash": "33b9ffb2dc4bbf34f27e9731430438d0",
+    "mtime": 1792808303.6155663,
+    "seen": 1792808496.538368,
+    "ast_hash": "1fc5961e081530204cbb62c4ab669632",
     "semantic_hash": ""
   },
   "cmd/meshctl/agent.go": {
@@ -330,9 +330,9 @@
     "semantic_hash": ""
   },
   "internal/agent/agent_test.go": {
-    "mtime": 1792730466.2807143,
-    "seen": 1792730863.6794968,
-    "ast_hash": "cfcd5f0202d56d5a77a28ff768089f34",
+    "mtime": 1792808296.4490705,
+    "seen": 1792808496.525227,
+    "ast_hash": "18372cd86684b2fd92f00bc17194abf9",
     "semantic_hash": ""
   },
   "internal/agent/agentfake/agentfake.go": {

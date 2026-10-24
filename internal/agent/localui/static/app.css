@@ -1,23 +1,173 @@
-/* meshctl local UI: no script, no external assets. */
-body { font: 15px/1.45 system-ui, sans-serif; margin: 0; color: #1d2329; background: #f6f7f9; }
-header { display: flex; gap: 1rem; align-items: center; justify-content: space-between; padding: .6rem 1.2rem; background: #1d2329; color: #fff; }
-header a { color: #cfe3ff; margin-right: .8rem; }
-main { max-width: 64rem; margin: 0 auto; padding: 1rem 1.2rem 3rem; }
-h1 small, h2 small { font-weight: normal; color: #5b6570; }
-table { border-collapse: collapse; width: 100%; margin: .5rem 0 1rem; background: #fff; }
-th, td { text-align: left; padding: .3rem .6rem; border-bottom: 1px solid #e3e6ea; vertical-align: top; }
-table.kv th { width: 9rem; color: #5b6570; font-weight: normal; }
-form { margin: .4rem 0; }
-form.inline { display: inline; }
-label { margin-right: .8rem; }
+/* meshctl local UI: no script, no external assets. Same "night mesh" theme
+   as the server's web UI (internal/server/ui/static/app.css), cut down to
+   the pages here; every text colour is at least 4.5:1 on its surface. */
+:root {
+  color-scheme: dark;
+  --bg0: #050a24;
+  --bg1: #0a1547;
+  --surface: rgba(16, 30, 88, 0.62);
+  --surface-hi: rgba(255, 255, 255, 0.06);
+  --line: rgba(140, 170, 255, 0.2);
+  --line-soft: rgba(140, 170, 255, 0.1);
+  --text: #eaf1ff;
+  --muted: #a3b4de;
+  --link: #7cbcff;
+  --ice: #cfe6ff;
+  --blue: #2f7dff;
+  --violet: #6a3fd6;
+  --magenta: #ff3fa4;
+  --coral: #ff4d6d;
+  --orange: #ff9a3c;
+  --primary: linear-gradient(135deg, #1d5ce6, var(--violet));
+  --spectrum: linear-gradient(90deg, var(--blue), var(--magenta), var(--coral), var(--orange));
+  --shadow: 0 10px 30px rgba(2, 6, 28, 0.45);
+}
+* { box-sizing: border-box; }
+html { min-height: 100%; background: var(--bg0); }
+body {
+  margin: 0;
+  min-height: 100vh;
+  font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  color: var(--text);
+  background-color: var(--bg0);
+  background-image:
+    radial-gradient(circle at 1px 1px, rgba(207, 230, 255, 0.07) 1px, transparent 0),
+    radial-gradient(40rem 30rem at 90% 0%, rgba(47, 125, 255, 0.3), transparent 62%),
+    radial-gradient(28rem 22rem at 6% 20%, rgba(255, 77, 109, 0.16), transparent 62%),
+    linear-gradient(160deg, var(--bg0) 0%, var(--bg1) 60%, #0c1b5e 100%);
+  background-size: 26px 26px, auto, auto, auto;
+  background-attachment: fixed;
+}
+a { color: var(--link); text-decoration: none; }
+a:hover { color: #fff; text-decoration: underline; text-underline-offset: 3px; }
+:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+
+header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem 1rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.7rem 1.2rem;
+  color: var(--muted);
+  background: rgba(5, 10, 36, 0.72);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--line-soft);
+}
+header::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--spectrum); opacity: 0.85; }
+header strong { display: inline-flex; align-items: center; gap: 0.55rem; color: var(--text); font-size: 1.1rem; font-weight: 800; letter-spacing: 0.02em; }
+header strong::before {
+  content: "";
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 30% 32%, #fff 0 0.13rem, transparent 0.16rem),
+    radial-gradient(circle at 70% 38%, var(--ice) 0 0.11rem, transparent 0.14rem),
+    radial-gradient(circle at 46% 74%, #ffd0d8 0 0.12rem, transparent 0.15rem),
+    linear-gradient(135deg, #1d5ce6, var(--magenta));
+  box-shadow: 0 0 14px rgba(47, 125, 255, 0.65), 0 0 22px rgba(255, 63, 164, 0.3);
+}
+header nav { display: flex; align-items: center; gap: 0.3rem; }
+header nav a { color: var(--muted); padding: 0.3rem 0.8rem; border-radius: 999px; }
+header nav a:hover { color: var(--text); background: var(--surface-hi); text-decoration: none; }
+header nav form.inline { margin-left: 0.4rem; }
+
+main { max-width: 64rem; margin: 0 auto; padding: 1.75rem 1.2rem 3rem; }
+h1 { font-size: 1.7rem; font-weight: 750; letter-spacing: -0.01em; margin: 0 0 1.2rem; }
+h1::after { content: ""; display: block; width: 3.5rem; height: 3px; margin-top: 0.5rem; border-radius: 3px; background: var(--spectrum); }
+h2 { display: flex; align-items: center; gap: 0.55rem; font-size: 1.15rem; font-weight: 650; color: var(--ice); margin: 2.1rem 0 0.8rem; }
+h2::before { content: ""; width: 0.55rem; height: 0.55rem; border-radius: 50%; background: var(--link); box-shadow: 0 0 10px var(--blue); }
+h1 small, h2 small { font-size: 0.6em; font-weight: 500; color: var(--muted); margin-left: 0.4rem; }
+
+table {
+  width: 100%;
+  margin: 0.5rem 0 1rem;
+  border-collapse: separate;
+  border-spacing: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
+th, td { text-align: left; padding: 0.55rem 0.8rem; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+table:not(.kv) tbody > tr:first-child > th { font-size: 0.75rem; font-weight: 650; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); background: rgba(255, 255, 255, 0.03); }
+tbody > tr:last-child > * { border-bottom: 0; }
+table.kv th { width: 9rem; color: var(--muted); font-weight: 500; }
+
+/* Each setting is a row card: fields, then its button. */
+main form:not(.inline) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem 1rem;
+  align-items: end;
+  margin: 0.7rem 0;
+  padding: 0.9rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+form.inline { display: inline; margin: 0; }
+label { display: inline-flex; flex-direction: column; gap: 0.3rem; color: var(--muted); font-size: 0.88rem; }
 input, select, button { font: inherit; }
-input { width: 6rem; }
-.hint { color: #5b6570; }
-.flash { background: #e6f4ea; border: 1px solid #b7dfc2; padding: .5rem .8rem; }
-.error { background: #fdecea; border: 1px solid #f3b8b1; padding: .5rem .8rem; }
-.ok { color: #1e7b34; }
-.warn { color: #9a6700; }
-.bad { color: #b42318; }
-.off { color: #6b7280; }
-pre { background: #fff; border: 1px solid #e3e6ea; padding: .6rem; overflow-x: auto; }
-pre.log { font-size: 13px; white-space: pre-wrap; }
+input, select {
+  font-size: 0.95rem;
+  color: var(--text);
+  background: rgba(5, 10, 36, 0.65);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.45rem 0.65rem;
+}
+input { width: 7rem; }
+input:focus, select:focus { outline: none; border-color: var(--link); box-shadow: 0 0 0 3px rgba(47, 125, 255, 0.35); }
+select option { color: var(--text); background: var(--bg1); }
+button {
+  font-weight: 600;
+  color: #fff;
+  background: var(--primary);
+  border: 0;
+  border-radius: 10px;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(29, 92, 230, 0.35);
+  transition: filter 0.12s, transform 0.12s;
+}
+button:hover { filter: brightness(1.12); transform: translateY(-1px); }
+header button { font-weight: 500; padding: 0.3rem 0.8rem; color: var(--text); background: var(--surface-hi); border: 1px solid var(--line); box-shadow: none; }
+
+.hint { color: var(--muted); }
+.flash, .error { padding: 0.75rem 1rem; border: 1px solid; border-left-width: 4px; border-radius: 12px; }
+.flash { color: #c9f7e3; background: rgba(61, 220, 151, 0.1); border-color: rgba(61, 220, 151, 0.45); }
+.error { color: #ffd3db; background: rgba(255, 77, 109, 0.12); border-color: rgba(255, 77, 109, 0.5); }
+.ok { color: #3ddc97; }
+.warn { color: #ffb454; }
+.bad { color: #ff6b84; }
+.off { color: #a3b0d6; }
+td.ok, td.warn, td.bad, td.off { font-weight: 600; }
+td.ok::before, td.warn::before, td.bad::before, td.off::before {
+  content: "";
+  display: inline-block;
+  width: 0.45rem;
+  height: 0.45rem;
+  margin-right: 0.45rem;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 8px currentColor;
+  vertical-align: 0.1em;
+}
+code { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--ice); background: rgba(124, 188, 255, 0.1); padding: 0.1rem 0.35rem; border-radius: 6px; }
+pre { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #d6e6ff; background: rgba(3, 6, 24, 0.78); border: 1px solid var(--line); border-radius: 12px; padding: 0.9rem; overflow-x: auto; }
+pre.log { white-space: pre-wrap; }
+
+@media (max-width: 760px) {
+  table { display: block; overflow-x: auto; }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; }
+  button:hover { transform: none; }
+}

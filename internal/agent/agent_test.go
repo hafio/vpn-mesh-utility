@@ -25,6 +25,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/hafio/vpn-mesh-utility/internal/agent/agentfake"
+	"github.com/hafio/vpn-mesh-utility/internal/agent/apply"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/localapi"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/logbuf"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/names"
@@ -1371,6 +1372,40 @@ func TestMeshNamesReachTheNeighbourEntries(t *testing.T) {
 	f.setMesh(&view)
 	f.nudge <- struct{}{}
 	eventually(t, "the bridge to answer for the NAS's container", answers("fd10:77::8001:8002"))
+}
+
+// proxyLoop applies the config on the interface again at each kick and
+// logs what came of it: a pass that changed the host, and one that failed
+// (the drift check retries it).
+func TestProxyLoopAppliesAgain(t *testing.T) {
+	k, err := wg.ParseKey(testfix.WGKey(5))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var log syncBuffer
+	cfg := testfix.SpokeConfig("")
+	r := &runner{log: slog.New(slog.NewTextHandler(&log, nil)), proxyKick: make(chan struct{}, 1), applied: &cfg,
+		engine: apply.New(apply.Deps{Host: agentfake.NewHost(), Routes: agentfake.NewRoutes(), Exit: &agentfake.Policy{},
+			Sysctl: &agentfake.Sysctl{}, Iface: Interface, Key: k})}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.proxyLoop(ctx)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+	kick(r.proxyKick)
+	eventually(t, "a pass that changed the host", func() bool { return strings.Contains(log.String(), "follows the mesh's containers") })
+	bad := cfg
+	bad.Interface.Address = ""
+	r.mu.Lock()
+	r.applied = &bad
+	r.mu.Unlock()
+	kick(r.proxyKick)
+	eventually(t, "a failed pass", func() bool { return strings.Contains(log.String(), "could not follow the mesh's containers") })
 }
 
 // The runtime socket: off reads none, a path is used as given, and auto
