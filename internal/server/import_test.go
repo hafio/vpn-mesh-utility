@@ -76,7 +76,7 @@ func TestImportRefusesWhileTheServerRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer unlock()
-	if _, err := Import(context.Background(), ImportConfig{DataDir: data, Doc: document()}); !errors.Is(err, ErrLocked) || !strings.Contains(err.Error(), "stop the meshctl server") {
+	if _, err := Import(context.Background(), ImportConfig{DataDir: data, Doc: document()}); !errors.Is(err, ErrLocked) || !strings.Contains(err.Error(), "stop the meshctl control plane") {
 		t.Fatalf("Import beside a lock holder = %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(data, DBFile)); err == nil {

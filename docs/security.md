@@ -51,11 +51,13 @@ validated zone, protocol, port and prefix values; `TestHostileRulesNeverReachFir
 hostile rule never runs a command. install.sh substitutes four markers, each validated
 (`TestInstallRefusesHostileValues`) and placed inside single quotes.
 
-## Server container
+## Control plane container
 
-`deploy/compose.server.yml` (and the dev stack) state their posture explicitly, pinned by
-`TestServerComposePosture` / `TestDevComposePosture`, which also forbid every widening token
-(`cap_add`, `devices`, `network_mode`, `privileged: true`, host mounts, ...):
+`deploy/compose.control.yml`, `deploy/stack.control.yml` (and the dev stack) state their posture
+explicitly, pinned by `TestControlComposePosture`, `TestControlStackPosture` and
+`TestDevComposePosture`, which also forbid every widening token (`cap_add`, `devices`,
+`network_mode`, `privileged: true`, host mounts, ...); the control plane sample in
+docs/containers.md is held to the same by `TestContainerSamples`:
 
 | Setting | Value |
 | --- | --- |
@@ -64,7 +66,7 @@ hostile rule never runs a command. install.sh substitutes four markers, each val
 | capabilities | `cap_drop: [ALL]`, none added |
 | privilege escalation | `no-new-privileges=true` |
 | root file system | read-only; `/tmp` is a 16 MiB tmpfs |
-| network | the external `dokploy-network` bridge, `expose: 8080` only; nothing published on the host (the dev stack publishes on `127.0.0.1` only) |
+| network | the external `dokploy-network` bridge, `expose` of the control plane's port only (8080, or `MESHCTL_PORT`); nothing published on the host (the dev stack and the sample publish on `127.0.0.1` only) |
 | storage | the named volume `meshctl-data` at `/data` |
 | limits | 256 MiB memory, 256 pids |
 
@@ -104,12 +106,14 @@ created only `wg show` loses sight of the interface. The configuration the agent
 never reaches a log: wireguard-go logs no private key, and errors that read the device back
 name the field, never its value (`TestParseUAPIRejectsMalformedValues`).
 
-## NAS container
+## A node's container on the host network (the NAS)
 
-A spoke on a NAS runs the agent from a compose file the server renders for it (`deploy/nas.go`,
-amendments A13, A19, A28) from a typed value that yaml.v3 writes, so no value can add a key. It
-widens exactly what an agent that owns the host's `wg0` needs; `TestNASComposePosture` pins every
-key and value and forbids every other widening token:
+meshctl generates no container deployment (amendment A48): docs/containers.md has the samples
+an operator copies, and `TestContainerSamples` (deploy/samples_test.go) parses each one -- the
+compose files, the `podman run` lines, the Kubernetes manifests -- and fails on any key, capability,
+device, sysctl, volume or port beyond what is listed here, and on a join token written into the
+sample. A client node on the host network (amendments A13, A19, A28) widens exactly what an agent
+that owns the host's `wg0` needs:
 
 | Setting | Value | Why |
 | --- | --- | --- |
@@ -118,27 +122,34 @@ key and value and forbids every other widening token:
 | capabilities | `cap_drop: [ALL]`, `cap_add: [NET_ADMIN, NET_BIND_SERVICE]` | wg0, its addresses and routes; the resolver on :53 |
 | privilege escalation | `no-new-privileges=true` | |
 | network | `network_mode: host` | wg0 and its routes belong to the NAS, not to a container network |
-| devices | `/dev/net/tun`, in the userspace variant only | wireguard-go's interface; the kernel variant maps none |
+| devices | `/dev/net/tun`, unless the host's module is used (`MESHCTL_WG_BACKEND=kernel`) | wireguard-go's interface |
 | root file system | read-only; `/tmp` is a 16 MiB tmpfs | |
-| storage | one bind mount: the chosen host directory at `/data` | keys and the cached config |
+| storage | one bind mount: a host directory at `/data` (Kubernetes: a `hostPath` of `/var/lib/meshctl`) | keys and the cached config |
 | limits | 256 MiB memory, 256 pids | |
 
-Every value written into the file passes `internal/validate` first: the node name, the server's
-canonical origin, a release version (a development build gets no file), the backend, and the
-host directory as a clean absolute path of `[A-Za-z0-9._/-]`
-(`TestNASComposeRefusesHostileValues`). Below the validators the renderer still holds: a
-newline, `---`, `: ` or `$` handed to it directly stays inside its value, every `$` is doubled
-so compose never interpolates it, and the header comment cannot be broken
-(`TestNASRendererHoldsItsStructure`). The file carries no secret: the join token is typed into
-the one-time join command.
+Every value `meshctl start` reads from the environment passes `internal/validate` before it is
+used, as on the command line. The samples carry no secret (amendment A47): a compose file
+references `${MESHCTL_TOKEN:-}`, which compose fills from a `.env` file or the shell, `podman run
+-e MESHCTL_TOKEN` takes it from the shell, and the Kubernetes manifest mounts a secret as a file
+for `MESHCTL_TOKEN_FILE`. A server node does not run on the host network in a container: its
+firewall step needs firewalld on the host, which the image cannot reach.
+
+**The join token in a container (amendment A47).** `meshctl start` reads the token from
+`MESHCTL_TOKEN` or from the file `MESHCTL_TOKEN_FILE` names (absolute path, at most 1 KiB, the
+token grammar checked, masked in every error). Taken from the environment, the token is visible
+to whoever can `docker inspect` the container; it is single-use, expires, and stops being
+useful once the node has joined, and the file form (a compose secret at
+`/run/secrets/meshctl_token`) keeps it out of the environment. The data directory keeps only a
+fingerprint of the last token used, `join.json` (0600): a sha256 over a fixed prefix and the
+token, so it is not the lookup key the server stores. The agent's one exec site runs its
+commands with an explicit environment, so the token reaches no child process.
 
 ## Container-mode agent
 
-A container-mode node (amendment A37) runs the agent from a compose file the server renders
-(`deploy/container.go`) from a typed value, like the NAS's. The agent lives in its own network
-namespace: its capabilities act there only, and the host, its addresses and its LAN are not on
-the mesh. `TestContainerComposePosture` pins every key and value and forbids every other
-widening token, including the host network:
+A container-mode node (amendment A37) runs the agent from the container-mode sample in
+docs/containers.md. The agent lives in its own network namespace: its capabilities act there
+only, and the host, its addresses and its LAN are not on the mesh. `TestContainerSamples` holds
+the sample to this list and forbids every other widening token, including the host network:
 
 | Setting | Value | Why |
 | --- | --- | --- |
@@ -147,12 +158,12 @@ widening token, including the host network:
 | capabilities | `cap_drop: [ALL]`, `cap_add: [NET_ADMIN, NET_BIND_SERVICE]` | wg0, its routes and the gateway's policy rules, in the agent's namespace; the resolver on :53 |
 | privilege escalation | `no-new-privileges=true` | |
 | network | its own namespace on two networks: an egress network and the external `meshctl-mesh` | the runtime NATs its WireGuard UDP; containers attach to the mesh network |
-| sysctls | `net.ipv4.ip_forward=1`, `net.ipv4.conf.all.proxy_arp=1` | the gateway forwards and answers ARP for mesh addresses; both are per-namespace |
+| sysctls | `net.ipv4.ip_forward=1`, `net.ipv4.conf.all.proxy_arp=1`; with the containers' IPv6 also `disable_ipv6=0`, IPv6 forwarding and `proxy_ndp` | the gateway forwards and answers ARP (and neighbour discovery) for mesh addresses; all are per-namespace |
 | devices | `/dev/net/tun` unless the kernel backend | wireguard-go when the host has no module |
-| ports | one UDP port, on a hub only | the node's endpoint; nothing else is published |
+| ports | one UDP port, on a server node only | the node's endpoint; nothing else is published |
 | root file system | read-only; `/tmp` is a 16 MiB tmpfs | |
-| storage | a named volume, or the chosen host directory, at `/data` | keys and the cached config |
-| runtime socket | the host's Docker (or rootful Podman) API socket at `/var/run/docker.sock`, `:ro`; absent with `--no-names` | the containers' names (amendment A38, below) |
+| storage | a named volume, or a host directory, at `/data` | keys and the cached config |
+| runtime socket | the host's Docker (or Podman) API socket at `/var/run/docker.sock`, `:ro`; left out with `MESHCTL_RUNTIME_SOCKET=off` | the containers' names (amendment A38, below) |
 | limits | 256 MiB memory, 256 pids | |
 
 The mesh network is internal (Podman: without its DNS), with the whole mesh on the link and the
@@ -165,7 +176,7 @@ gateway's egress network, and a peer that routes a foreign address to the gatewa
 (the M6 trial's R0-R7, and `TestContainerNetworks` in e2e). The containers' IPv6 (M8, opt-in)
 is held by the same rules for IPv6, which need the kernel's IPv6 policy routing. Without it the
 agent fails closed: it leaves the IPv6 side out (no gateway address, no proxy entries) and puts
-a blackhole route for the node's /112 in the main table, so although the compose file turns IPv6
+a blackhole route for the node's /112 in the main table, so although the container's sysctls turn IPv6
 forwarding on and the runtime gives the network its IPv6, nothing a peer routes to the /112
 (the bridge address included) is forwarded, and with no one answering neighbour discovery for
 the mesh the containers and the host send nothing into it; the step reports degraded until the
@@ -178,19 +189,17 @@ open them to the host's LAN: four policy rules let only wg0, the bridge and the 
 the subnet, and blackhole it from every other interface (the trial's G1-G5; e2e's LAN host); the
 IPv6 rules do the same for the /112, and IPv6 from the bridge reaches the mesh's prefix only. One
 consequence: a port published on the host for a container on the mesh network is not reachable
-through that network from outside; publish it on the container's other network. Every value written into the file passes
-`internal/validate` (`TestContainerComposeRefusesHostileValues`), and below the validators the
-renderer holds its structure (`TestContainerRendererHoldsItsStructure`).
+through that network from outside; publish it on the container's other network.
 
-**The runtime socket** (amendment A38) is the widest token in the file: whoever can talk to it
+**The runtime socket** (amendment A38) is the widest token in the sample: whoever can talk to it
 controls the runtime, and so the host -- `:ro` on the mount does not limit the API, it only says
 what the agent does with it. The agent sends GET requests only (`internal/agent/names`): the
 containers on `meshctl-mesh`, each one's details, the event stream. Every answer is size-capped
 (8 MiB for the list, 1 MiB per container, 64 KiB per event), a container ID must be 64 hex
 characters before it becomes part of a path, and every name passes `validate.Hostname` or is left
-out. A compromised agent container could use the socket: `meshctl node compose --no-names`
-leaves it out, and a socket proxy that allows only GET on `/containers` and `/events` is a
-drop-in where that matters.
+out. A compromised agent container could use the socket: leave the mount out and set
+`MESHCTL_RUNTIME_SOCKET=off`, or put a socket proxy that allows only GET on `/containers` and
+`/events` in front where that matters.
 A host-mode agent already runs as root on the host and opens the socket it finds
 (`--runtime-socket off` stops it).
 

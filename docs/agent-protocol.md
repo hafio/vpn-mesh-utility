@@ -1,6 +1,6 @@
 # Agent protocol
 
-The wire contract between `meshctl server` and its agents, and the admin API behind
+The wire contract between the control plane (`meshctl control`) and its agents, and the admin API behind
 `meshctl node`. The Go source of truth is `internal/proto` (shapes, signing, SSE framing) and
 `internal/server/api` (routes). `TestRoutesAreDocumented` fails when a route served by the API is
 missing here, so this list is complete.
@@ -28,14 +28,12 @@ Admin socket (`<data>/admin.sock`, mode 0600, so only the server's own user reac
 | --- | --- |
 | `GET /admin/v1/nodes` | list nodes and the mesh plan's warnings |
 | `POST /admin/v1/nodes` | add a node (`ip_family`, `ip6`, `endpoint6` and `containers6` are the IPv6 side, amendment A46); the answer carries its first join token, shown once (a phone gets none) |
-| `GET /admin/v1/nodes/{name}` | one node, its computed config and its last peer report |
+| `GET /admin/v1/nodes/{name}` | one node, its container network's values (`containers`: the names, subnet, range, bridge, agent address, resolvers and published port a runtime creates it with, amendment A48), its computed config and its last peer report |
 | `PATCH /admin/v1/nodes/{name}` | change endpoint, listen port, hub, exit capability, exit, keepalive, MTU, a host-mode node's container network (`containers`), the mesh IP (`mesh_ip`, amendment A41; the answer's `notes` say what the move does not reach) the segmentation groups (`groups`, amendment A43) and the IPv6 side (`ip_family`, which allocates the address a family adds and drops the one it takes away; `mesh_ip6`; `endpoint6`; `containers6`; amendment A46) |
 | `DELETE /admin/v1/nodes/{name}` | remove a node |
 | `POST /admin/v1/nodes/{name}/disable` | take a node out of every peer list; its stream is closed |
 | `POST /admin/v1/nodes/{name}/enable` | put it back |
 | `POST /admin/v1/nodes/{name}/token` | issue a new join token, revoking unused ones |
-| `GET /admin/v1/nodes/{name}/compose` | the compose file that runs a node's agent in a container: a container-mode node's (`?runtime=docker\|podman\|swarm&backend=auto\|kernel\|userspace&data=<host dir>&names=off`; `names=off` leaves out the runtime's socket) or a host-mode spoke's on the host network (`?backend=userspace\|kernel&data=<host dir>`), all optional (`meshctl node compose`) |
-| `GET /admin/v1/nodes/{name}/network` | the commands that create a node's mesh network on its host and the compose lines that attach a service; `?runtime=docker\|podman\|swarm` (`meshctl node network`) |
 | `POST /admin/v1/nodes/{name}/phone` | a phone's WireGuard profile with a new key pair; `{"exit": "<server>"}` (optional) sends its internet through that exit; the answer is the only copy of the private key (`meshctl node phone`) |
 | `GET /admin/v1/segmentation` | the mesh firewall (amendment A43): the document (groups, address and service objects, zones, policies), the rules it compiles to, each zone's addresses and inbound/outbound rules, and the plan's warnings (`meshctl firewall show`) |
 | `PUT /admin/v1/segmentation` | replace the whole document; checked against the mesh like every change (`meshctl firewall apply`) |
@@ -179,7 +177,7 @@ bridge in host mode), and `relay` on a container-mode hub that relays. Every pee
 subnet wherever it routes the node's /32, and every node's `forward_for` holds every container
 network's subnet (a Swarm service's tasks on several nodes share one resolver list). The node's `sysctl` asks for
 `net.ipv4.ip_forward` and, in container mode, `net.ipv4.conf.all.proxy_arp` (both set by the
-compose file, so the agent only verifies them). A container-mode node has no `firewall` and no
+container's `sysctls`, docs/containers.md, so the agent only verifies them). A container-mode node has no `firewall` and no
 `exit`; a host-mode server's `firewall` names the containers' `bridge` (`meshctl0`) and relays.
 
 `GET /api/v1/agent/events` is a server-sent event stream with `X-Accel-Buffering: no`. It opens

@@ -299,7 +299,7 @@ func Sync(nt Net, sys Sysctls, k *proto.Containers, wg string, proxied []netip.A
 		}
 		if link == "" {
 			return 0, fmt.Errorf("containers: no interface holds an address of %s, so the agent is not on the %s network: "+
-				"create it with the commands in the compose file's header (`meshctl node compose`), then recreate the agent's container",
+				"create it with the node's values (`meshctl node show <name>`; docs/containers.md), then recreate the agent's container",
 				n.subnet, proto.MeshNetwork)
 		}
 		c, err := ensureAddr(nt, link, netip.PrefixFrom(n.gateway, n.mesh.Bits()))

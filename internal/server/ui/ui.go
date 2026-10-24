@@ -82,7 +82,6 @@ func New(d Deps) (http.Handler, error) {
 		"POST /nodes/{name}/disable":                  u.disableNode,
 		"POST /nodes/{name}/enable":                   u.enableNode,
 		"POST /nodes/{name}/token":                    u.tokenNode,
-		"GET /nodes/{name}/compose":                   u.composeYAML,
 		"POST /nodes/{name}/phone":                    u.phoneProfile,
 		"GET /nodes/{name}/remove":                    u.removePage,
 		"POST /nodes/{name}/remove":                   u.removeNode,

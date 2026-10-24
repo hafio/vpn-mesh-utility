@@ -62,7 +62,7 @@ func (w *Writer) Apply(params []proto.Sysctl) (int, error) {
 		}
 		if err := os.WriteFile(path, []byte(p.Value+"\n"), 0o644); err != nil {
 			return n, fmt.Errorf("set %s = %s: %w (on a host the agent needs root, and ProtectKernelTunables must stay off; "+
-				"in a container /proc/sys is read-only, so the compose file's sysctls must set it: render it again with `meshctl node compose`)",
+				"in a container /proc/sys is read-only, so the container's sysctls must set it: docs/containers.md lists them)",
 				p.Key, p.Value, err)
 		}
 		n++

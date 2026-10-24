@@ -9,7 +9,9 @@ import (
 	"github.com/hafio/vpn-mesh-utility/internal/server/api"
 )
 
-func setupServer(fs *flag.FlagSet, e *env) action {
+// setupControl runs the control plane (`meshctl control`; `meshctl server`
+// before amendment A48).
+func setupControl(fs *flag.FlagSet, e *env) action {
 	data := fs.String("data", "/data", "data directory: the database and the admin socket")
 	listen := fs.String("listen", ":8080", "address for the agent API, health check and downloads")
 	url := fs.String("url", e.getenv("MESHCTL_URL"), "public origin agents and install.sh use, e.g. https://mesh.example.com (default $MESHCTL_URL)")

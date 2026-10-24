@@ -6,25 +6,37 @@ usual failures. Windows is under way in M5 (spec S15): the service and its local
 place, WireGuard there is not yet. Every command and flag is in
 [commands.md](commands.md).
 
-## 1. Run the server (Dokploy)
+## 1. Run the control plane (Dokploy)
 
-The server is one container behind Dokploy's Traefik. Create a compose app from
-[`deploy/compose.server.yml`](../deploy/compose.server.yml) -- or, on Docker Swarm, a stack app
-from [`deploy/stack.server.yml`](../deploy/stack.server.yml), after labelling its node
-(`docker node update --label-add meshctl.server=true <node>`) -- and set its environment.
-[compose.md](compose.md) has every compose and stack file in one place: the server's, and an
-agent's for each kind of node.
+The control plane (the server: database, web UI, agent API) is one container behind Dokploy's
+Traefik; it runs no WireGuard of its own. Create a compose app from
+[`deploy/compose.control.yml`](../deploy/compose.control.yml) -- or, on Docker Swarm, a stack app
+from [`deploy/stack.control.yml`](../deploy/stack.control.yml), after labelling its node
+(`docker node update --label-add meshctl.control=true <node>`) -- and set its environment.
+[containers.md](containers.md) has samples for the control plane and every kind of node in a
+container: compose, `podman run` and Kubernetes. meshctl generates no container deployment
+(amendment A48).
+
+The image runs `meshctl start`, which reads what to run from the container's environment
+(amendments A47, A48): the compose file sets `MESHCTL_MODE=control` and takes the rest from the
+app's environment (Dokploy's, a `.env` file beside the compose file, or the shell's). A node's
+container leaves the mode out (it means `node`): whether a node is a server node or a client node
+is its role here, not its container's setting. No file has a command line;
+[commands.md](commands.md#meshctl-start) lists every variable `start` reads.
 
 | Variable | Value |
 | --- | --- |
 | `MESHCTL_VERSION` | the release to run, e.g. `1.0.0` (the image tag, without the `v`) |
-| `MESHCTL_URL` | the public origin agents use, e.g. `https://mesh.example.com` |
+| `MESHCTL_URL` | the public origin agents use, e.g. `https://mesh.example.com` (required) |
+| `MESHCTL_PORT` | optional: the port the control plane listens on (default `8080`) |
 | `MESHCTL_TRUSTED_PROXIES` | optional: the CIDR of `dokploy-network`, so the server sees real client addresses |
+| `MESHCTL_HUB_DOWN_AFTER` | optional: relay failover after a hub is silent this long (default `2m`, `0` off) |
+| `MESHCTL_LOG_LEVEL` | optional: `debug`, `info` (default), `warn` or `error` |
 | `TZ` | optional: the time zone the web UI, the dashboard and the server's log show times in, e.g. `Asia/Singapore` (default `UTC`) |
 
-Point the domain at the service's port 8080 in Dokploy. Nothing is published on the host. The
-container runs as uid 65532 with no capabilities and a read-only root file system; the database
-and the admin socket live in the `meshctl-data` volume at `/data`.
+Point the domain at the server's port (8080, or `MESHCTL_PORT`) in Dokploy. Nothing is published
+on the host. The container runs as uid 65532 with no capabilities and a read-only root file
+system; the database and the admin socket live in the `meshctl-data` volume at `/data`.
 
 Check it:
 
@@ -36,7 +48,7 @@ docker exec <container> /app/meshctl node list      # empty table
 If a GeoIP allowlist fronts the domain, `/api/v1/agent/*`, `/install.sh` and `/dl/*` must stay
 reachable from every node's country.
 
-## 2. Enroll the servers
+## 2. Enroll the server nodes
 
 For each VPS, on the Docker host:
 
@@ -96,27 +108,48 @@ the first server). A host without the WireGuard kernel module runs WireGuard ins
 instead (wireguard-go on `/dev/net/tun`): the agent picks that itself (`agent run --wg-backend
 auto`), and `meshctl status` names the backend in use.
 
-**The NAS (a container).** On the server host:
+**The NAS (a container).** On the control plane's host:
 
 ```
 docker exec <container> /app/meshctl node add nas --role spoke --always-on
-docker exec <container> /app/meshctl node compose nas > compose.yml
 ```
 
-`--always-on` gives it an address from 10.77.1.0/24. The compose file -- also a download on the
-node's page in the web UI -- runs the agent from the server's own release image, on the host
-network, with the posture docs/security.md describes. Choose its WireGuard with `--wg-backend`:
-`userspace` (the default) needs only the host's `/dev/net/tun`; `kernel` uses the NAS's own module
-and maps no device, if `ls /sys/module/wireguard` finds it. `--host-dir` (default
-`/volume1/docker/meshctl`) is where the agent keeps its keys and cached config. Copy the file to
-the NAS, join once with the token `node add` printed, then start it:
+`--always-on` gives it an address from 10.77.1.0/24. Its agent runs in a container on the NAS's
+host network: write the compose file from the sample in [containers.md](containers.md#a-client-node-on-the-host-network)
+(the release image, `MESHCTL_URL`, `MESHCTL_NAME=nas`, the posture docs/security.md describes).
+Its WireGuard is the NAS's own module when it has one (`ls /sys/module/wireguard`), else
+wireguard-go on the mapped `/dev/net/tun`; the host directory at `/data` keeps its keys and cached
+config. Start it with the token `node add` printed; the agent joins on its first start:
 
 ```
-MESHCTL_TOKEN=<token> docker compose run --rm -e MESHCTL_TOKEN meshctl-agent \
-  agent join --data /data --server https://mesh.example.com --name nas --no-service
-docker compose up -d
-docker compose exec meshctl-agent /app/meshctl status --data /data
+MESHCTL_TOKEN=<token> docker compose up -d
+docker compose exec meshctl /app/meshctl status --data /data
 ```
+
+**Join on start (every node's container, amendment A47).** A node's container sets
+`MESHCTL_URL` (the control plane's origin) and the node's name, and takes the join token from
+`MESHCTL_TOKEN` -- exported, as above, or in a `.env` file beside the compose file -- or from the
+file `MESHCTL_TOKEN_FILE` names (a compose secret: add `secrets: [meshctl_token]` to the service
+and `secrets: {meshctl_token: {file: ./meshctl-token}}` at the top, then set
+`MESHCTL_TOKEN_FILE=/run/secrets/meshctl_token`). The token is never written into the file.
+At every start the agent decides:
+
+| The node | The token | At start |
+| --- | --- | --- |
+| has not joined | none | stops: set `MESHCTL_TOKEN` (the container restarts and says so again) |
+| has not joined | one it has not used | joins, then runs |
+| has joined | none, or the one it joined with | runs; no join |
+| has joined | a new one (`meshctl node token <name>`) | joins again with the same keys, then runs |
+
+The data directory keeps a fingerprint of the token (`join.json`), never the token. A token
+the server calls spent (used or expired) is remembered too, so restarts do not ask again; any
+other failure (no answer, a rate limit, a disabled node) is tried at the next start. A node
+that has joined keeps running on its enrollment when a new token fails, with a warning in its
+log: a bad token never takes a working node down. To join again, start it the same way with
+the new token -- compose recreates the container when `MESHCTL_TOKEN` changes -- or write the
+new token to the secret's file and `docker compose restart`. A token sits in the container's
+environment, where `docker inspect` shows it; it is single-use and expires, and the file form
+keeps it out.
 
 A userspace interface lives as long as the agent, so the NAS is off the mesh while its container
 restarts (a kernel interface stays up). The agent changes no firewall on a spoke: allow the NAS's
@@ -204,85 +237,59 @@ change -- or roll back to a good version in the UI.
 
 ### Container mode
 
-(Amendment A37; M6, in progress: the live tests on real hosts are next.)
+(Amendment A37.)
 
 A node in container mode runs its WireGuard in the agent's container, in that container's own
 network namespace. Only the containers attached to the node's `meshctl-mesh` network are on the
-mesh; the host, its addresses and its LAN are not. A server in container mode is still a hub
-with a public endpoint (the host publishes its WireGuard port); a client only dials out.
+mesh; the host, its addresses and its LAN are not. A server node in container mode is still a hub
+with a public endpoint (the host publishes its WireGuard port); a client node only dials out.
 
 ```
 docker exec <container> /app/meshctl node add box --role spoke --mode container --hub vps-1
 docker exec <container> /app/meshctl node add hub4 --role server --mode container --endpoint 198.51.100.7:51820
-docker exec <container> /app/meshctl node compose box --runtime docker > compose.yml
+docker exec <container> /app/meshctl node show box
 ```
 
 The node gets a mesh IP as any node and a /24 for its containers (10.77.128.0/24, then .129, ...;
-the mesh needs to be a /21 or larger). A container-mode server needs `--endpoint`: inside its
-container the agent cannot see the host's public address. `--runtime` is `docker` (the
-default), `podman` (rootful or, for a client, rootless) or `swarm` (Swarm services attach; the
-agent itself runs from this compose file on each node). The file's header has the three steps:
-create the mesh network once (the exact command for the runtime), join with the token, start.
-The compose file is also on the node's page in the web UI.
+the mesh needs to be a /21 or larger). A container-mode server node needs `--endpoint`: inside its
+container the agent cannot see the host's public address. `node show` (and the node's page in the
+web UI) lists the container network's values -- the subnet on the link, the range the runtime
+hands out, the bridge, the agent's address, the resolvers, the port a server node publishes --
+which [containers.md](containers.md#container-mode) puts into the commands that create the mesh
+network once (Docker, Podman, or Swarm for Swarm services), the agent's compose file and a
+service's attachment. Start the agent with the token; it joins on its first start, as above.
 
-To put a service on the mesh, attach the network and make the agent its resolver:
+An attached service gets an address from the subnet's upper half and reaches every mesh address
+-- other nodes, their containers, phones -- through the agent, with no route of its own; its own
+internet stays on its other network. Its `dns` (the agent) and `dns_search` (the zone) make
+`<name>.<zone>` and short names resolve through the agent.
 
-```
-services:
-  web:
-    networks: [default, meshctl-mesh]
-    dns: [10.77.128.2]
-    dns_search: [mesh]
-    dns_opt: ["ndots:1"]
-networks:
-  meshctl-mesh:
-    external: true
-```
-
-It gets an address from the subnet's upper half and reaches every mesh address -- other nodes,
-their containers, phones -- through the agent, with no route of its own; its own internet stays on
-its other network. `dns` and `dns_search` make `<name>.<zone>` and short names resolve through
-the agent (`ndots:1`, because Docker writes `ndots:0`).
-
-The agent claims `.2` on its mesh-network interface itself (a Swarm-scoped network ignores a fixed
-address) and isolates by policy routing in its own namespace: the host reaches no mesh address
-and no mesh peer reaches the host. `meshctl status` shows `degraded: containers` when the agent is
-not on the mesh network -- create it with the header's command and recreate the agent's
-container.
+The agent claims its address (`.2`) on its mesh-network interface itself (a Swarm-scoped network
+ignores a fixed address) and isolates by policy routing in its own namespace: the host reaches no
+mesh address and no mesh peer reaches the host. `meshctl status` shows `degraded: containers`
+when the agent is not on the mesh network -- create it with the node's values and recreate the
+agent's container.
 
 A container-mode node is never an exit and uses none; the mesh firewall reaches its containers
-by `containers:<node>` (its host is not on the mesh). A Windows laptop is in host mode only.
-
-**Rootful Podman next to Docker.** Docker loads `br_netfilter` and sets the kernel's FORWARD
-policy to DROP, which drops traffic between containers on a Podman bridge. On such a host, let
-the mesh bridge through both Docker's chain and firewalld:
-
-```
-iptables -I DOCKER-USER -i meshctl0 -j ACCEPT
-iptables -I DOCKER-USER -o meshctl0 -j ACCEPT
-firewall-cmd --permanent --zone=trusted --add-interface=meshctl0 && firewall-cmd --reload
-```
+by `containers:<node>` (its host is not on the mesh). A Windows laptop is in host mode only. On a
+host with both Docker and rootful Podman, containers.md has the step that lets the mesh bridge
+through Docker's FORWARD policy.
 
 **A host-mode node's containers.** `node add ... --containers`, or `node set <name>
 --containers` later, gives a host-mode node a container subnet too: the host stays on the mesh
 (a Swarm VPS keeps Swarm over it) and its containers get mesh addresses. The agent owns the
 bridge `meshctl0`: it makes it when it is missing, gives it the subnet's `.1`, turns on its
 forwarding and proxy ARP, and adds four rules so that only the mesh, the bridge and the host
-reach the subnet -- never the host's LAN. Create the runtime's network on that bridge once; the
-commands are on the node's page in the web UI, or:
-
-```
-docker exec <container> /app/meshctl node network vps-1 --runtime docker
-```
-
-Docker takes the existing bridge without masquerading or filtering ports (`inhibit_ipv4`,
-`nat-unprotected`), Podman attaches to it unmanaged, Swarm uses a config-only network with the
-same options. A service then attaches as above, with the bridge's `.1` as its `dns`; a Swarm
-service, whose tasks run on several nodes, names the servers' mesh IPs instead (`node network
---runtime swarm` prints them), since every node's resolver answers every node's containers. On a
-firewalld server the agent puts an unzoned `meshctl0` into the mesh zone (Docker's own bridges
-stay in its docker zone). `--containers=false` takes the rules away; the bridge stays until you
-remove the runtime's network.
+reach the subnet -- never the host's LAN. Create the runtime's network on that bridge once, with
+the values `node show` lists ([containers.md](containers.md#a-host-mode-nodes-containers) has the
+Docker, Podman and Swarm commands): Docker takes the existing bridge without masquerading or
+filtering ports (`inhibit_ipv4`, `nat-unprotected`), Podman attaches to it unmanaged, Swarm uses a
+config-only network with the same options. A service then attaches as in container mode, with
+the bridge's `.1` as its `dns`; a Swarm service, whose tasks run on several nodes, names the
+server nodes' mesh IPs instead (`node show` lists them), since every node's resolver answers every
+node's containers. On a firewalld server node the agent puts an unzoned `meshctl0` into the mesh
+zone (Docker's own bridges stay in its docker zone). `--containers=false` takes the rules away;
+the bridge stays until you remove the runtime's network.
 
 **Container names** (amendment A38). Every node resolves the containers on the mesh networks by
 name: `web.mesh` answers every node's `web` containers, rotated on each answer (as Swarm does
@@ -292,16 +299,15 @@ its Swarm service (without the stack's prefix), its container name, its aliases 
 names in other domains are published only inside an extra domain (DNS, below). A node's name, a custom record and the server's own
 address keep theirs: a container called `vps-1` gets no name, and the DNS page in the web UI
 lists every reported name with why one is not published. Names follow the containers within a few
-seconds (TTL 10 s) and keep resolving from each node's cache while the server is down.
+seconds (TTL 10 s) and keep resolving from each node's cache while the control plane is down.
 
-The agent reads them from the runtime's API socket, GET requests only. The container-mode compose
-file mounts the host's socket at `/var/run/docker.sock` (rootful Podman's for `--runtime podman`:
-`systemctl enable --now podman.socket`; a rootless client mounts
-`/run/user/<uid>/podman/podman.sock` instead); `meshctl node compose --no-names` leaves it out
-and the node's containers get no names. A host-mode agent finds Docker's or rootful Podman's
-socket by itself; `meshctl agent run --runtime-socket off` (or a path) changes that. On a host
-whose runtime labels containers for SELinux, the runtime may refuse the agent's container the
-socket; `--no-names` is then the way out.
+The agent reads them from the runtime's API socket, GET requests only. A host-mode agent finds
+Docker's or rootful Podman's socket by itself (`meshctl agent run --runtime-socket off`, or a
+path, changes that); a container-mode agent reads the socket its container mounts at
+`/var/run/docker.sock` ([containers.md](containers.md#container-names) has the paths per
+runtime), and with `MESHCTL_RUNTIME_SOCKET=off` and no mount its containers get no names. On a
+host whose runtime labels containers for SELinux, the runtime may refuse the agent's container the
+socket; turning the socket off is then the way out.
 
 ## 5. Day to day
 
@@ -332,13 +338,13 @@ an IPv6 address as `--ip` and `--mesh-ip` do; `--endpoint6 [2001:db8::10]:51820`
 server's IPv6 endpoint, which spokes dial when IPv4 does not work (a server's join finds it
 itself, or takes `agent join --endpoint6`); `--containers6` puts a node's
 containers' IPv6 on the mesh beside their IPv4: its /112,
-the upper half handed out; `node compose` and `node network` then create the mesh network dual
-stack (`--ipv6 --subnet <prefix> --ip-range <half> --gateway <::1>` after the IPv4 values), and a
-container-mode agent's compose file sets `disable_ipv6=0`, IPv6 forwarding and proxy NDP in its
-namespace. Recreate the network and the agent's container after turning it on. The agent isolates
+the upper half handed out; `node show` then lists the IPv6 values too, the mesh network is
+created dual stack (`--ipv6 --subnet <prefix> --ip-range <half> --gateway <::1>` after the IPv4
+values), and a container-mode agent's container sets `disable_ipv6=0`, IPv6 forwarding and proxy
+NDP in its namespace ([containers.md](containers.md)). Recreate the network and the agent's container after turning it on. The agent isolates
 the containers' IPv6 as their IPv4 and answers neighbour discovery for the mesh's nodes; their
 IPv6 reaches every node, and the named containers of other nodes (by the mesh view's names: with
-`--no-names` a node's containers are reached over IPv4 only). It needs the kernel's IPv6
+the runtime socket off a node's containers are reached over IPv4 only). It needs the kernel's IPv6
 policy routing: where `ip -6 rule` fails (some NAS kernels), the agent drops the containers'
 IPv6, the containers step reports degraded and they keep IPv4 only -- turn `--containers6` off
 there. `meshctl ipv6 off` takes every IPv6 address away
@@ -355,7 +361,7 @@ else the default hub, else the lowest-id server that is up, as a new config vers
 when its agent has not reported for 2 minutes AND no node has seen a handshake with it for 3: an
 agent that merely stopped, or a server that cannot reach the hub, moves nothing while its tunnels
 work. It comes back (`relay.restore`) once its agent has reported steadily for 5 minutes, so a
-flapping hub does not bounce the pairs. `meshctl server --hub-down-after 2m` sets the first
+flapping hub does not bounce the pairs. `meshctl control --hub-down-after 2m` (`MESHCTL_HUB_DOWN_AFTER`) sets the first
 threshold (the others follow it; `0` turns failover off) and must stay above the agents'
 heartbeat (`agent run --status-every`, 30 s). The down hub stays every node's peer, so traffic to
 the hub itself resumes on its own. Failover needs the server: run it on a host other than the
@@ -587,7 +593,7 @@ before it changes anything. Users are not in an export: for a full restore, incl
 (`docker run --rm -v meshctl-data:/data -v $PWD:/b alpine tar czf /b/meshctl-data.tgz -C /data .`,
 with the server stopped).
 
-## 11. When the server is down
+## 11. When the control plane is down
 
 Agents keep their last config (`/var/lib/meshctl/config.json`) and re-apply it at boot without
 the server, so the mesh survives a server outage and reboots, and every node keeps answering
@@ -598,7 +604,7 @@ server is back. When it is, agents reconnect within a minute.
 
 ## 12. Troubleshooting
 
-`journalctl -u meshctl-agent` or `meshctl logs` on a node, `docker logs <container>` on the server.
+`journalctl -u meshctl-agent` or `meshctl logs` on a node, `docker logs <container>` on the control plane.
 
 | Symptom | Cause and fix |
 | --- | --- |
@@ -608,10 +614,13 @@ server is back. When it is, agents reconnect within a minute.
 | `interface wg0 exists but was not created by meshctl` | a wg-quick setup owns wg0: `wg-quick down wg0` and disable it, then restart the agent |
 | `firewall` listed as degraded | firewalld is missing or stopped; the tunnel works, but Swarm and udp/51820 may be blocked. Install/start firewalld, or open the ports yourself and run the agent with `--no-firewall` |
 | `create WireGuard interface wg0: ... is the wireguard kernel module available?` | `modprobe wireguard`, or run WireGuard in the agent: `agent run --wg-backend userspace` (`auto`, the default, picks it when the module is missing) |
-| `userspace WireGuard needs /dev/net/tun` | the container has no tun device: use the compose file's userspace variant, which maps it, or the kernel variant if the NAS has the module |
+| `MESHCTL_MODE=server is gone` (or `=agent`) | a file from before amendment A48: the control plane sets `MESHCTL_MODE=control`, a node leaves it out |
+| `MESHCTL_MODE must be control or node` | the container's environment has another value: `control` for the control plane, nothing for a node |
+| `... MESHCTL_MODE is not set, so this container runs a node` | a control plane's container without `MESHCTL_MODE=control`: set it |
+| `has not joined a mesh and has no join token` | a node container's first start without a token: `MESHCTL_TOKEN=<token> docker compose up -d` (or `MESHCTL_TOKEN` in `.env`) |
+| `the server refused this join token on an earlier start` | the token was spent (used or expired) before the node joined: issue a new one with `meshctl node token <name>` and start with it |
+| `userspace WireGuard needs /dev/net/tun` | the container has no tun device: map it (`devices: ["/dev/net/tun:/dev/net/tun"]`), or set `MESHCTL_WG_BACKEND=kernel` if the host has the module |
 | `wg show` does not list a userspace wg0 | the agent could not create `/var/run/wireguard/wg0.sock` (its log says why; a container has no `wg` anyway): use `meshctl status` |
-| `only spokes run in a container` | `node compose` names a server; servers install with the command `node add` prints |
-| `... only releases have an image; this is a development build` | `node compose` on a server built from source: run a release image, whose version is a tag the registry has |
 | `another node already uses this WireGuard or identity key` | a data dir was copied between hosts; remove `/var/lib/meshctl` on the copy and join it with its own token |
 | a node stays `applying` | it applied an older version and is failing the new one; `meshctl status` on it shows the error |
 | `exit "vps-3" is not exit-capable` | allow it first: `node set vps-3 --can-exit` |
@@ -619,7 +628,7 @@ server is back. When it is, agents reconnect within a minute.
 | `apply step exit: ... operation not permitted` | the agent lacks root or CAP_NET_ADMIN; run it as the installed service |
 | a server shows `rolled back` | safe apply: no heartbeat was answered within 60 s of a change, so the previous config is back. See what the change did (endpoint, MTU, firewall), fix it, and make the next change |
 | `the server accepted the change, but the agent has not applied it` | `meshctl status` on the node shows the error the apply hit |
-| `the data dir is in use: stop the meshctl server first` | `import` ran beside a running server; stop it, import, start it |
+| `the data dir is in use: stop the meshctl control plane first` | `import` ran beside a running control plane; stop it, import, start it |
 | `... secret.key is readable by other users` | the key that seals TOTP secrets lost its mode: `chmod 600 /data/secret.key` |
 | `this request did not come from https://...` in the UI | the UI was opened under another address than `--url`; open it at that URL |
 | `too many failed sign-ins` | wait 15 minutes, or reset the password with `meshctl user passwd` |

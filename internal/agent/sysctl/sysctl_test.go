@@ -77,7 +77,7 @@ func TestApplyContainerKeys(t *testing.T) {
 }
 
 // A parameter the agent may not write -- /proc/sys is read-only in a
-// container -- fails with what sets it there: the compose file.
+// container -- fails with what sets it there: the container's sysctls.
 func TestApplyReportsAReadOnlyParameter(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root writes a read-only file")
@@ -87,7 +87,7 @@ func TestApplyReportsAReadOnlyParameter(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := w.Apply([]proto.Sysctl{{Key: proto.SysctlProxyARP, Value: "1"}})
-	if err == nil || !strings.Contains(err.Error(), "compose file's sysctls") {
+	if err == nil || !strings.Contains(err.Error(), "container's sysctls must set it") {
 		t.Fatalf("Apply = %v", err)
 	}
 }

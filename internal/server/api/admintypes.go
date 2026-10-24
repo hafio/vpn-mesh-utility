@@ -175,45 +175,43 @@ type PhoneProfile struct {
 	Warnings []string `json:"warnings,omitempty"`
 }
 
-// ComposeFile is GET /admin/v1/nodes/{name}/compose?backend=&data=&runtime=:
-// the compose file that runs a node's agent in a container -- a host-mode
-// spoke on the host network (the NAS), or a container-mode node -- and the
-// choices it was rendered with.
-type ComposeFile struct {
-	Backend string `json:"backend"`
-	DataDir string `json:"data_dir"`
-	// Runtime is docker, podman or swarm, for a container-mode node.
-	Runtime string `json:"runtime,omitempty"`
-	YAML    string `json:"yaml"`
-}
-
-// NetworkInfo is GET /admin/v1/nodes/{name}/network?runtime=: the
-// commands that create a node's mesh network on its host, and the compose
-// lines that attach a service to it (amendment A37).
-type NetworkInfo struct {
-	Runtime  string   `json:"runtime"`
-	Mode     string   `json:"mode"`
-	Subnet   string   `json:"subnet"`
-	Commands []string `json:"commands"`
-	Service  []string `json:"service"`
-}
-
-// ComposeOptions are the choices a compose file is rendered with; empty
-// means the default for the node's mode.
-type ComposeOptions struct {
-	Backend string
-	DataDir string
-	Runtime string
-	// NoNames leaves the runtime's socket out of a container-mode file
-	// (amendment A38): its containers get no names on the mesh.
-	NoNames bool
+// ContainerNetwork is a node's container network as its host's runtime
+// creates it (amendments A37, A48): the values docs/containers.md's samples
+// take, since meshctl writes no compose file. Name is the runtime network,
+// BridgeName the bridge a host-mode node's agent owns. Network is the whole
+// mesh on the link, Range the node's addresses the runtime hands out,
+// Bridge the runtime's side (its --gateway) and Gateway the agent: its own
+// static address in container mode, the bridge in host mode. A service
+// names Gateway as its resolver; a Swarm service, whose tasks run on
+// several nodes, names Resolvers, the server nodes' mesh IPs, with Zone as
+// its search domain either way. A container-mode server publishes
+// PublishPort/udp on its host to ListenPort, the agent's.
+type ContainerNetwork struct {
+	Name        string   `json:"name"`
+	BridgeName  string   `json:"bridge_name"`
+	Mode        string   `json:"mode"`
+	Subnet      string   `json:"subnet"`
+	Network     string   `json:"network"`
+	Range       string   `json:"range"`
+	Bridge      string   `json:"bridge"`
+	Gateway     string   `json:"gateway"`
+	Zone        string   `json:"zone"`
+	Resolvers   []string `json:"resolvers,omitempty"`
+	Subnet6     string   `json:"subnet6,omitempty"`
+	Network6    string   `json:"network6,omitempty"`
+	Range6      string   `json:"range6,omitempty"`
+	Bridge6     string   `json:"bridge6,omitempty"`
+	Gateway6    string   `json:"gateway6,omitempty"`
+	PublishPort int      `json:"publish_port,omitempty"`
+	ListenPort  int      `json:"listen_port,omitempty"`
 }
 
 // NodeDetail is GET /admin/v1/nodes/{name}: the node, what the server
 // computed for it, and what it last reported about its peers.
 type NodeDetail struct {
-	Node     NodeInfo           `json:"node"`
-	Config   *proto.NodeConfig  `json:"config,omitempty"`
-	Peers    []proto.PeerStatus `json:"peers,omitempty"`
-	Warnings []string           `json:"warnings,omitempty"`
+	Node       NodeInfo           `json:"node"`
+	Containers *ContainerNetwork  `json:"containers,omitempty"`
+	Config     *proto.NodeConfig  `json:"config,omitempty"`
+	Peers      []proto.PeerStatus `json:"peers,omitempty"`
+	Warnings   []string           `json:"warnings,omitempty"`
 }

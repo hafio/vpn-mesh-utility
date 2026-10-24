@@ -29,7 +29,7 @@ func agentCommands() []command {
 // joinFlags registers what join and install take; the returned func reads
 // them once they are parsed.
 func joinFlags(fs *flag.FlagSet, e *env) func() (agent.JoinOptions, error) {
-	srv := fs.String("server", "", "server origin, e.g. https://mesh.example.com")
+	srv := fs.String("server", "", "the control plane's origin, e.g. https://mesh.example.com")
 	// The token is never a flag default: -h would print it.
 	token := fs.String("token", "", "one-time join token (or set MESHCTL_TOKEN, which keeps it out of the process list)")
 	name := fs.String("name", "", "the node name the token must belong to (a safety check)")

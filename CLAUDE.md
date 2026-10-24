@@ -34,7 +34,7 @@ that applies) and continue from the output reported back.
   stdlib.**
 - **`internal/testfix` is for tests only** and imports only `internal/proto`, so both sides'
   tests can share it. `internal/agent/agentfake` (in-memory host fakes) is test-only too.
-- `deploy` (unit, install.sh, compose files) imports only `internal/validate` and yaml.v3; both sides use it.
+- `deploy` (unit, install.sh, the control plane's compose files) imports only `internal/validate` and yaml.v3; both sides use it.
 - `internal/fsutil` (atomic file writes) is stdlib-only; both sides use it.
 - The server never imports data-plane libraries (wgctrl, wireguard-go, netlink, nftables,
   miekg/dns, godbus, x/sys/windows, go-winio); the agent never imports server ones (sqlite,
@@ -57,9 +57,11 @@ test files included. Change the rules there and here together.
   terminal only; TOTP secrets are sealed with `secret.key`; private keys never leave the node
   (phones are the one documented exception, spec Amendments A6).
 - **Container artifacts state their posture**: privileged false, `cap_drop: [ALL]`,
-  `no-new-privileges=true`, explicit user, read-only root. Any widening token (the NAS agent's
-  `network_mode: host`, `cap_add`, the tun device) is named in docs/security.md and pinned by a
-  golden plus a test that forbids every other widening token.
+  `no-new-privileges=true`, explicit user, read-only root. meshctl generates no node deployment
+  (amendment A48); the control plane's compose files and docs/containers.md's samples are the
+  artifacts. Any widening token (a node's `network_mode: host`, `cap_add`, the tun device, the
+  runtime socket) is named in docs/security.md and pinned by a test that forbids every other
+  widening token (`deploy_test.go`, `samples_test.go`).
 
 ## Determinism and goldens
 

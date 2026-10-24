@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -56,10 +57,56 @@ func renderCommands() string {
 				}
 				fmt.Fprintf(&b, "| `%s` | %s | %s |\n", flagName(f.Name), def, cell(f.Usage))
 			})
+			if len(c.env) > 0 {
+				b.WriteString("\n| Variable | Mode | Default | Meaning |\n| --- | --- | --- | --- |\n")
+				for _, v := range c.env {
+					def, meaning := envDoc(e, v)
+					if def != "" {
+						def = "`" + def + "`"
+					}
+					mode := v.mode
+					if mode == "" {
+						mode = "both"
+					}
+					fmt.Fprintf(&b, "| `%s` | %s | %s | %s |\n", v.name, mode, def, cell(meaning))
+				}
+			}
 		}
 	}
 	walk("meshctl", commands())
 	return b.String()
+}
+
+// envDoc is a start variable's default and meaning: its own, or for one
+// handed on as a flag without one, that flag's.
+func envDoc(e *env, v envVar) (def, meaning string) {
+	if v.flag == "" || v.meaning != "" {
+		return v.def, v.meaning
+	}
+	f, cmd := startFlag(e, v)
+	if f == nil {
+		return "", "no such flag --" + v.flag
+	}
+	return f.DefValue, "`" + cmd + " " + flagName(f.Name) + "`: " + f.Usage
+}
+
+// startFlag is the flag a start variable is handed on as: the first of its
+// modes' commands (`control`, then `agent run`) that has it.
+func startFlag(e *env, v envVar) (*flag.Flag, string) {
+	for _, c := range []struct {
+		mode, cmd string
+		setup     func(*flag.FlagSet, *env) action
+	}{{modeControl, "meshctl control", setupControl}, {modeNode, "meshctl agent run", setupAgentRun}} {
+		if v.mode != "" && v.mode != c.mode {
+			continue
+		}
+		fs := flag.NewFlagSet(c.cmd, flag.ContinueOnError)
+		c.setup(fs, e)
+		if f := fs.Lookup(v.flag); f != nil {
+			return f, c.cmd
+		}
+	}
+	return nil, ""
 }
 
 func sentence(s string) string { return strings.ToUpper(s[:1]) + s[1:] }
@@ -134,7 +181,7 @@ func TestHelpShowsFlagsAsTheDocsDo(t *testing.T) {
 	_, _, run := runArgs("agent", "run", "-h")
 	_, _, logs := runArgs("logs", "-h")
 	for _, c := range []struct{ out, want string }{
-		{join, "  --server string\n    \tserver origin, e.g. https://mesh.example.com\n"},
+		{join, "  --server string\n    \tthe control plane's origin, e.g. https://mesh.example.com\n"},
 		{join, "  --token string\n"},
 		{run, `(default "auto")`},
 		{run, "  --status-every duration\n"},
@@ -147,5 +194,28 @@ func TestHelpShowsFlagsAsTheDocsDo(t *testing.T) {
 	}
 	if strings.Contains(run, "(default false)") || strings.Contains(join, `(default "")`) {
 		t.Errorf("help shows a zero default:\n%s%s", run, join)
+	}
+}
+
+// Every MESHCTL_ variable docs/containers.md names is one `meshctl start`
+// reads (or MESHCTL_VERSION, which the control plane's compose files take
+// for the image tag), so a sample cannot set one that does nothing.
+func TestContainersDocNamesRealVariables(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "docs", "containers.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	known := map[string]bool{"MESHCTL_VERSION": true}
+	for _, v := range startVars() {
+		known[v.name] = true
+	}
+	names := regexp.MustCompile(`MESHCTL_[A-Z0-9_]+`).FindAllString(string(b), -1)
+	for _, name := range names {
+		if !known[name] {
+			t.Errorf("docs/containers.md names %s, which meshctl start does not read", name)
+		}
+	}
+	if len(names) == 0 {
+		t.Fatal("docs/containers.md names no variable")
 	}
 }

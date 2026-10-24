@@ -13,7 +13,6 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/hafio/vpn-mesh-utility/deploy"
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
 	"github.com/hafio/vpn-mesh-utility/internal/server/api"
 	"github.com/hafio/vpn-mesh-utility/internal/server/auth"
@@ -266,22 +265,13 @@ type nodeData struct {
 	InContainer bool
 	// IPv6 says the mesh has an IPv6 prefix (M8).
 	IPv6 bool
-	// Networks are, for a host-mode node with a container network, the
-	// commands that create it per runtime; Service attaches a service, and
-	// SwarmService a Swarm service, which resolves through the servers.
-	Networks     []networkBlock
-	Service      string
-	SwarmService string
-	// NASData is the compose form's default host directory.
-	NASData string
+	// Containers is the node's container network, the values its host's
+	// runtime creates it with (amendment A48); nil without one.
+	Containers *api.ContainerNetwork
 	// DNS explains the node's split DNS as it last reported it.
 	DNS string
 	// Profile says, for a phone, whether the profile it holds is current.
 	Profile string
-}
-
-type networkBlock struct {
-	Runtime, Text string
 }
 
 type peerRow struct {
@@ -299,8 +289,8 @@ func (u *ui) nodeView(r *http.Request, name string) (nodeData, error) {
 	}
 	now := u.Now()
 	out := nodeData{Node: d.Node, Seen: ago(d.Node.Seen(), now), Warnings: d.Warnings, IsServer: d.Node.Role == string(proto.RoleServer),
-		IsSpoke: d.Node.Role == string(proto.RoleSpoke), IsPhone: d.Node.Role == string(proto.RolePhone), NASData: deploy.DefaultNASData,
-		InContainer: d.Node.Mode == proto.ModeContainer}
+		IsSpoke: d.Node.Role == string(proto.RoleSpoke), IsPhone: d.Node.Role == string(proto.RolePhone),
+		InContainer: d.Node.Mode == proto.ModeContainer, Containers: d.Containers}
 	out.Class, out.State = api.Health(d.Node, now)
 	out.DNS = dnsState(d.Node.DNS)
 	if out.IPv6, err = u.meshHasIPv6(r); err != nil {
@@ -308,23 +298,6 @@ func (u *ui) nodeView(r *http.Request, name string) (nodeData, error) {
 	}
 	if out.IsPhone {
 		out.Profile = phoneState(d.Node)
-	}
-	if d.Node.ContainerSubnet != "" && !out.InContainer {
-		for _, rt := range []string{deploy.RuntimeDocker, deploy.RuntimePodman, deploy.RuntimeSwarm} {
-			n, err := u.Nodes.Network(r.Context(), name, rt)
-			if err != nil {
-				return nodeData{}, err
-			}
-			out.Networks = append(out.Networks, networkBlock{Runtime: rt, Text: strings.Join(n.Commands, "\n")})
-			// A Swarm service's tasks resolve through the servers, any other
-			// service through this node.
-			switch svc := strings.Join(n.Service, "\n"); {
-			case rt == deploy.RuntimeDocker:
-				out.Service = svc
-			case rt == deploy.RuntimeSwarm && svc != out.Service:
-				out.SwarmService = svc
-			}
-		}
 	}
 	if d.Config != nil {
 		b, err := json.MarshalIndent(d.Config, "", "  ")
@@ -964,23 +937,6 @@ func (u *ui) changePassword(w http.ResponseWriter, r *http.Request, s auth.Sessi
 	}
 	auth.ClearCookie(w)
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
-}
-
-// composeYAML downloads the compose file that runs a node's agent in a
-// container; a refusal (a host-mode server, a bad directory) comes back on
-// the node page.
-func (u *ui) composeYAML(w http.ResponseWriter, r *http.Request, s auth.Session) {
-	q := r.URL.Query()
-	f, err := u.Nodes.Compose(r.Context(), r.PathValue("name"),
-		api.ComposeOptions{Backend: q.Get("backend"), DataDir: q.Get("data"), Runtime: q.Get("runtime"), NoNames: q.Get("names") == "off"})
-	if err != nil {
-		status, msg := message(err)
-		u.renderNode(w, r, s, status, page{Error: msg})
-		return
-	}
-	w.Header().Set("Content-Type", "application/yaml")
-	w.Header().Set("Content-Disposition", `attachment; filename="compose.yml"`)
-	_, _ = w.Write([]byte(f.YAML)) // the browser went away; nothing to do
 }
 
 // exportYAML downloads the desired state, as `meshctl export` writes it.

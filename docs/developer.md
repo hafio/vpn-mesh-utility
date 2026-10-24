@@ -22,8 +22,9 @@ Library dependencies are pinned the same way, by `go.mod` and `go.sum`: `modernc
 (server store), `golang.org/x/crypto` (argon2) and `github.com/pquerna/otp` (TOTP) for the
 server's auth, `golang.org/x/term` (CLI password prompts), `golang.zx2c4.com/wireguard/wgctrl`,
 `golang.zx2c4.com/wireguard` (wireguard-go, the userspace backend) and
-`github.com/vishvananda/netlink` (agent, Linux), `go.yaml.in/yaml/v3` (export, the spokes'
-compose file; the maintained continuation of `gopkg.in/yaml.v3`). Code both sides need that is not part
+`github.com/vishvananda/netlink` (agent, Linux), `go.yaml.in/yaml/v3` (export, and the
+tests that read compose files and docs/containers.md's samples; the maintained continuation of
+`gopkg.in/yaml.v3`). Code both sides need that is not part
 of the wire contract (atomic file writes) lives in the stdlib-only `internal/fsutil`.
 
 ## Dev script tasks
@@ -52,7 +53,7 @@ local changes, `git rm -r --cached -q . && git reset --hard`.
 | `image` | `docker build` of the root Dockerfile as `vpn-mesh-utility:<version>` |
 | `up` / `down` | the local dev stack in `deploy/compose.dev.yml` |
 | `dist` | cross-compile linux/amd64, linux/arm64, windows/amd64 (local convenience) |
-| `regen` | rewrite golden files with `-update` in planner, the phone profiles, the web UI pages, the firewall argv, the userspace backend's UAPI text, the local UI's dashboard, the mesh firewall's table, deploy (install.sh, the NAS and container compose files, docs/compose.md) and cmd/meshctl (docs/commands.md); not in any aggregate |
+| `regen` | rewrite golden files with `-update` in planner, the phone profiles, the web UI pages, the firewall argv, the userspace backend's UAPI text, the local UI's dashboard, the mesh firewall's table, deploy (install.sh) and cmd/meshctl (docs/commands.md); not in any aggregate |
 | `e2e` | builds `dist/e2e.test` and `dist/meshctl-e2e` as you, then runs the network-namespace tests against kernel WireGuard under `sudo -n` (Linux; run `sudo -v` first, then the task as yourself -- under `sudo` it fails, as root's PATH has no `go`; not in any aggregate) |
 | `graphify` | refresh the knowledge graph (local only) |
 | `all` | `build vet test` -- CI runs `all scan` |

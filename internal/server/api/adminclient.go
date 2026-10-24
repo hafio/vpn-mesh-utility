@@ -58,7 +58,7 @@ func (c *AdminClient) do(ctx context.Context, method, path string, in, out any) 
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("reach the server at %s: %w (is `meshctl server` running with this --data, and are you its user?)", c.socket, err)
+		return fmt.Errorf("reach the server at %s: %w (is `meshctl control` running with this --data, and are you its user?)", c.socket, err)
 	}
 	defer resp.Body.Close()
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
@@ -129,39 +129,6 @@ func (c *AdminClient) Enable(ctx context.Context, name string) (NodeChange, erro
 func (c *AdminClient) Remove(ctx context.Context, name string) (NodeChange, error) {
 	var out NodeChange
 	err := c.do(ctx, http.MethodDelete, nodePath(name, ""), nil, &out)
-	return out, err
-}
-
-// Compose returns the compose file that runs a node's agent in a
-// container; empty options take the server's defaults for its mode.
-func (c *AdminClient) Compose(ctx context.Context, name string, o ComposeOptions) (ComposeFile, error) {
-	q := url.Values{}
-	for k, v := range map[string]string{"backend": o.Backend, "data": o.DataDir, "runtime": o.Runtime} {
-		if v != "" {
-			q.Set(k, v)
-		}
-	}
-	if o.NoNames {
-		q.Set("names", "off")
-	}
-	path := nodePath(name, "/compose")
-	if len(q) > 0 {
-		path += "?" + q.Encode()
-	}
-	var out ComposeFile
-	err := c.do(ctx, http.MethodGet, path, nil, &out)
-	return out, err
-}
-
-// Network returns the commands that create a node's mesh network for
-// runtime ("" is docker).
-func (c *AdminClient) Network(ctx context.Context, name, runtime string) (NetworkInfo, error) {
-	path := nodePath(name, "/network")
-	if runtime != "" {
-		path += "?" + url.Values{"runtime": {runtime}}.Encode()
-	}
-	var out NetworkInfo
-	err := c.do(ctx, http.MethodGet, path, nil, &out)
 	return out, err
 }
 

@@ -36,7 +36,7 @@ type userspace struct {
 func NewUserspace(log *slog.Logger) (Host, error) {
 	f, err := os.OpenFile(tunPath, os.O_RDWR, 0)
 	if err != nil {
-		return nil, fmt.Errorf("userspace WireGuard needs %s: %w (run as root; a container needs the device, which `meshctl node compose` adds)", tunPath, err)
+		return nil, fmt.Errorf("userspace WireGuard needs %s: %w (run as root; a container needs the device mapped: docs/containers.md)", tunPath, err)
 	}
 	_ = f.Close() // only a probe; CreateLink opens its own
 	return &userspace{links: links{kind: "tuntap"}, wgdev: wgdev{log: log}}, nil

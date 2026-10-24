@@ -125,52 +125,28 @@
 <button type="submit">Make a profile</button>
 </form>
 {{- end}}
-{{- with .Networks}}
+{{- with .Containers}}
 
 <h2>Containers on the mesh</h2>
-<p>This node's containers get addresses from {{$.Data.Node.ContainerSubnet}}. On its host, create the mesh network once for its runtime (the agent owns the bridge meshctl0), then attach a service to it.</p>
-{{- range .}}
-<h3>{{.Runtime}}</h3>
-<pre>{{.Text}}</pre>
+<p>{{if eq .Mode "container"}}This node is in container mode: its agent runs in its own network namespace as the gateway of the containers on the {{.Name}} network, and only they are on the mesh. Start the agent with <code>MESHCTL_URL</code>, <code>MESHCTL_NAME</code> and the node's join token in <code>MESHCTL_TOKEN</code>; it joins on its first start.{{else}}This node's containers on the {{.Name}} network are on the mesh beside the host; its agent owns the bridge {{.BridgeName}}.{{end}} Create the network with these values: docs/containers.md has the samples (compose, podman run, Kubernetes).</p>
+<table class="facts">
+<tr><th>Network</th><td>{{.Name}}{{if ne .Mode "container"}}, on the bridge {{.BridgeName}}{{end}}</td></tr>
+<tr><th>Subnet</th><td>{{.Network}}{{with .Network6}}, {{.}}{{end}} (the whole mesh, on the link)</td></tr>
+<tr><th>IP range</th><td>{{.Range}}{{with .Range6}}, {{.}}{{end}}</td></tr>
+<tr><th>Gateway</th><td>{{.Bridge}}{{with .Bridge6}}, {{.}}{{end}}</td></tr>
+{{- if eq .Mode "container"}}
+<tr><th>Agent address</th><td>{{.Gateway}}{{with .Gateway6}}, {{.}}{{end}}</td></tr>
 {{- end}}
-<h3>A service</h3>
-<pre>{{$.Data.Service}}</pre>
-{{- if $.Data.SwarmService}}
-<h3>A Swarm service (its tasks run on several nodes)</h3>
-<pre>{{$.Data.SwarmService}}</pre>
+<tr><th>Services' DNS</th><td>{{.Gateway}}, search {{.Zone}}, ndots:1{{with .Resolvers}}; a Swarm service: {{range $i, $r := .}}{{if $i}}, {{end}}{{$r}}{{end}}{{end}}</td></tr>
+{{- if .ListenPort}}
+<tr><th>Published port</th><td>{{if .PublishPort}}{{.PublishPort}}/udp on the host, to {{.ListenPort}}/udp{{else}}none known: set the node's endpoint{{end}}</td></tr>
 {{- end}}
+</table>
 {{- end}}
-{{- if .InContainer}}
+{{- if and .IsSpoke (not .InContainer)}}
 
 <h2>Run in a container</h2>
-<p>This node is in container mode: its agent runs in its own network namespace, and only the containers on the meshctl-mesh network are on the mesh. The compose file's header has the commands that create that network, the one-time join, and how a service attaches.</p>
-<form method="get" action="/nodes/{{.Node.Name}}/compose" class="grid">
-<label>Runtime <select name="runtime">
-<option value="docker" selected>Docker</option>
-<option value="podman">Podman</option>
-<option value="swarm">Docker Swarm services</option>
-</select></label>
-<label>WireGuard <select name="backend">
-<option value="auto" selected>auto (the host's module, else /dev/net/tun)</option>
-<option value="kernel">kernel (the host has the wireguard module)</option>
-<option value="userspace">userspace (needs /dev/net/tun)</option>
-</select></label>
-<label>Data directory on the host <input name="data" value="" placeholder="a named volume"></label>
-<label><input type="checkbox" name="names" value="off"> No container names (leave out the runtime's socket)</label>
-<button type="submit">Download compose.yml</button>
-</form>
-{{- else if .IsSpoke}}
-
-<h2>Run in a container</h2>
-<p>For a NAS or another Docker host: a compose file for this node's agent. Its header has the one-time join command; then <code>docker compose up -d</code>.</p>
-<form method="get" action="/nodes/{{.Node.Name}}/compose" class="grid">
-<label>WireGuard <select name="backend">
-<option value="userspace" selected>userspace (needs /dev/net/tun)</option>
-<option value="kernel">kernel (the host has the wireguard module)</option>
-</select></label>
-<label>Data directory on the host <input name="data" value="{{.NASData}}"></label>
-<button type="submit">Download compose.yml</button>
-</form>
+<p>A NAS or another host can run this node's agent in a container on the host network: docs/containers.md has the compose file. Start it with the node's join token in <code>MESHCTL_TOKEN</code>; it joins on its first start.</p>
 {{- end}}
 
 <h2>Actions</h2>

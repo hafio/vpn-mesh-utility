@@ -37,6 +37,10 @@ COPY --from=build --chown=65532:65532 /out/data /data
 ENV MESHCTL_DIST_DIR=/app/dist
 USER 65532:65532
 EXPOSE 8080
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["/app/meshctl", "healthcheck", "server"]
+# `meshctl start` runs what the container's environment says (amendments
+# A47, A48): MESHCTL_MODE=control runs the control plane, unset (or node) a
+# node, with the variables docs/commands.md lists under `meshctl start`.
+# The health check follows the same variables.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["/app/meshctl", "healthcheck", "start"]
 ENTRYPOINT ["/app/meshctl"]
-CMD ["server", "--data", "/data"]
+CMD ["start"]

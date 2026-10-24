@@ -24,6 +24,8 @@ type command struct {
 	summary string
 	sub     []command
 	setup   func(fs *flag.FlagSet, e *env) action
+	// env lists the environment variables the command reads; docs only.
+	env []envVar
 }
 
 // action runs a leaf command with its positional arguments.
@@ -34,16 +36,18 @@ type action func(ctx context.Context, args []string) error
 func commands() []command {
 	return []command{
 		{name: "agent", summary: "join this node to a mesh, or run the agent", sub: agentCommands()},
+		{name: "control", summary: "run the control plane: the database, the web UI and the agent API (no WireGuard of its own)", setup: setupControl},
 		{name: "dns", args: "[on|off]", summary: "show or switch this node's split DNS for the mesh zone's names (stays on the node)", setup: setupDNS},
 		{name: "exit", args: "[<server>|off]", summary: "show or switch this spoke's internet exit (through the local agent)", setup: setupExit},
 		{name: "export", summary: "write the mesh's desired state as YAML (reads the database directly)", setup: setupExport},
-		{name: "firewall", summary: "show, check and replace the mesh firewall (policies and zones) on the running server", sub: firewallCommands()},
-		{name: "healthcheck", summary: "exit 0 when the local server or agent answers", sub: healthCommands()},
-		{name: "import", args: "<file>", summary: "replace the desired state with an export (only while the server is stopped)", setup: setupImport},
-		{name: "ipv6", args: "[<prefix>|auto|off]", summary: "show or set the mesh's IPv6 prefix on the running server: a /48 to /64, auto (a random unique local /64) or off", setup: setupIPv6},
+		{name: "firewall", summary: "show, check and replace the mesh firewall (policies and zones) on the running control plane", sub: firewallCommands()},
+		{name: "healthcheck", summary: "exit 0 when the local control plane or agent answers", sub: healthCommands()},
+		{name: "import", args: "<file>", summary: "replace the desired state with an export (only while the control plane is stopped)", setup: setupImport},
+		{name: "ipv6", args: "[<prefix>|auto|off]", summary: "show or set the mesh's IPv6 prefix on the running control plane: a /48 to /64, auto (a random unique local /64) or off", setup: setupIPv6},
 		{name: "logs", summary: "print this node's recent agent log; -f keeps following it", setup: setupLogs},
-		{name: "node", summary: "add, change and remove nodes on the running server", sub: nodeCommands()},
-		{name: "server", summary: "run the control-plane server", setup: setupServer},
+		{name: "node", summary: "add, change and remove nodes on the running control plane", sub: nodeCommands()},
+		{name: "start", summary: "the image's command: run the control plane or a node as MESHCTL_MODE says (a node when unset), a node joining first with a join token it has not used yet",
+			setup: setupStart, env: startVars()},
 		{name: "status", summary: "show this node's agent: applied config and peers", setup: setupStatus},
 		{name: "ui", summary: "print a one-time sign-in link to this node's local UI", setup: setupUI},
 		{name: "user", summary: "manage web UI users (reads the database directly)", sub: userCommands()},

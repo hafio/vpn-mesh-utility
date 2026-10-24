@@ -13,7 +13,6 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/hafio/vpn-mesh-utility/deploy"
 	"github.com/hafio/vpn-mesh-utility/internal/server"
 	"github.com/hafio/vpn-mesh-utility/internal/server/api"
 	"github.com/hafio/vpn-mesh-utility/internal/validate"
@@ -27,15 +26,13 @@ import (
 func nodeCommands() []command {
 	return []command{
 		{name: "add", args: "<name>", summary: "add a node and print its one-time join command", setup: setupNodeAdd},
-		{name: "compose", args: "<name>", summary: "print the compose file that runs a node's agent in a container (container mode, or a NAS)", setup: setupNodeCompose},
 		{name: "disable", args: "<name>", summary: "take a node out of every peer list (its keys stay registered)", setup: nodeAction("disable")},
 		{name: "enable", args: "<name>", summary: "put a disabled node back", setup: nodeAction("enable")},
 		{name: "list", summary: "list the nodes and the mesh plan's warnings", setup: setupNodeList},
-		{name: "network", args: "<name>", summary: "print the commands that put a node's containers on the mesh (its mesh network, then a service)", setup: setupNodeNetwork},
 		{name: "phone", args: "<name>", summary: "print a new WireGuard profile for a phone (a new key: its previous profile stops working)", setup: setupNodePhone},
 		{name: "rm", args: "<name>", summary: "remove a node; every peer drops it on the next apply", setup: nodeAction("rm")},
 		{name: "set", args: "<name>", summary: "change a node's endpoint, hub, exit, keepalive, MTU, container network, mesh IP or groups", setup: setupNodeSet},
-		{name: "show", args: "<name>", summary: "show a node, its computed config and its peers", setup: setupNodeShow},
+		{name: "show", args: "<name>", summary: "show a node, its container network's values, its computed config and its peers", setup: setupNodeShow},
 		{name: "token", args: "<name>", summary: "issue a new join token (revokes unused ones; re-keys an enrolled node)", setup: nodeAction("token")},
 	}
 }
@@ -108,7 +105,7 @@ func setupNodeAdd(fs *flag.FlagSet, e *env) action {
 			fmt.Fprintf(e.stdout, "its containers: %s\n", k)
 		}
 		if ch.Node.Mode == "container" {
-			fmt.Fprintf(e.stdout, "\ncontainer mode: run its agent from the compose file\n  meshctl node compose %s [--runtime docker|podman|swarm] > compose.yml\n", ch.Node.Name)
+			fmt.Fprintf(e.stdout, "\ncontainer mode: run its agent from a compose file of your own (docs/containers.md);\nits network's values:\n  meshctl node show %s\n", ch.Node.Name)
 		}
 		printEnrollment(e.stdout, e.now().Location(), ch.Enrollment)
 		if ch.Node.Role == "phone" {
@@ -240,61 +237,6 @@ func setupNodePhone(fs *flag.FlagSet, e *env) action {
 	}
 }
 
-// setupNodeCompose prints the compose file that runs a node's agent in a
-// container; the server checks the choices and renders it, so the CLI and
-// the web UI give the same file.
-func setupNodeCompose(fs *flag.FlagSet, e *env) action {
-	client, asJSON := adminFlags(fs)
-	backend := fs.String("wg-backend", "", "WireGuard in the container: auto (container mode's default: the host's module, else /dev/net/tun), userspace (the NAS default; needs /dev/net/tun) or kernel (the host has the wireguard module)")
-	hostDir := fs.String("host-dir", "", "host directory for the agent's keys and cached config, mounted at /data (default: "+deploy.DefaultNASData+" for a NAS, a named volume in container mode)")
-	runtimeName := fs.String("runtime", "", "container mode: docker (default), podman or swarm (Swarm services attach)")
-	noNames := fs.Bool("no-names", false, "container mode: leave out the runtime's socket, so the node's containers get no names on the mesh")
-	return func(ctx context.Context, args []string) error {
-		name, err := nodeName(args)
-		if err != nil {
-			return err
-		}
-		f, err := client().Compose(ctx, name, api.ComposeOptions{Backend: *backend, DataDir: *hostDir, Runtime: *runtimeName, NoNames: *noNames})
-		if err != nil {
-			return err
-		}
-		if *asJSON {
-			return printJSON(e.stdout, f)
-		}
-		_, err = io.WriteString(e.stdout, f.YAML)
-		return err
-	}
-}
-
-// setupNodeNetwork prints the commands that create a node's mesh network on
-// its host and the compose lines that attach a service (amendment A37).
-func setupNodeNetwork(fs *flag.FlagSet, e *env) action {
-	client, asJSON := adminFlags(fs)
-	runtimeName := fs.String("runtime", "", "docker (default), podman or swarm (Swarm services attach)")
-	return func(ctx context.Context, args []string) error {
-		name, err := nodeName(args)
-		if err != nil {
-			return err
-		}
-		n, err := client().Network(ctx, name, *runtimeName)
-		if err != nil {
-			return err
-		}
-		if *asJSON {
-			return printJSON(e.stdout, n)
-		}
-		fmt.Fprintf(e.stdout, "the containers of %s (%s, %s mode), with %s -- create the mesh network on its host once:\n", name, n.Subnet, n.Mode, n.Runtime)
-		for _, l := range n.Commands {
-			fmt.Fprintln(e.stdout, l)
-		}
-		fmt.Fprintln(e.stdout, "\nthen attach a service to it:")
-		for _, l := range n.Service {
-			fmt.Fprintln(e.stdout, l)
-		}
-		return nil
-	}
-}
-
 func setupNodeShow(fs *flag.FlagSet, e *env) action {
 	client, asJSON := adminFlags(fs)
 	return func(ctx context.Context, args []string) error {
@@ -358,6 +300,9 @@ func setupNodeShow(fs *flag.FlagSet, e *env) action {
 		if err := tw.Flush(); err != nil {
 			return err
 		}
+		if err := printContainers(e.stdout, d.Containers); err != nil {
+			return err
+		}
 		if len(d.Peers) > 0 {
 			fmt.Fprintln(e.stdout, "\npeers as last reported:")
 			tw = tabwriter.NewWriter(e.stdout, 0, 0, 2, ' ', 0)
@@ -378,6 +323,41 @@ func setupNodeShow(fs *flag.FlagSet, e *env) action {
 		printWarnings(e.stdout, d.Warnings)
 		return nil
 	}
+}
+
+// printContainers shows a node's container network as its host's runtime
+// creates it (amendment A48): the values docs/containers.md's samples take.
+func printContainers(w io.Writer, k *api.ContainerNetwork) error {
+	if k == nil {
+		return nil
+	}
+	fmt.Fprintln(w, "\ncontainers on the mesh (docs/containers.md has the samples):")
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	row := func(key, v string) {
+		if v != "" {
+			fmt.Fprintf(tw, "  %s\t%s\n", key, v)
+		}
+	}
+	network := k.Name
+	if k.Mode != "container" {
+		network += " (the agent owns its bridge " + k.BridgeName + ")"
+	}
+	row("network", network)
+	row("subnet", joinNonEmpty(", ", k.Network, k.Network6))
+	row("ip range", joinNonEmpty(", ", k.Range, k.Range6))
+	row("gateway", joinNonEmpty(", ", k.Bridge, k.Bridge6))
+	if k.Mode == "container" {
+		row("agent", joinNonEmpty(", ", k.Gateway, k.Gateway6))
+	}
+	row("dns", k.Gateway+", search "+k.Zone+", ndots:1")
+	row("swarm dns", strings.Join(k.Resolvers, ", "))
+	switch {
+	case k.ListenPort != 0 && k.PublishPort != 0:
+		row("published", fmt.Sprintf("%d/udp on the host, to %d/udp", k.PublishPort, k.ListenPort))
+	case k.ListenPort != 0:
+		row("published", "none known: set the node's endpoint")
+	}
+	return tw.Flush()
 }
 
 func joinNonEmpty(sep string, parts ...string) string {

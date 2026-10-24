@@ -1,47 +1,50 @@
-# meshctl server as a Docker Swarm stack (spec S12): `docker stack deploy`, or a
-# Dokploy "Stack" app. Traefik, on the external dokploy-network, routes the
-# server's domain to port 8080; nothing is published on the host. Set:
+# The meshctl control plane as a Docker Swarm stack (spec S12, amendments A47,
+# A48): `docker stack deploy`, or a Dokploy "Stack" app. Traefik, on the
+# external dokploy-network, routes its domain to its port; nothing is published
+# on the host. The image's `meshctl start` runs what MESHCTL_MODE says. Set:
 #   MESHCTL_VERSION  the release to run, e.g. 1.0.0
 #   MESHCTL_URL      the public origin, e.g. https://mesh.example.com
-#   MESHCTL_TRUSTED_PROXIES  optional: Traefik's network CIDR, so the server
-#                    believes X-Forwarded-For from it (sign-in lockout and join
+#   MESHCTL_PORT     optional: the port it listens on (default 8080);
+#                    Traefik's route goes to it
+#   MESHCTL_TRUSTED_PROXIES  optional: Traefik's network CIDR, so the control
+#                    plane believes X-Forwarded-For from it (sign-in lockout and join
 #                    limits are per client); empty trusts nobody
+#   MESHCTL_HUB_DOWN_AFTER   optional: relay failover after a hub is silent
+#                    this long (default 2m, 0 off)
+#   MESHCTL_LOG_LEVEL        optional: debug, info (default), warn or error
 #   TZ               optional: the time zone the web UI's times are shown in,
 #                    e.g. Asia/Singapore (default UTC)
 #
-#   docker node update --label-add meshctl.server=true <node>   # once
-#   docker stack config -c stack.server.yml                      # checks it
-#   docker stack deploy -c stack.server.yml meshctl
+#   docker node update --label-add meshctl.control=true <node>  # once
+#   docker stack config -c stack.control.yml                     # checks it
+#   docker stack deploy -c stack.control.yml meshctl
 #
-# What Swarm changes against compose.server.yml:
+# What Swarm changes against compose.control.yml:
 #   - exactly one task, stopped before a new one starts: SQLite has one writer
-#     and the server holds a lock on /data
+#     and the control plane holds a lock on /data
 #   - pinned by a node label, not just to a manager: the data volume is local
-#     to one node, and another node would start the server on an empty one
+#     to one node, and another node would start it on an empty one
 #   - no privileged, security_opt or pids limit, which a stack cannot set: the
-#     server runs as 65532 with every capability dropped in a distroless image
+#     control plane runs as 65532 with every capability dropped in a distroless image
 #     with no setuid binaries, so there is nothing to escalate through
 #   - no container_name: the task's container is <stack>_meshctl.1.<id>
 # Without Dokploy, route the domain with Traefik's labels under deploy.labels:
 #   traefik.enable=true
 #   traefik.http.routers.meshctl.rule=Host(`mesh.example.com`)
-#   traefik.http.services.meshctl.loadbalancer.server.port=8080
+#   traefik.http.services.meshctl.loadbalancer.server.port=8080   # or MESHCTL_PORT
 # Posture: non-root, no capabilities, read-only root file system;
 # deploy_test.go forbids every widening token.
 services:
   meshctl:
     image: ghcr.io/hafio/vpn-mesh-utility:${MESHCTL_VERSION:?set MESHCTL_VERSION to a release such as 1.0.0}
-    command:
-      - server
-      - --data
-      - /data
-      - --listen
-      - ":8080"
-      - --url
-      - ${MESHCTL_URL:?set MESHCTL_URL to the public https origin}
-      - --trusted-proxies
-      - ${MESHCTL_TRUSTED_PROXIES:-}
-    environment: ["TZ=${TZ:-UTC}"]
+    environment:
+      MESHCTL_MODE: control
+      MESHCTL_PORT: ${MESHCTL_PORT:-8080}
+      MESHCTL_URL: ${MESHCTL_URL:?set MESHCTL_URL to the public https origin}
+      MESHCTL_TRUSTED_PROXIES: ${MESHCTL_TRUSTED_PROXIES:-}
+      MESHCTL_HUB_DOWN_AFTER: ${MESHCTL_HUB_DOWN_AFTER:-}
+      MESHCTL_LOG_LEVEL: ${MESHCTL_LOG_LEVEL:-}
+      TZ: ${TZ:-UTC}
     user: "65532:65532"
     cap_drop: [ALL]
     read_only: true
@@ -54,7 +57,7 @@ services:
     networks: [dokploy-network]
     stop_grace_period: 15s
     healthcheck:
-      test: ["CMD", "/app/meshctl", "healthcheck", "server"]
+      test: ["CMD", "/app/meshctl", "healthcheck", "start"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -63,7 +66,7 @@ services:
       mode: replicated
       replicas: 1
       placement:
-        constraints: [node.labels.meshctl.server == true]
+        constraints: [node.labels.meshctl.control == true]
       update_config:
         parallelism: 1
         order: stop-first

@@ -1,0 +1,53 @@
+# The meshctl control plane as a Dokploy compose app (spec S12, amendments
+# A13, A47, A48). Traefik, on the external dokploy-network, routes its domain
+# to its port; nothing is published on the host, and it runs no WireGuard of
+# its own. The image's `meshctl start` runs what MESHCTL_MODE says. Set in the
+# app's environment (or a .env file beside this one):
+#   MESHCTL_VERSION  the release to run, e.g. 1.0.0
+#   MESHCTL_URL      the public origin, e.g. https://mesh.example.com
+#   MESHCTL_PORT     optional: the port it listens on (default 8080);
+#                    Traefik's route goes to it
+#   MESHCTL_TRUSTED_PROXIES  optional: Traefik's network CIDR, so the control
+#                    plane believes X-Forwarded-For from it
+#   MESHCTL_HUB_DOWN_AFTER   optional: relay failover after a hub is silent
+#                    this long (default 2m, 0 off)
+#   MESHCTL_LOG_LEVEL        optional: debug, info (default), warn or error
+#   TZ               optional: the time zone the web UI's times are shown in,
+#                    e.g. Asia/Singapore (default UTC)
+# Posture: non-root, no capabilities, no privilege escalation, read-only
+# root file system; deploy_test.go forbids every widening token.
+name: meshctl
+services:
+  meshctl:
+    image: ghcr.io/hafio/vpn-mesh-utility:${MESHCTL_VERSION:?set MESHCTL_VERSION to a release such as 1.0.0}
+    environment:
+      MESHCTL_MODE: control
+      MESHCTL_PORT: ${MESHCTL_PORT:-8080}
+      MESHCTL_URL: ${MESHCTL_URL:?set MESHCTL_URL to the public https origin}
+      MESHCTL_TRUSTED_PROXIES: ${MESHCTL_TRUSTED_PROXIES:-}
+      MESHCTL_HUB_DOWN_AFTER: ${MESHCTL_HUB_DOWN_AFTER:-}
+      MESHCTL_LOG_LEVEL: ${MESHCTL_LOG_LEVEL:-}
+      TZ: ${TZ:-UTC}
+    user: "65532:65532"
+    privileged: false
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges=true"]
+    read_only: true
+    tmpfs: ["/tmp:size=16m,mode=1777"]
+    volumes: ["meshctl-data:/data"]
+    expose: ["${MESHCTL_PORT:-8080}"]
+    networks: [dokploy-network]
+    restart: unless-stopped
+    mem_limit: 256m
+    pids_limit: 256
+    healthcheck:
+      test: ["CMD", "/app/meshctl", "healthcheck", "start"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+volumes:
+  meshctl-data: {}
+networks:
+  dokploy-network:
+    external: true

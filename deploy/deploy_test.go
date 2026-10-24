@@ -250,15 +250,18 @@ func sameSet(a, b []string) bool {
 	return true
 }
 
-func TestServerComposePosture(t *testing.T) {
-	if !bytes.Equal(ComposeServer(), mustRead(t, "compose.server.yml")) {
+func TestControlComposePosture(t *testing.T) {
+	if !bytes.Equal(ComposeControl(), mustRead(t, "compose.control.yml")) {
 		t.Fatal("the embedded compose file is stale")
 	}
-	doc, svc := service(t, "compose.server.yml")
-	checkPosture(t, "compose.server.yml", svc, []string{"image", "command", "environment", "user", "privileged", "cap_drop", "security_opt",
+	doc, svc := service(t, "compose.control.yml")
+	checkPosture(t, "compose.control.yml", svc, []string{"image", "environment", "user", "privileged", "cap_drop", "security_opt",
 		"read_only", "tmpfs", "volumes", "expose", "networks", "restart", "mem_limit", "pids_limit", "healthcheck"})
-	if !reflect.DeepEqual(svc["environment"], []any{"TZ=${TZ:-UTC}"}) {
-		t.Errorf("the server's environment is its time zone only: %#v", svc["environment"])
+	if !reflect.DeepEqual(svc["environment"], controlEnv()) {
+		t.Errorf("the control plane's environment = %#v, want exactly %#v", svc["environment"], controlEnv())
+	}
+	if !reflect.DeepEqual(svc["expose"], []any{"${MESHCTL_PORT:-8080}"}) {
+		t.Errorf("expose = %#v: the control plane's port only", svc["expose"])
 	}
 	if img, _ := svc["image"].(string); !strings.HasPrefix(img, "ghcr.io/hafio/vpn-mesh-utility:${MESHCTL_VERSION:?") {
 		t.Errorf("image %q must be the pinned release, required from the environment", img)
@@ -270,12 +273,83 @@ func TestServerComposePosture(t *testing.T) {
 	}
 }
 
+// controlEnv is the control plane's environment in its compose and stack
+// files (amendments A47, A48): `meshctl start` in control mode, every value
+// from the app's environment, the origin required.
+func controlEnv() map[string]any {
+	return map[string]any{
+		"MESHCTL_MODE":            "control",
+		"MESHCTL_PORT":            "${MESHCTL_PORT:-8080}",
+		"MESHCTL_URL":             "${MESHCTL_URL:?set MESHCTL_URL to the public https origin}",
+		"MESHCTL_TRUSTED_PROXIES": "${MESHCTL_TRUSTED_PROXIES:-}",
+		"MESHCTL_HUB_DOWN_AFTER":  "${MESHCTL_HUB_DOWN_AFTER:-}",
+		"MESHCTL_LOG_LEVEL":       "${MESHCTL_LOG_LEVEL:-}",
+		"TZ":                      "${TZ:-UTC}",
+	}
+}
+
+// startHealth is the image's own health check, which follows MESHCTL_MODE.
+func startHealth() []any { return []any{"CMD", "/app/meshctl", "healthcheck", "start"} }
+
 func TestDevComposePosture(t *testing.T) {
 	_, svc := service(t, "compose.dev.yml")
-	checkPosture(t, "compose.dev.yml", svc, []string{"image", "command", "user", "privileged", "cap_drop", "security_opt",
+	checkPosture(t, "compose.dev.yml", svc, []string{"image", "environment", "user", "privileged", "cap_drop", "security_opt",
 		"read_only", "tmpfs", "volumes", "ports", "restart", "mem_limit", "pids_limit", "healthcheck"})
+	if env := map[string]any{"MESHCTL_MODE": "control", "MESHCTL_URL": "http://127.0.0.1:8080"}; !reflect.DeepEqual(svc["environment"], env) {
+		t.Errorf("the dev control plane's environment = %#v, want %#v", svc["environment"], env)
+	}
+	if hc, _ := svc["healthcheck"].(map[string]any); !reflect.DeepEqual(hc["test"], startHealth()) {
+		t.Errorf("healthcheck = %#v", svc["healthcheck"])
+	}
 	if !reflect.DeepEqual(svc["ports"], []any{"127.0.0.1:8080:8080"}) {
 		t.Errorf("the dev stack publishes on loopback only: %#v", svc["ports"])
+	}
+}
+
+// The Swarm stack states the posture a stack can: non-root, no
+// capabilities, read-only root, one task pinned to a labelled node and
+// stopped before the next starts; nothing that widens it.
+func TestControlStackPosture(t *testing.T) {
+	doc, svc := service(t, "stack.control.yml")
+	if got, want := keys(svc), []string{"image", "environment", "user", "cap_drop", "read_only", "volumes", "networks",
+		"stop_grace_period", "healthcheck", "deploy"}; !sameSet(got, want) {
+		t.Errorf("stack service keys = %v, want exactly %v", got, want)
+	}
+	for k, v := range map[string]any{"user": "65532:65532", "cap_drop": []any{"ALL"}, "read_only": true,
+		"environment": controlEnv()} {
+		if !reflect.DeepEqual(svc[k], v) {
+			t.Errorf("stack: %s = %#v, want %#v", k, svc[k], v)
+		}
+	}
+	if img, _ := svc["image"].(string); !strings.HasPrefix(img, "ghcr.io/hafio/vpn-mesh-utility:${MESHCTL_VERSION:?") {
+		t.Errorf("image %q must be the pinned release, required from the environment", img)
+	}
+	vols, _ := svc["volumes"].([]any)
+	if len(vols) != 2 || vols[0] != "meshctl-data:/data" {
+		t.Errorf("stack volumes = %#v: the named data volume and a tmpfs only", vols)
+	}
+	if tmp, _ := vols[1].(map[string]any); tmp["type"] != "tmpfs" || tmp["target"] != "/tmp" {
+		t.Errorf("stack tmpfs = %#v", vols[1])
+	}
+	dep, _ := svc["deploy"].(map[string]any)
+	place, _ := dep["placement"].(map[string]any)
+	update, _ := dep["update_config"].(map[string]any)
+	if dep["mode"] != "replicated" || dep["replicas"] != 1 || !reflect.DeepEqual(place["constraints"], []any{"node.labels.meshctl.control == true"}) ||
+		update["order"] != "stop-first" {
+		t.Errorf("stack deploy = %#v", dep)
+	}
+	nets, _ := doc["networks"].(map[string]any)
+	if dok, _ := nets["dokploy-network"].(map[string]any); dok["external"] != true {
+		t.Error("dokploy-network must be external (Dokploy owns it)")
+	}
+	// The same environment and health check as the compose file: only how
+	// it is run differs.
+	_, compose := service(t, "compose.control.yml")
+	if !reflect.DeepEqual(svc["environment"], compose["environment"]) || !reflect.DeepEqual(svc["healthcheck"], compose["healthcheck"]) {
+		t.Errorf("the stack runs with %#v, the compose file with %#v", svc["environment"], compose["environment"])
+	}
+	if hc, _ := svc["healthcheck"].(map[string]any); !reflect.DeepEqual(hc["test"], startHealth()) {
+		t.Errorf("healthcheck = %#v", svc["healthcheck"])
 	}
 }
 

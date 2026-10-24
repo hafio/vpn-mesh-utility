@@ -284,6 +284,37 @@ func TestLocalSettings(t *testing.T) {
 
 // The mesh view is cached as fetched, without the reason it was stale, and
 // a cache that no longer validates is reported rather than shown.
+func TestJoinRecord(t *testing.T) {
+	d := open(t)
+	if r, err := d.JoinRecord(); err != nil || r.Token != "" {
+		t.Fatalf("no file = %+v, %v", r, err)
+	}
+	want := JoinRecord{Token: strings.Repeat("ab", 32)}
+	if err := d.SaveJoinRecord(want); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := (&Dir{Path: d.Path}).JoinRecord(); err != nil || r != want {
+		t.Fatalf("after a restart = %+v, %v", r, err)
+	}
+	if st, err := os.Stat(filepath.Join(d.Path, JoinFile)); err != nil || (runtime.GOOS != "windows" && st.Mode().Perm() != 0o600) {
+		t.Fatalf("mode = %v, %v", st.Mode().Perm(), err)
+	}
+	if err := os.WriteFile(filepath.Join(d.Path, JoinFile), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.JoinRecord(); err == nil || !strings.Contains(err.Error(), "remove it") {
+		t.Fatalf("damaged = %v", err)
+	}
+	d2 := open(t)
+	mkdirs(t, d2, JoinFile)
+	if _, err := d2.JoinRecord(); err == nil || !strings.Contains(err.Error(), JoinFile) {
+		t.Fatalf("unreadable = %v", err)
+	}
+	if err := d2.SaveJoinRecord(JoinRecord{}); err == nil {
+		t.Fatal("SaveJoinRecord over a directory succeeded")
+	}
+}
+
 func TestMeshCache(t *testing.T) {
 	d := open(t)
 	if m, err := d.Mesh(); err != nil || m.FetchedAt != 0 || len(m.View.Nodes) != 0 {

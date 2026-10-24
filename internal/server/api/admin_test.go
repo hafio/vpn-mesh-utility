@@ -9,10 +9,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
-	"github.com/hafio/vpn-mesh-utility/deploy"
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
 	"github.com/hafio/vpn-mesh-utility/internal/server/store"
 	"github.com/hafio/vpn-mesh-utility/internal/testfix"
@@ -169,52 +169,10 @@ func TestAdminTokenAndShow(t *testing.T) {
 	}
 }
 
-// A spoke's compose file carries the server's own release and origin;
-// servers, unknown nodes and bad choices are refused before anything is
-// rendered.
-func TestAdminCompose(t *testing.T) {
-	h := newHarness(t)
-	h.seedServers(t)
-	if code, eb := adminCall(t, h, http.MethodPost, AdminNodes, NodeAddRequest{Name: "nas", Role: "spoke"}, nil); code != 200 {
-		t.Fatalf("add: %d %+v", code, eb)
-	}
-	var f ComposeFile
-	code, _ := adminCall(t, h, http.MethodGet, AdminNodes+"/nas/compose", nil, &f)
-	if code != 200 || f.Backend != deploy.NASUserspace || f.DataDir != deploy.DefaultNASData ||
-		!strings.Contains(f.YAML, "image: "+deploy.Image+":1.0.0") || !strings.Contains(f.YAML, "--server "+testURL+" --name nas") {
-		t.Fatalf("compose: %d %+v", code, f)
-	}
-	code, _ = adminCall(t, h, http.MethodGet, AdminNodes+"/nas/compose?backend=kernel&data=/srv/meshctl", nil, &f)
-	if code != 200 || f.Backend != deploy.NASKernel || !strings.Contains(f.YAML, "/srv/meshctl:/data") || strings.Contains(f.YAML, "devices:") {
-		t.Fatalf("kernel compose: %d %+v", code, f)
-	}
-	for _, c := range []struct {
-		path string
-		want int
-	}{
-		{"/vps-1/compose", 409},
-		{"/none/compose", 404},
-		{"/Bad_Name/compose", 400},
-		{"/nas/compose?backend=wireguard", 400},
-		{"/nas/compose?data=/srv/%24HOME", 400},
-		{"/nas/compose?data=relative", 400},
-	} {
-		if code, eb := adminCall(t, h, http.MethodGet, AdminNodes+c.path, nil, nil); code != c.want || eb.Message == "" {
-			t.Errorf("%s = %d %+v, want %d", c.path, code, eb, c.want)
-		}
-	}
-	dev := NewNodes(Deps{DB: h.db, ServerURL: testURL, Version: "dev"})
-	if _, err := dev.Compose(context.Background(), "nas", ComposeOptions{}); err == nil {
-		t.Fatal("a development build rendered a compose file")
-	} else if status, msg := ErrorMessage(err); status != 400 || !strings.Contains(msg, "development build") {
-		t.Fatalf("a development build: %d %s", status, msg)
-	}
-}
-
 // Container networks over the admin API (amendment A37): a container-mode
 // node always gets the lowest free container /24, a host-mode one on
-// request; the refusals name what to do; the compose file follows the
-// node's mode and the runtime.
+// request; the refusals name what to do; show gives the values a runtime
+// creates the network with (amendment A48).
 func TestAdminContainerMode(t *testing.T) {
 	h := newHarness(t)
 	h.seedServers(t)
@@ -272,78 +230,44 @@ func TestAdminContainerMode(t *testing.T) {
 		t.Errorf("containers on twice keeps the subnet: %d %+v", code, ch.Node)
 	}
 
-	var f ComposeFile
-	if code, eb := adminCall(t, h, http.MethodGet, AdminNodes+"/box/compose", nil, &f); code != 200 || f.Runtime != deploy.RuntimeDocker ||
-		f.Backend != deploy.ContainerAuto || !strings.Contains(f.YAML, "docker network create --internal") ||
-		!strings.Contains(f.YAML, "dns: [10.77.128.2]") || strings.Contains(f.YAML, "ports:") || strings.Contains(f.YAML, "network_mode") ||
-		!strings.Contains(f.YAML, "docker.sock") {
-		t.Fatalf("box compose: %d %+v\n%s", code, eb, f.YAML)
-	}
-	if code, _ := adminCall(t, h, http.MethodGet, AdminNodes+"/box/compose?names=off", nil, &f); code != 200 || strings.Contains(f.YAML, ".sock") {
-		t.Errorf("compose without names: %d\n%s", code, f.YAML)
-	}
-	for runtime, want := range map[string]string{"podman": "podman network create --internal --disable-dns", "swarm": "--scope swarm"} {
-		if code, _ := adminCall(t, h, http.MethodGet, AdminNodes+"/box/compose?runtime="+runtime, nil, &f); code != 200 || !strings.Contains(f.YAML, want) {
-			t.Errorf("%s compose: %d\n%s", runtime, code, f.YAML)
+	// The values docs/containers.md's samples take: container mode with the
+	// agent at .2 and every server node as a Swarm service's resolver (hub4
+	// has not joined, so it is in no peer list), host mode on the agent's
+	// own bridge, a container-mode server's published port from its
+	// endpoint.
+	show := func(name string) *ContainerNetwork {
+		var d NodeDetail
+		if code, eb := adminCall(t, h, http.MethodGet, AdminNodes+"/"+name, nil, &d); code != 200 {
+			t.Fatalf("show %s: %d %+v", name, code, eb)
 		}
+		return d.Containers
 	}
-	// A Swarm service resolves through the servers in peer lists (hub4 has
-	// not joined).
-	if code, _ := adminCall(t, h, http.MethodGet, AdminNodes+"/box/compose?runtime=swarm", nil, &f); code != 200 ||
-		!strings.Contains(f.YAML, "dns: [10.77.0.1, 10.77.0.2, 10.77.0.3]") {
-		t.Errorf("the swarm service's resolvers: %d\n%s", code, f.YAML)
-	}
-	if code, _ := adminCall(t, h, http.MethodGet, AdminNodes+"/hub4/compose", nil, &f); code != 200 || !strings.Contains(f.YAML, "51999:51820/udp") {
-		t.Errorf("hub compose publishes the endpoint's port: %d\n%s", code, f.YAML)
-	}
-	// A host-mode spoke (pc) gets the NAS file, which runs with any runtime.
-	for path, want := range map[string]int{
-		"/box/compose?runtime=lxc":    400,
-		"/box/compose?backend=wg":     400,
-		"/pc/compose?runtime=podman":  400,
-		"/box/compose?data=/srv/$x":   400,
-		"/box/compose?data=relative":  400,
-		"/hub4/compose?runtime=swarm": 200,
+	servers := []string{"10.77.0.1", "10.77.0.2", "10.77.0.3"}
+	for name, want := range map[string]*ContainerNetwork{
+		"box": {Name: proto.MeshNetwork, BridgeName: proto.ContainerBridge, Mode: proto.ModeContainer, Subnet: testfix.ContainerSubnet,
+			Network: testfix.MeshCIDR, Range: "10.77.128.128/25", Bridge: "10.77.128.1", Gateway: "10.77.128.2", Zone: "mesh", Resolvers: servers},
+		"pc": {Name: proto.MeshNetwork, BridgeName: proto.ContainerBridge, Mode: proto.ModeHost, Subnet: "10.77.130.0/24",
+			Network: testfix.MeshCIDR, Range: "10.77.130.128/25", Bridge: "10.77.130.1", Gateway: "10.77.130.1", Zone: "mesh", Resolvers: servers},
+		"hub4": {Name: proto.MeshNetwork, BridgeName: proto.ContainerBridge, Mode: proto.ModeContainer, Subnet: "10.77.129.0/24",
+			Network: testfix.MeshCIDR, Range: "10.77.129.128/25", Bridge: "10.77.129.1", Gateway: "10.77.129.2", Zone: "mesh", Resolvers: servers,
+			PublishPort: 51999, ListenPort: 51820},
+		"vps-1": nil,
 	} {
-		if code, eb := adminCall(t, h, http.MethodGet, AdminNodes+path, nil, nil); code != want {
-			t.Errorf("%s = %d %+v, want %d", path, code, eb, want)
+		if got := show(name); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s's container network = %+v, want %+v", name, got, want)
 		}
 	}
 	if _, code, _ := set("hub4", NodeSetRequest{Endpoint: ptr("")}); code != 200 {
 		t.Fatalf("clear hub4's endpoint: %d", code)
 	}
-	if code, eb := adminCall(t, h, http.MethodGet, AdminNodes+"/hub4/compose", nil, nil); code != 409 || !strings.Contains(eb.Message, "no endpoint") {
-		t.Errorf("a hub without an endpoint: %d %+v", code, eb)
-	}
-	// The mesh network's commands for its host: container mode as in the
-	// compose header, host mode on the agent's own bridge.
-	var ni NetworkInfo
-	if code, eb := adminCall(t, h, http.MethodGet, AdminNodes+"/pc/network?runtime=podman", nil, &ni); code != 200 || ni.Mode != proto.ModeHost ||
-		ni.Subnet != "10.77.130.0/24" || !strings.Contains(strings.Join(ni.Commands, " "), "-o mode=unmanaged") ||
-		!strings.Contains(strings.Join(ni.Service, " "), "dns: [10.77.130.1]") {
-		t.Fatalf("pc network: %d %+v %+v", code, eb, ni)
-	}
-	if code, _ := adminCall(t, h, http.MethodGet, AdminNodes+"/box/network", nil, &ni); code != 200 || ni.Runtime != deploy.RuntimeDocker ||
-		!strings.Contains(strings.Join(ni.Commands, " "), "docker network create --internal") {
-		t.Fatalf("box network: %d %+v", code, ni)
-	}
-	for path, want := range map[string]int{"/vps-1/network": 409, "/pc/network?runtime=lxc": 400, "/none/network": 404} {
-		if code, eb := adminCall(t, h, http.MethodGet, AdminNodes+path, nil, nil); code != want || eb.Message == "" {
-			t.Errorf("%s = %d %+v, want %d", path, code, eb, want)
-		}
-	}
-	if code, _ := adminCall(t, h, http.MethodGet, AdminNodes+"/Bad_Name/network", nil, nil); code != 400 {
-		t.Errorf("a bad name's network = %d", code)
+	if got := show("hub4"); got == nil || got.PublishPort != 0 || got.ListenPort != 51820 {
+		t.Errorf("a container-mode server without an endpoint publishes no known port: %+v", got)
 	}
 	if _, code, eb := add(NodeAddRequest{Name: "ph2", Role: "phone"}); code != 200 {
 		t.Fatalf("add a phone: %d %+v", code, eb)
 	}
 	if _, code, eb := set("ph2", NodeSetRequest{Containers: ptr(true)}); code != 400 || !strings.Contains(eb.Message, "phone") {
 		t.Errorf("containers on a phone = %d %+v", code, eb)
-	}
-	// deploy repeats these names rather than import proto.
-	if deploy.MeshNetwork != proto.MeshNetwork || deploy.MeshBridge != proto.ContainerBridge {
-		t.Errorf("deploy names %s/%s, proto %s/%s", deploy.MeshNetwork, deploy.MeshBridge, proto.MeshNetwork, proto.ContainerBridge)
 	}
 }
 
@@ -401,12 +325,8 @@ func TestAdminClientOverTheSocket(t *testing.T) {
 	} else if ae, ok := err.(*AdminError); !ok || ae.Code != proto.CodeConflict {
 		t.Fatalf("duplicate Add = %#v", err)
 	}
-	if f, err := c.Compose(ctx, "laptop", ComposeOptions{}); err != nil || f.Backend != "userspace" {
-		t.Fatalf("Compose = %+v, %v", f, err)
-	}
-	if f, err := c.Compose(ctx, "laptop", ComposeOptions{Backend: "kernel", DataDir: "/srv/meshctl"}); err != nil ||
-		f.Backend != "kernel" || f.DataDir != "/srv/meshctl" {
-		t.Fatalf("Compose(kernel) = %+v, %v", f, err)
+	if d, err := c.Show(ctx, "laptop"); err != nil || d.Node.Name != "laptop" || d.Containers != nil {
+		t.Fatalf("Show = %+v, %v", d, err)
 	}
 	if _, err := c.Add(ctx, NodeAddRequest{Name: "phone", Role: "phone"}); err != nil {
 		t.Fatal(err)
@@ -439,7 +359,7 @@ func TestAdminClientOverTheSocket(t *testing.T) {
 	if _, err := c.Show(ctx, "laptop"); err == nil {
 		t.Fatal("Show after Remove succeeded")
 	}
-	if _, err := NewAdminClient(filepath.Join(dir, "none.sock")).List(ctx); err == nil || !strings.Contains(err.Error(), "meshctl server") {
+	if _, err := NewAdminClient(filepath.Join(dir, "none.sock")).List(ctx); err == nil || !strings.Contains(err.Error(), "meshctl control") {
 		t.Fatalf("no server: %v", err)
 	}
 }

@@ -1,11 +1,13 @@
-# Local dev stack for `./scripts/dev.sh up` / `down`: the server only, from
+# Local dev stack for `./scripts/dev.sh up` / `down`: the control plane, from
 # the image `./scripts/dev.sh image` builds, published on loopback.
-# Same posture as compose.server.yml; deploy_test.go pins both.
+# Same posture as compose.control.yml; deploy_test.go pins both.
 name: meshctl-dev
 services:
   meshctl:
     image: ${IMAGE:?run this through ./scripts/dev.sh up}
-    command: ["server", "--data", "/data", "--listen", ":8080", "--url", "http://127.0.0.1:8080"]
+    environment:
+      MESHCTL_MODE: control
+      MESHCTL_URL: http://127.0.0.1:8080
     user: "65532:65532"
     privileged: false
     cap_drop: [ALL]
@@ -18,7 +20,7 @@ services:
     mem_limit: 256m
     pids_limit: 256
     healthcheck:
-      test: ["CMD", "/app/meshctl", "healthcheck", "server"]
+      test: ["CMD", "/app/meshctl", "healthcheck", "start"]
       interval: 30s
       timeout: 5s
       retries: 3

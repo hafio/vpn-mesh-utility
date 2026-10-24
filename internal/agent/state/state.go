@@ -43,6 +43,9 @@ const (
 	LocalFile = "local.json"
 	// MeshFile is the last mesh view fetched from the server (spec S7.6).
 	MeshFile = "mesh.json"
+	// JoinFile is the fingerprint of the join token `meshctl start` last
+	// used (amendment A47), so a container joins once per token.
+	JoinFile = "join.json"
 )
 
 // ErrNotJoined means the data directory has no enrollment yet.
@@ -333,4 +336,35 @@ func (d *Dir) SaveMesh(m proto.LocalMesh) error {
 		return fmt.Errorf("encode %s: %w", MeshFile, err)
 	}
 	return fsutil.WriteAtomic(d.Path, MeshFile, append(b, '\n'), 0o600)
+}
+
+// JoinRecord is what `meshctl start` remembers of the last join token it
+// used, or that the server refused: a fingerprint, never the token.
+type JoinRecord struct {
+	Token string `json:"token_fingerprint"`
+}
+
+// JoinRecord reads join.json; none yet is the zero value.
+func (d *Dir) JoinRecord() (JoinRecord, error) {
+	b, err := os.ReadFile(d.file(JoinFile))
+	if errors.Is(err, fs.ErrNotExist) {
+		return JoinRecord{}, nil
+	}
+	if err != nil {
+		return JoinRecord{}, fmt.Errorf("read %s: %w", d.file(JoinFile), err)
+	}
+	var r JoinRecord
+	if err := json.Unmarshal(b, &r); err != nil {
+		return JoinRecord{}, fmt.Errorf("%s is damaged (%w); remove it, and the next start joins with the token it is given", d.file(JoinFile), err)
+	}
+	return r, nil
+}
+
+// SaveJoinRecord writes join.json.
+func (d *Dir) SaveJoinRecord(r JoinRecord) error {
+	b, err := json.MarshalIndent(r, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode %s: %w", JoinFile, err)
+	}
+	return fsutil.WriteAtomic(d.Path, JoinFile, append(b, '\n'), 0o600)
 }

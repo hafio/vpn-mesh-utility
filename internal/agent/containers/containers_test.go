@@ -123,7 +123,7 @@ func TestSyncWithoutTheMeshNetwork(t *testing.T) {
 	n.Attach("eth0", netip.MustParsePrefix("172.20.0.3/16"))
 	n.Attach("wg0", netip.MustParsePrefix("10.77.128.9/32")) // the tunnel is skipped
 	_, err := containers.Sync(n, &agentfake.Sysctl{}, testfix.Containers(proto.ModeContainer), "wg0", nil)
-	if err == nil || !strings.Contains(err.Error(), "not on the meshctl-mesh network") || !strings.Contains(err.Error(), "meshctl node compose") {
+	if err == nil || !strings.Contains(err.Error(), "not on the meshctl-mesh network") || !strings.Contains(err.Error(), "docs/containers.md") {
 		t.Fatalf("Sync = %v", err)
 	}
 	if len(n.Calls) != 0 {

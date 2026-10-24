@@ -75,53 +75,30 @@ func TestNodeLifecycle(t *testing.T) {
 	if code, out, _ = runArgs("node", "show", "vps-1", "--data", data); code != exitOK || !strings.Contains(out, "10.77.0.1") {
 		t.Fatalf("show: %d\n%s", code, out)
 	}
-	code, out, _ = runArgs("node", "compose", "laptop", "--data", data)
-	if code != exitOK || !strings.HasPrefix(out, "# meshctl agent for the spoke \"laptop\"") || !strings.Contains(out, "/dev/net/tun") ||
-		!strings.Contains(out, "image: ghcr.io/hafio/vpn-mesh-utility:1.2.3") {
-		t.Fatalf("compose: %d\n%s", code, out)
-	}
-	code, out, _ = runArgs("node", "compose", "laptop", "--wg-backend", "kernel", "--host-dir", "/srv/meshctl", "--data", data, "--json")
-	var cf api.ComposeFile
-	if code != exitOK || json.Unmarshal([]byte(out), &cf) != nil || cf.Backend != "kernel" || !strings.Contains(cf.YAML, "/srv/meshctl:/data") ||
-		strings.Contains(cf.YAML, "/dev/") {
-		t.Fatalf("compose --json: %d\n%s", code, out)
-	}
-	if code, _, errOut = runArgs("node", "compose", "vps-1", "--data", data); code != exitFailure || !strings.Contains(errOut, "a server in host mode") {
-		t.Fatalf("compose for a server: %d %s", code, errOut)
-	}
-	if code, _, errOut = runArgs("node", "compose", "laptop", "--host-dir", "/srv/$HOME", "--data", data); code != exitFailure ||
-		!strings.Contains(errOut, "absolute path") {
-		t.Fatalf("compose with a hostile directory: %d %s", code, errOut)
-	}
 	// Container mode (amendment A37).
 	code, out, _ = runArgs("node", "add", "box", "--role", "spoke", "--mode", "container", "--data", data)
-	if code != exitOK || !strings.Contains(out, "its containers: 10.77.128.0/24") || !strings.Contains(out, "meshctl node compose box") {
+	if code != exitOK || !strings.Contains(out, "its containers: 10.77.128.0/24") || !strings.Contains(out, "meshctl node show box") {
 		t.Fatalf("add --mode container: %d\n%s", code, out)
 	}
-	if code, out, _ = runArgs("node", "compose", "box", "--runtime", "swarm", "--data", data); code != exitOK || !strings.Contains(out, "--scope swarm") ||
-		!strings.Contains(out, "/var/run/docker.sock:/var/run/docker.sock:ro") {
-		t.Fatalf("compose --runtime swarm: %d\n%s", code, out)
-	}
-	if code, out, _ = runArgs("node", "compose", "box", "--no-names", "--data", data); code != exitOK || strings.Contains(out, ".sock") ||
-		!strings.Contains(out, "--runtime-socket") {
-		t.Fatalf("compose --no-names: %d\n%s", code, out)
-	}
-	if code, out, _ = runArgs("node", "show", "box", "--data", data); code != exitOK || !strings.Contains(out, "container: only its containers") ||
-		!strings.Contains(out, "10.77.128.0/24") {
-		t.Fatalf("show a container-mode node: %d\n%s", code, out)
+	// Show gives the container network's values for docs/containers.md
+	// (amendment A48): container mode with the agent's own address, host
+	// mode on the agent's bridge.
+	code, out, _ = runArgs("node", "show", "box", "--data", data)
+	for _, want := range []string{"container: only its containers", "containers on the mesh", "meshctl-mesh\n", "10.77.128.128/25",
+		"10.77.128.2, search mesh, ndots:1"} {
+		if code != exitOK || !strings.Contains(out, want) {
+			t.Errorf("show a container-mode node lacks %q: %d\n%s", want, code, out)
+		}
 	}
 	if code, out, _ = runArgs("node", "set", "laptop", "--containers", "--data", data, "--json"); code != exitOK || !strings.Contains(out, `"container_subnet": "10.77.129.0/24"`) {
 		t.Fatalf("set --containers: %d\n%s", code, out)
 	}
-	if code, out, _ = runArgs("node", "network", "laptop", "--runtime", "podman", "--data", data); code != exitOK ||
-		!strings.Contains(out, "mode=unmanaged") || !strings.Contains(out, "then attach a service") {
-		t.Fatalf("node network: %d\n%s", code, out)
+	if code, out, _ = runArgs("node", "show", "laptop", "--data", data); code != exitOK || !strings.Contains(out, "the agent owns its bridge meshctl0") ||
+		!strings.Contains(out, "10.77.129.1, search mesh") || strings.Contains(out, "  agent ") {
+		t.Fatalf("show a host-mode node's containers: %d\n%s", code, out)
 	}
-	if code, out, _ = runArgs("node", "network", "box", "--data", data, "--json"); code != exitOK || !strings.Contains(out, `"mode": "container"`) {
-		t.Fatalf("node network --json: %d\n%s", code, out)
-	}
-	if code, _, errOut = runArgs("node", "network", "vps-1", "--data", data); code != exitFailure || !strings.Contains(errOut, "no container network") {
-		t.Fatalf("node network without containers: %d %s", code, errOut)
+	if code, out, _ = runArgs("node", "show", "vps-1", "--data", data); code != exitOK || strings.Contains(out, "containers on the mesh") {
+		t.Fatalf("show a node without containers: %d\n%s", code, out)
 	}
 	if code, _, errOut = runArgs("node", "set", "box", "--containers=false", "--data", data); code != exitFailure || !strings.Contains(errOut, "always on the mesh") {
 		t.Fatalf("set --containers=false in container mode: %d %s", code, errOut)
@@ -211,7 +188,7 @@ func TestNodePhone(t *testing.T) {
 
 func TestNodeCommandsExplainAMissingServer(t *testing.T) {
 	code, _, errOut := runArgs("node", "list", "--data", shortDir(t))
-	if code != exitFailure || !strings.Contains(errOut, "meshctl server") {
+	if code != exitFailure || !strings.Contains(errOut, "meshctl control") {
 		t.Fatalf("%d %s", code, errOut)
 	}
 }
@@ -244,19 +221,19 @@ func TestExportCommand(t *testing.T) {
 	}
 }
 
-func TestServerFlagErrors(t *testing.T) {
+func TestControlFlagErrors(t *testing.T) {
 	data := shortDir(t)
-	if code, _, errOut := runArgs("server", "--data", data); code != exitUsage || !strings.Contains(errOut, "--url") {
+	if code, _, errOut := runArgs("control", "--data", data); code != exitUsage || !strings.Contains(errOut, "--url") {
 		t.Fatalf("no url: %d %s", code, errOut)
 	}
-	if code, _, errOut := runArgs("server", "--data", data, "--url", "https://mesh.example.com", "--trusted-proxies", "10.0.0.1/8"); code != exitUsage || !strings.Contains(errOut, "CIDR") {
+	if code, _, errOut := runArgs("control", "--data", data, "--url", "https://mesh.example.com", "--trusted-proxies", "10.0.0.1/8"); code != exitUsage || !strings.Contains(errOut, "CIDR") {
 		t.Fatalf("bad proxies: %d %s", code, errOut)
 	}
-	if code, _, errOut := runArgs("server", "--data", data, "--url", "https://mesh.example.com", "--log-level", "loud"); code != exitUsage {
+	if code, _, errOut := runArgs("control", "--data", data, "--url", "https://mesh.example.com", "--log-level", "loud"); code != exitUsage {
 		t.Fatalf("bad log level: %d %s", code, errOut)
 	}
 	for _, bad := range []string{"500ms", "2h", "-1m", "soon"} {
-		if code, _, errOut := runArgs("server", "--data", data, "--url", "https://mesh.example.com", "--hub-down-after", bad); code != exitUsage ||
+		if code, _, errOut := runArgs("control", "--data", data, "--url", "https://mesh.example.com", "--hub-down-after", bad); code != exitUsage ||
 			!strings.Contains(errOut, "hub-down-after") {
 			t.Errorf("--hub-down-after %s: %d %s", bad, code, errOut)
 		}
@@ -355,7 +332,7 @@ func TestAgentLog(t *testing.T) {
 	}
 }
 
-func TestHealthcheckServer(t *testing.T) {
+func TestHealthcheckControl(t *testing.T) {
 	status := http.StatusOK
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != proto.PathHealth {
@@ -366,14 +343,14 @@ func TestHealthcheckServer(t *testing.T) {
 	}))
 	defer srv.Close()
 	addr := strings.TrimPrefix(srv.URL, "http://")
-	if code, _, errOut := runArgs("healthcheck", "server", "--addr", addr); code != exitOK {
+	if code, _, errOut := runArgs("healthcheck", "control", "--addr", addr); code != exitOK {
 		t.Fatalf("healthy: %d %s", code, errOut)
 	}
 	status = http.StatusServiceUnavailable
-	if code, _, _ := runArgs("healthcheck", "server", "--addr", addr); code != exitFailure {
+	if code, _, _ := runArgs("healthcheck", "control", "--addr", addr); code != exitFailure {
 		t.Fatalf("unhealthy: %d", code)
 	}
-	if code, _, _ := runArgs("healthcheck", "server", "--addr", "no-port"); code != exitUsage {
+	if code, _, _ := runArgs("healthcheck", "control", "--addr", "no-port"); code != exitUsage {
 		t.Fatalf("bad addr: %d", code)
 	}
 }

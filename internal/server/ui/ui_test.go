@@ -24,7 +24,6 @@ import (
 	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
 
-	"github.com/hafio/vpn-mesh-utility/deploy"
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
 	"github.com/hafio/vpn-mesh-utility/internal/server/api"
 	"github.com/hafio/vpn-mesh-utility/internal/server/auth"
@@ -384,10 +383,10 @@ func TestNodeLifecycle(t *testing.T) {
 	}
 }
 
-// A spoke's page offers its container compose file, which downloads with the
-// choices from the form; a server has none, and a bad choice comes back on
-// the page.
-func TestSpokeComposeDownload(t *testing.T) {
+// A spoke's page says how it runs in a container -- from a compose file of
+// the operator's own (amendment A48); a server's does not, and there is no
+// compose file to download.
+func TestSpokeRunsInAContainer(t *testing.T) {
 	r := newRig(t)
 	r.seedServers()
 	cookie, csrf := r.signIn()
@@ -396,32 +395,19 @@ func TestSpokeComposeDownload(t *testing.T) {
 		t.Fatalf("add spoke = %d\n%s", w.Code, w.Body)
 	}
 	body := r.do(http.MethodGet, "/nodes/nas", cookie, nil).Body.String()
-	if !strings.Contains(body, `action="/nodes/nas/compose"`) || !strings.Contains(body, `value="`+deploy.DefaultNASData+`"`) {
-		t.Fatalf("the spoke page must offer its compose file:\n%s", body)
+	if !strings.Contains(body, "Run in a container") || !strings.Contains(body, "docs/containers.md") || strings.Contains(body, "/compose") {
+		t.Fatalf("the spoke page must point at the samples:\n%s", body)
 	}
-	if body := r.do(http.MethodGet, "/nodes/vps-1", cookie, nil).Body.String(); strings.Contains(body, "/compose") {
-		t.Fatalf("a server's page offers a compose file:\n%s", body)
+	if body := r.do(http.MethodGet, "/nodes/vps-1", cookie, nil).Body.String(); strings.Contains(body, "Run in a container") {
+		t.Fatalf("a server's page offers to run it in a container:\n%s", body)
 	}
-	w := r.do(http.MethodGet, "/nodes/nas/compose?backend=kernel&data=/srv/meshctl", cookie, nil)
-	if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "application/yaml" ||
-		!strings.Contains(w.Header().Get("Content-Disposition"), `filename="compose.yml"`) ||
-		!strings.Contains(w.Body.String(), "/srv/meshctl:/data") || !strings.Contains(w.Body.String(), "--wg-backend") {
-		t.Fatalf("download = %d %v\n%s", w.Code, w.Header(), w.Body)
-	}
-	if w := r.do(http.MethodGet, "/nodes/vps-1/compose", cookie, nil); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "a server in host mode") {
-		t.Fatalf("a server's compose file = %d\n%s", w.Code, w.Body)
-	}
-	if w := r.do(http.MethodGet, "/nodes/nas/compose?data=/srv/x%0Aprivileged:%20true", cookie, nil); w.Code != http.StatusBadRequest ||
-		!strings.Contains(w.Body.String(), "absolute path") {
-		t.Fatalf("a hostile directory = %d\n%s", w.Code, w.Body)
-	}
-	if w := r.do(http.MethodGet, "/nodes/nas/compose", "", nil); w.Code == http.StatusOK {
-		t.Fatal("the compose file downloaded without a session")
+	if w := r.do(http.MethodGet, "/nodes/nas/compose", cookie, nil); w.Code == http.StatusOK {
+		t.Fatalf("a compose file downloaded:\n%s", w.Body)
 	}
 }
 
 // A container-mode node from the add form (amendment A37): its page names
-// the mode and the subnet, offers the compose file per runtime and leaves
+// the mode and its container network's values (amendment A48) and leaves
 // out what container mode cannot do (an exit); a host-mode node's edit
 // form puts its containers on the mesh and takes them off.
 func TestContainerModePages(t *testing.T) {
@@ -433,26 +419,14 @@ func TestContainerModePages(t *testing.T) {
 		t.Fatalf("add a container-mode spoke = %d\n%s", w.Code, w.Body)
 	}
 	body := r.do(http.MethodGet, "/nodes/box", cookie, nil).Body.String()
-	for _, want := range []string{"container: only its containers are on the mesh", testfix.ContainerSubnet, `name="runtime"`,
-		`<option value="swarm">`, `action="/nodes/box/compose"`, `name="names" value="off"`} {
+	for _, want := range []string{"container: only its containers are on the mesh", testfix.ContainerSubnet, "Containers on the mesh",
+		"<td>meshctl-mesh</td>", "<td>10.77.128.128/25</td>", "<tr><th>Agent address</th><td>10.77.128.2</td></tr>", "MESHCTL_TOKEN", "docs/containers.md"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the container-mode page lacks %q", want)
 		}
 	}
-	if strings.Contains(body, `name="exit"`) || strings.Contains(body, `name="containers"`) {
-		t.Errorf("the container-mode page offers an exit or a containers switch:\n%s", body)
-	}
-	w := r.do(http.MethodGet, "/nodes/box/compose?runtime=podman&backend=auto&data=", cookie, nil)
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "podman network create --internal --disable-dns") ||
-		!strings.Contains(w.Body.String(), "/run/podman/podman.sock:/var/run/docker.sock:ro") {
-		t.Fatalf("podman download = %d\n%s", w.Code, w.Body)
-	}
-	if w := r.do(http.MethodGet, "/nodes/box/compose?names=off", cookie, nil); w.Code != http.StatusOK ||
-		strings.Contains(w.Body.String(), ".sock") || !strings.Contains(w.Body.String(), "--runtime-socket") {
-		t.Fatalf("a download without names = %d\n%s", w.Code, w.Body)
-	}
-	if w := r.do(http.MethodGet, "/nodes/box/compose?runtime=lxc", cookie, nil); w.Code != http.StatusBadRequest {
-		t.Fatalf("an unknown runtime = %d", w.Code)
+	if strings.Contains(body, `name="exit"`) || strings.Contains(body, `name="containers"`) || strings.Contains(body, "/compose") {
+		t.Errorf("the container-mode page offers an exit, a containers switch or a compose file:\n%s", body)
 	}
 	// The DNS page lists what box's runtime reported (amendment A38): how a
 	// published name resolves, and why one is not.
@@ -485,11 +459,17 @@ func TestContainerModePages(t *testing.T) {
 		!strings.Contains(body, `name="containers" checked`) {
 		t.Fatalf("the host-mode page must show its containers:\n%s", body)
 	}
-	// A host-mode node with containers shows its mesh network's commands.
-	if body := r.do(http.MethodGet, "/nodes/pc", cookie, nil).Body.String(); !strings.Contains(body, "Containers on the mesh") ||
-		!strings.Contains(body, "mode=unmanaged") || !strings.Contains(body, "inhibit_ipv4=true") || !strings.Contains(body, "dns: [10.77.129.1]") ||
-		!strings.Contains(body, "A Swarm service") || !strings.Contains(body, "dns: [10.77.0.1, 10.77.0.2]") {
-		t.Fatalf("the host-mode page must show its network's commands:\n%s", body)
+	// A host-mode node with containers shows its network's values: the
+	// agent's bridge, no agent address of its own, the servers for Swarm.
+	body = r.do(http.MethodGet, "/nodes/pc", cookie, nil).Body.String()
+	for _, want := range []string{"Containers on the mesh", "on the bridge meshctl0", "<td>10.77.129.128/25</td>", "<td>10.77.129.1, search mesh, ndots:1",
+		"a Swarm service: 10.77.0.1, 10.77.0.2"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the host-mode page lacks %q", want)
+		}
+	}
+	if strings.Contains(body, "<tr><th>Agent address</th>") {
+		t.Errorf("the host-mode page names an agent address:\n%s", body)
 	}
 	edit := url.Values{"mtu": {"1420"}, "keepalive": {"25"}, "csrf": {csrf}} // containers unticked
 	if w := r.do(http.MethodPost, "/nodes/pc", cookie, edit); w.Code != http.StatusOK || strings.Contains(w.Body.String(), "10.77.129.0/24") {

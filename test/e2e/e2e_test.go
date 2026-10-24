@@ -276,7 +276,7 @@ func (l *lab) meshctl(space string, env []string, args ...string) (string, error
 func (l *lab) data(name string) string { return filepath.Join(l.dir, name) }
 
 func (l *lab) startServer() {
-	args := []string{"server", "--data", l.data("server"), "--listen", "127.0.0.1:8080",
+	args := []string{"control", "--data", l.data("server"), "--listen", "127.0.0.1:8080",
 		"--url", "https://192.0.2.1:8443", "--trusted-proxies", "127.0.0.1/32", "--log-level", "debug"}
 	l.start("server", "a", nil, l.bin, append(args, l.serverArgs...)...)
 	self, err := os.Executable()

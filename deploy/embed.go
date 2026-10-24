@@ -1,12 +1,13 @@
 // Package deploy holds the artifacts meshctl installs or serves: the agent's
-// systemd unit, the install.sh template, the server's compose file and the
-// spokes' generated one (nas.go). Each one states its security posture
-// explicitly instead of inheriting defaults, and the tests pin it
-// (docs/security.md explains every widening).
+// systemd unit, the install.sh template and the control plane's compose and
+// stack files. meshctl generates no container deployment of a node
+// (amendment A48); docs/containers.md has samples, and samples_test.go
+// holds them to the posture the files here state: each one states its
+// security posture explicitly instead of inheriting defaults, and the tests
+// pin it (docs/security.md explains every widening).
 //
-// It imports only internal/validate and yaml.v3, so the server (which serves
-// install.sh and the spokes' compose files) and the agent (which installs
-// the unit) can both use it.
+// It imports only internal/validate, so the control plane (which serves
+// install.sh) and the agent (which installs the unit) can both use it.
 package deploy
 
 import (
@@ -25,8 +26,8 @@ var systemdUnit string
 //go:embed install.sh.tmpl
 var installTemplate string
 
-//go:embed compose.server.yml
-var composeServer string
+//go:embed compose.control.yml
+var composeControl string
 
 // UnitPath is where `meshctl agent join` installs the unit.
 const UnitPath = "/etc/systemd/system/meshctl-agent.service"
@@ -41,8 +42,9 @@ const BinaryPath = "/usr/local/bin/meshctl"
 // outside the binary is ever written into it.
 func SystemdUnit() []byte { return []byte(systemdUnit) }
 
-// ComposeServer returns the server's compose file (spec S12, amendment A13).
-func ComposeServer() []byte { return []byte(composeServer) }
+// ComposeControl returns the control plane's compose file (spec S12,
+// amendments A13, A48).
+func ComposeControl() []byte { return []byte(composeControl) }
 
 // install.sh markers. Each appears exactly once in the template, inside
 // single quotes, and is replaced by a validated value that cannot contain a

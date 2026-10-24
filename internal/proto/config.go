@@ -1,4 +1,4 @@
-// Package proto is the wire contract between the meshctl server and its
+// Package proto is the wire contract between the meshctl control plane and its
 // agents: the desired-state document the server computes per node, the
 // request-signing scheme, the agent API payloads and the SSE framing.
 //

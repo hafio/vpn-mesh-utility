@@ -1,5 +1,5 @@
 #!/bin/sh
-# meshctl installer, served by the meshctl server at /install.sh:
+# meshctl installer, served by the meshctl control plane at /install.sh:
 #
 #   curl -fsSL https://<server>/install.sh | sudo sh -s -- --token <token>
 #

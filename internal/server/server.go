@@ -1,8 +1,9 @@
-// Package server runs `meshctl server`: it locks the data dir, opens the
-// store, brings every node's computed config in line with this binary, and
-// serves the agent API on --listen and the admin API on <data>/admin.sock
-// until the context ends, writing a nightly export on the side. Import (the
-// offline restore) lives here too, because it shares the lock.
+// Package server runs the control plane, `meshctl control`: it locks the
+// data dir, opens the store, brings every node's computed config in line
+// with this binary, and serves the agent API on --listen and the admin API
+// on <data>/admin.sock until the context ends, writing a nightly export on
+// the side. Import (the offline restore) lives here too, because it shares
+// the lock.
 package server
 
 import (
@@ -169,7 +170,7 @@ func Run(ctx context.Context, c Config) error {
 	go exports.Run(exportCtx)
 	failover := &api.Failover{DB: st, Reconciler: rec, Now: c.Now, Log: c.Log, DownAfter: c.HubDownAfter}
 	go failover.Run(exportCtx)
-	c.Log.Info("meshctl server listening", "addr", ln.Addr().String(), "url", origin, "admin_socket", adminPath, "version", c.Version)
+	c.Log.Info("meshctl control plane listening", "addr", ln.Addr().String(), "url", origin, "admin_socket", adminPath, "version", c.Version)
 	if c.Ready != nil {
 		c.Ready(ln.Addr())
 	}
@@ -221,7 +222,7 @@ func ListenAdmin(path string) (net.Listener, error) {
 	}
 	if conn, err := net.DialTimeout("unix", path, time.Second); err == nil {
 		_ = conn.Close()
-		return nil, fmt.Errorf("another meshctl server is already running with this data dir (it answers on %s)", path)
+		return nil, fmt.Errorf("another meshctl control plane is already running with this data dir (it answers on %s)", path)
 	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, fmt.Errorf("remove stale admin socket %s: %w", path, err)

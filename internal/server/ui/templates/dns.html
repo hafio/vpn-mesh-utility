@@ -26,7 +26,7 @@
 </tbody>
 </table>
 {{- else}}
-<p>No container has reported a name yet. A node's containers on its mesh network get their runtime's names (<code>meshctl node compose</code>; not with <code>--no-names</code>).</p>
+<p>No container has reported a name yet. A node's containers on its mesh network get their runtime's names, which its agent reads from the runtime's socket (docs/containers.md; not with <code>MESHCTL_RUNTIME_SOCKET=off</code>).</p>
 {{- end}}
 {{- end}}
 

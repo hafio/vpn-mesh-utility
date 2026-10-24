@@ -20,7 +20,7 @@ const LockFile = "server.lock"
 
 // ErrLocked means another process -- a running server, or another import --
 // holds the data dir.
-var ErrLocked = errors.New("the data dir is in use: stop the meshctl server first (import runs only while it is stopped)")
+var ErrLocked = errors.New("the data dir is in use: stop the meshctl control plane first (import runs only while it is stopped)")
 
 // ImportConfig is what Import needs.
 type ImportConfig struct {

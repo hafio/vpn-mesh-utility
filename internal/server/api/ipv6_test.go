@@ -494,8 +494,9 @@ func TestDefaultIPv6(t *testing.T) {
 	}
 }
 
-// A container network with IPv6 (M8): the compose file and the network
-// commands carry it, a node without it neither.
+// A container network with IPv6 (M8): its values carry the /112 beside
+// the /24 -- the agent at ::2 in container mode, the bridge in host mode --
+// and a node without it none.
 func TestContainerNetworksWithIPv6(t *testing.T) {
 	h := newHarness(t)
 	h.seedServers(t)
@@ -512,17 +513,18 @@ func TestContainerNetworksWithIPv6(t *testing.T) {
 			t.Fatalf("add %s: %v", req.Name, err)
 		}
 	}
-	ipam6 := "--ipv6 --subnet " + testfix.MeshCIDR6 + " --ip-range fd10:77::8000:8000/113 --gateway fd10:77::8000:1"
-	f, err := s.Compose(ctx, "box", ComposeOptions{})
-	if err != nil || !strings.Contains(f.YAML, ipam6) || !strings.Contains(f.YAML, "net.ipv6.conf.all.proxy_ndp") {
-		t.Fatalf("box's compose file = %v\n%s", err, f.YAML)
-	}
-	n, err := s.Network(ctx, "pc", "docker")
-	if text := strings.Join(n.Commands, "\n"); err != nil || !strings.Contains(text, "--ipv6 --subnet "+testfix.MeshCIDR6) ||
-		!strings.Contains(text, "gateway_mode_ipv6=nat-unprotected") {
-		t.Fatalf("pc's network = %v\n%s", err, text)
-	}
-	if n, err := s.Network(ctx, "four", "docker"); err != nil || strings.Contains(strings.Join(n.Commands, "\n"), "--ipv6") {
-		t.Fatalf("a network without IPv6 = %v\n%v", err, n.Commands)
+	for name, want := range map[string][5]string{
+		"box":  {"fd10:77::8000:0/112", testfix.MeshCIDR6, "fd10:77::8000:8000/113", "fd10:77::8000:1", "fd10:77::8000:2"},
+		"pc":   {"fd10:77::8001:0/112", testfix.MeshCIDR6, "fd10:77::8001:8000/113", "fd10:77::8001:1", "fd10:77::8001:1"},
+		"four": {},
+	} {
+		d, err := s.Show(ctx, name)
+		if err != nil || d.Containers == nil {
+			t.Fatalf("show %s = %v, %+v", name, err, d.Containers)
+		}
+		k := d.Containers
+		if got := [5]string{k.Subnet6, k.Network6, k.Range6, k.Bridge6, k.Gateway6}; got != want {
+			t.Errorf("%s's IPv6 = %q, want %q", name, got, want)
+		}
 	}
 }

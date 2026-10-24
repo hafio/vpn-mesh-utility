@@ -19,7 +19,7 @@ meshctl agent install [flags]
 | `--endpoint` |  | servers only: public IPv4:port, when auto-detection would be wrong |
 | `--endpoint6` |  | servers only: public [IPv6]:port, when auto-detection would be wrong |
 | `--name` |  | the node name the token must belong to (a safety check) |
-| `--server` |  | server origin, e.g. https://mesh.example.com |
+| `--server` |  | the control plane's origin, e.g. https://mesh.example.com |
 | `--token` |  | one-time join token (or set MESHCTL_TOKEN, which keeps it out of the process list) |
 
 ## meshctl agent join
@@ -37,7 +37,7 @@ meshctl agent join [flags]
 | `--endpoint6` |  | servers only: public [IPv6]:port, when auto-detection would be wrong |
 | `--name` |  | the node name the token must belong to (a safety check) |
 | `--no-service` | `false` | do not install and start the system service |
-| `--server` |  | server origin, e.g. https://mesh.example.com |
+| `--server` |  | the control plane's origin, e.g. https://mesh.example.com |
 | `--token` |  | one-time join token (or set MESHCTL_TOKEN, which keeps it out of the process list) |
 
 ## meshctl agent run
@@ -71,6 +71,24 @@ meshctl agent uninstall [flags]
 | --- | --- | --- |
 | `--data` | `/var/lib/meshctl` | agent data directory |
 | `--purge` | `false` | also remove the data directory: this node's keys and cached config (it must join again) |
+
+## meshctl control
+
+Run the control plane: the database, the web UI and the agent API (no WireGuard of its own).
+
+```
+meshctl control [flags]
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--data` | `/data` | data directory: the database and the admin socket |
+| `--dist` |  | directory with the binaries and SHA256SUMS served at /dl/ (default $MESHCTL_DIST_DIR) |
+| `--hub-down-after` | `2m0s` | relay failover: a hub silent this long, with no handshake for half as long again, has its pairs relayed by another hub; 0 turns it off |
+| `--listen` | `:8080` | address for the agent API, health check and downloads |
+| `--log-level` | `info` | debug, info, warn or error |
+| `--trusted-proxies` |  | comma-separated CIDRs of reverse proxies whose X-Forwarded-For is believed (default $MESHCTL_TRUSTED_PROXIES) |
+| `--url` |  | public origin agents and install.sh use, e.g. https://mesh.example.com (default $MESHCTL_URL) |
 
 ## meshctl dns
 
@@ -166,21 +184,29 @@ meshctl healthcheck agent [flags]
 | `--data` | `/var/lib/meshctl` | agent data directory |
 | `--socket` |  | local API socket (default: /run/meshctl/agent.sock for the standard data dir, else &lt;data&gt;/agent.sock; \\.\pipe\meshctl-agent on Windows) |
 
-## meshctl healthcheck server
+## meshctl healthcheck control
 
-Exit 0 when the server answers /healthz.
+Exit 0 when the control plane answers /healthz.
 
 ```
-meshctl healthcheck server [flags]
+meshctl healthcheck control [flags]
 ```
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `--addr` | `127.0.0.1:8080` | host:port the server listens on |
+| `--addr` | `127.0.0.1:8080` | host:port the control plane listens on |
+
+## meshctl healthcheck start
+
+Exit 0 when what `meshctl start` runs answers: the image's health check, from MESHCTL_MODE and MESHCTL_PORT or MESHCTL_DATA.
+
+```
+meshctl healthcheck start [flags]
+```
 
 ## meshctl import
 
-Replace the desired state with an export (only while the server is stopped).
+Replace the desired state with an export (only while the control plane is stopped).
 
 ```
 meshctl import <file> [flags]
@@ -192,7 +218,7 @@ meshctl import <file> [flags]
 
 ## meshctl ipv6
 
-Show or set the mesh's IPv6 prefix on the running server: a /48 to /64, auto (a random unique local /64) or off.
+Show or set the mesh's IPv6 prefix on the running control plane: a /48 to /64, auto (a random unique local /64) or off.
 
 ```
 meshctl ipv6 [<prefix>|auto|off] [flags]
@@ -246,23 +272,6 @@ meshctl node add <name> [flags]
 | `--mtu` | `0` | interface MTU (default: the mesh default, 1420) |
 | `--role` |  | server, spoke or phone (required) |
 
-## meshctl node compose
-
-Print the compose file that runs a node's agent in a container (container mode, or a NAS).
-
-```
-meshctl node compose <name> [flags]
-```
-
-| Flag | Default | Meaning |
-| --- | --- | --- |
-| `--data` | `/data` | the server's data directory (holds admin.sock) |
-| `--host-dir` |  | host directory for the agent's keys and cached config, mounted at /data (default: /volume1/docker/meshctl for a NAS, a named volume in container mode) |
-| `--json` | `false` | print the server's answer as JSON |
-| `--no-names` | `false` | container mode: leave out the runtime's socket, so the node's containers get no names on the mesh |
-| `--runtime` |  | container mode: docker (default), podman or swarm (Swarm services attach) |
-| `--wg-backend` |  | WireGuard in the container: auto (container mode's default: the host's module, else /dev/net/tun), userspace (the NAS default; needs /dev/net/tun) or kernel (the host has the wireguard module) |
-
 ## meshctl node disable
 
 Take a node out of every peer list (its keys stay registered).
@@ -301,20 +310,6 @@ meshctl node list [flags]
 | --- | --- | --- |
 | `--data` | `/data` | the server's data directory (holds admin.sock) |
 | `--json` | `false` | print the server's answer as JSON |
-
-## meshctl node network
-
-Print the commands that put a node's containers on the mesh (its mesh network, then a service).
-
-```
-meshctl node network <name> [flags]
-```
-
-| Flag | Default | Meaning |
-| --- | --- | --- |
-| `--data` | `/data` | the server's data directory (holds admin.sock) |
-| `--json` | `false` | print the server's answer as JSON |
-| `--runtime` |  | docker (default), podman or swarm (Swarm services attach) |
 
 ## meshctl node phone
 
@@ -372,7 +367,7 @@ meshctl node set <name> [flags]
 
 ## meshctl node show
 
-Show a node, its computed config and its peers.
+Show a node, its container network's values, its computed config and its peers.
 
 ```
 meshctl node show <name> [flags]
@@ -396,23 +391,31 @@ meshctl node token <name> [flags]
 | `--data` | `/data` | the server's data directory (holds admin.sock) |
 | `--json` | `false` | print the server's answer as JSON |
 
-## meshctl server
+## meshctl start
 
-Run the control-plane server.
+The image's command: run the control plane or a node as MESHCTL_MODE says (a node when unset), a node joining first with a join token it has not used yet.
 
 ```
-meshctl server [flags]
+meshctl start [flags]
 ```
 
-| Flag | Default | Meaning |
-| --- | --- | --- |
-| `--data` | `/data` | data directory: the database and the admin socket |
-| `--dist` |  | directory with the binaries and SHA256SUMS served at /dl/ (default $MESHCTL_DIST_DIR) |
-| `--hub-down-after` | `2m0s` | relay failover: a hub silent this long, with no handshake for half as long again, has its pairs relayed by another hub; 0 turns it off |
-| `--listen` | `:8080` | address for the agent API, health check and downloads |
-| `--log-level` | `info` | debug, info, warn or error |
-| `--trusted-proxies` |  | comma-separated CIDRs of reverse proxies whose X-Forwarded-For is believed (default $MESHCTL_TRUSTED_PROXIES) |
-| `--url` |  | public origin agents and install.sh use, e.g. https://mesh.example.com (default $MESHCTL_URL) |
+| Variable | Mode | Default | Meaning |
+| --- | --- | --- | --- |
+| `MESHCTL_MODE` | both | `node` | what the container runs: control, the control plane (database, web UI, agent API), or node, an agent -- a server or a client as its role on the control plane says |
+| `MESHCTL_URL` | both |  | the control plane's public origin, e.g. https://mesh.example.com: the control plane's own (required), the one a node joins (needed with a join token) |
+| `MESHCTL_DATA` | both | `/data` | the data directory, where the volume is mounted |
+| `MESHCTL_LOG_LEVEL` | both | `info` | `meshctl control --log-level`: debug, info, warn or error |
+| `MESHCTL_PORT` | control | `8080` | the port the control plane listens on, on every address |
+| `MESHCTL_TRUSTED_PROXIES` | control |  | `meshctl control --trusted-proxies`: comma-separated CIDRs of reverse proxies whose X-Forwarded-For is believed (default $MESHCTL_TRUSTED_PROXIES) |
+| `MESHCTL_HUB_DOWN_AFTER` | control | `2m0s` | `meshctl control --hub-down-after`: relay failover: a hub silent this long, with no handshake for half as long again, has its pairs relayed by another hub; 0 turns it off |
+| `MESHCTL_NAME` | node |  | the node's name: a token issued for another node is refused |
+| `MESHCTL_TOKEN` | node |  | the node's join token: start joins with a token it has not used before, then runs; with the same token or none, a node that has joined just runs |
+| `MESHCTL_TOKEN_FILE` | node |  | an absolute path to a file holding the join token, in place of MESHCTL_TOKEN (a compose secret) |
+| `MESHCTL_ENDPOINT` | node |  | server nodes only: the public IPv4:port to join with, when auto-detection would be wrong |
+| `MESHCTL_ENDPOINT6` | node |  | server nodes only: the public [IPv6]:port to join with, when auto-detection would be wrong |
+| `MESHCTL_WG_BACKEND` | node | `auto` | `meshctl agent run --wg-backend`: WireGuard backend: auto (kernel when the module is there), kernel or userspace (wireguard-go on /dev/net/tun) |
+| `MESHCTL_RUNTIME_SOCKET` | node | `auto` | `meshctl agent run --runtime-socket`: the container runtime's API socket the containers' names are read from (GET only): auto (Docker's, then Podman's), off, or a path |
+| `MESHCTL_UI_LISTEN` | node | `127.0.0.1:7443` | `meshctl agent run --ui-listen`: the local UI's loopback address, or off; meshctl ui prints a sign-in link |
 
 ## meshctl status
 
