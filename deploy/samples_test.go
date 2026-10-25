@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -173,7 +174,9 @@ func sampleVolume(v string, node bool) bool {
 	src, dst, _ := strings.Cut(v, ":")
 	switch {
 	case dst == "/data":
-		return !strings.HasPrefix(src, "/") && !strings.HasPrefix(src, ".") || node && filepath.IsAbs(src)
+		// The samples run on Linux hosts: their paths are POSIX on every OS
+		// the test runs on.
+		return !strings.HasPrefix(src, "/") && !strings.HasPrefix(src, ".") || node && path.IsAbs(src)
 	case node && dst == "/var/run/docker.sock:ro":
 		return slices.Contains(sampleSockets, src)
 	}
