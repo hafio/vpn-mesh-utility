@@ -475,7 +475,7 @@ than one a row below it switches between them; `/` opens the first mesh.
 
 | Page | What it does |
 | --- | --- |
-| Meshes | every mesh (open it, rename it, remove one without nodes); add one with its name and, optionally, its IPv4 network, DNS zone and IPv6 prefix (`auto`, `off` or a prefix) |
+| Meshes | (admins) every mesh (open it, rename it, remove one without nodes); add one with its name and, optionally, its IPv4 network, DNS zone and IPv6 prefix (`auto`, `off` or a prefix) |
 | Dashboard | every node with its state (green in sync, amber applying / degraded / late, red silent or rolled back, grey disabled or not joined; a phone green while its tunnel is on, amber when its profile is out of date, grey idle), applied and current version, agent, last heartbeat (a phone's last handshake), handshake age per peer and exit; refreshes every 10 s |
 | Nodes | add a node (the join command is shown once), open one to see its computed config, peers and DNS state, edit it, disable / enable, issue a new token, make a phone's profile (a QR code, shown once), remove it |
 | DNS | the mesh zone: one name per node and the custom records (add, remove); the upstream resolvers |
@@ -483,7 +483,7 @@ than one a row below it switches between them; `/` opens the first mesh.
 | Versions | every config version with what it changed; roll back to one (a new version; a rollback that adds or removes nodes asks for confirmation) |
 | Audit | who changed what, newest first |
 | Settings | the mesh's default MTU, default hub, upstream DNS, DNS zone, extra domains and IPv6 prefix; the mesh CIDR only while the mesh is empty; download its export (`<mesh>-YYYY-MM-DD.yaml`) |
-| Users | add users, disable them, reset their authenticator |
+| Users | (admins) add users, an admin or not; grant and revoke their meshes; make or stop making them admins; disable them, reset their authenticator |
 | Account | change your password (signs you out everywhere) |
 
 Changes made in the UI go through the same path as `meshctl node`: versioned, audited under
@@ -582,7 +582,22 @@ docker exec -it <container> /app/meshctl user passwd admin     # forgotten passw
 docker exec -it <container> /app/meshctl user reset-totp admin # lost phone: enroll again
 ```
 
-`passwd` and `reset-totp` end the user's sessions. Five failed sign-ins from one address lock it
+`passwd` and `reset-totp` end the user's sessions.
+
+Who manages what (amendment A49): an admin manages every mesh, the meshes themselves and the
+users; anyone else manages only the meshes granted to them, and sees no other. A mesh needs no
+user of its own: the control plane's admins (and this host's commands) manage it. The first user
+is always an admin (so `user add` refuses `--mesh` for them), and the control plane keeps at least
+one enabled admin: the last one can neither lose the role nor be disabled.
+
+| Task | Command (or the Users page) |
+| --- | --- |
+| add an admin | `user add boss --admin` |
+| let a user manage a mesh | `user add ops --mesh lab`; more meshes with `user grant ops --mesh home` |
+| take it away | `user revoke ops --mesh lab` |
+| make an admin, or stop being one | `user grant ops --admin`, `user revoke ops --admin` (the last admin stays one) |
+| see who manages what | `user list` |
+ Five failed sign-ins from one address lock it
 out for 15 minutes; twenty for one username within an hour lock the username.
 
 ## 10. Backups

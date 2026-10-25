@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/hafio/vpn-mesh-utility/internal/testfix"
@@ -408,4 +409,68 @@ func TestRecordsStayInTheirMesh(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+// Who manages what (amendment A49): the admin flag, the enabled admins
+// counted, grants (twice is no change, a revoke of none neither) listed by
+// user and by name, and taken with their mesh; a mesh's own audit entries.
+func TestUserAccess(t *testing.T) {
+	s, _, _ := openTest(t)
+	lab := addMesh(t, s, "lab", 1)
+	tx(t, s, func(t2 *MeshTx) error {
+		root, ops, off := User{Username: "root", PasswordHash: "x", Admin: true}, User{Username: "ops", PasswordHash: "x"},
+			User{Username: "old", PasswordHash: "x", Admin: true, Disabled: true}
+		for _, u := range []*User{&root, &ops, &off} {
+			if err := t2.InsertUser(u); err != nil {
+				return err
+			}
+		}
+		if n, err := t2.Admins(); err != nil || n != 1 {
+			t.Errorf("Admins = %d, %v (a disabled admin does not count)", n, err)
+		}
+		if err := t2.SetUserAdmin(ops.ID, true); err != nil {
+			return err
+		}
+		if u, err := t2.UserByID(ops.ID); err != nil || !u.Admin {
+			t.Errorf("ops after SetUserAdmin = %+v, %v", u, err)
+		}
+		if err := t2.SetUserAdmin(ops.ID, false); err != nil {
+			return err
+		}
+		if err := t2.SetUserAdmin(99, true); !errors.Is(err, ErrNotFound) {
+			t.Errorf("SetUserAdmin of no user = %v", err)
+		}
+		for i, m := range []int64{lab.ID, FirstMesh, lab.ID} {
+			if done, err := t2.GrantMesh(ops.ID, m); err != nil || done != (i < 2) {
+				t.Errorf("grant %d of mesh %d = %v, %v", i, m, done, err)
+			}
+		}
+		if ids, err := t2.UserMeshes(ops.ID); err != nil || len(ids) != 2 || ids[0] != FirstMesh || ids[1] != lab.ID {
+			t.Errorf("UserMeshes = %v, %v", ids, err)
+		}
+		if g, err := t2.Grants(); err != nil || len(g) != 1 || strings.Join(g[ops.ID], ",") != "default,lab" {
+			t.Errorf("Grants = %v, %v", g, err)
+		}
+		for i := range 2 {
+			if done, err := t2.RevokeMesh(ops.ID, FirstMesh); err != nil || done != (i == 0) {
+				t.Errorf("revoke %d = %v, %v", i, done, err)
+			}
+		}
+		if err := t2.In(lab.ID).Audit("cli", 0, "user.grant", "ops", nil); err != nil {
+			return err
+		}
+		if err := t2.Tx.Audit("cli", 0, "user.add", "ops", nil); err != nil {
+			return err
+		}
+		if own, err := t2.In(lab.ID).OwnAuditLog(10, 0); err != nil || len(own) != 1 || own[0].Action != "user.grant" {
+			t.Errorf("the lab's own audit = %+v, %v", own, err)
+		}
+		if err := t2.DeleteMesh(lab.ID); err != nil {
+			return err
+		}
+		if ids, err := t2.UserMeshes(ops.ID); err != nil || len(ids) != 0 {
+			t.Errorf("a removed mesh's grant = %v, %v", ids, err)
+		}
+		return nil
+	})
 }

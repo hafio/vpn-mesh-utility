@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -40,7 +41,7 @@ func newRig(t *testing.T) *rig {
 		t.Fatal(err)
 	}
 	r := &rig{svc: New(Config{DB: st, Sealer: sealer, Now: clock.Now, Params: cheap}), st: st, clock: clock}
-	if _, err := r.svc.AddUser(context.Background(), "cli", "admin", password); err != nil {
+	if _, err := r.svc.AddUser(context.Background(), "cli", "admin", password, Access{Admin: true}); err != nil {
 		t.Fatal(err)
 	}
 	return r
@@ -129,6 +130,9 @@ func TestSecondFactorAndReplay(t *testing.T) {
 func TestLoginRefusals(t *testing.T) {
 	r := newRig(t)
 	ctx := context.Background()
+	if _, err := r.svc.AddUser(ctx, "cli", "boss", password, Access{Admin: true}); err != nil {
+		t.Fatal(err)
+	}
 	if err := r.svc.SetDisabled(ctx, "cli", "admin", true); err != nil {
 		t.Fatal(err)
 	}
@@ -297,15 +301,15 @@ func (r *rig) enrollOrLogin(t *testing.T) (string, Session) {
 func TestAccountManagementValidates(t *testing.T) {
 	r := newRig(t)
 	ctx := context.Background()
-	if _, err := r.svc.AddUser(ctx, "cli", "admin", password); !errors.Is(err, ErrUserExists) {
+	if _, err := r.svc.AddUser(ctx, "cli", "admin", password, Access{}); !errors.Is(err, ErrUserExists) {
 		t.Fatalf("duplicate user = %v", err)
 	}
 	for _, name := range []string{"Admin", "a b", "x;rm", ""} {
-		if _, err := r.svc.AddUser(ctx, "cli", name, password); err == nil {
+		if _, err := r.svc.AddUser(ctx, "cli", name, password, Access{}); err == nil {
 			t.Errorf("AddUser(%q) accepted", name)
 		}
 	}
-	if _, err := r.svc.AddUser(ctx, "cli", "ops", "short"); err == nil {
+	if _, err := r.svc.AddUser(ctx, "cli", "ops", "short", Access{}); err == nil {
 		t.Fatal("a short password was accepted")
 	}
 	if err := r.svc.ResetTOTP(ctx, "cli", "ghost"); err == nil || !strings.Contains(err.Error(), "does not exist") {
@@ -432,5 +436,134 @@ func TestChangePassword(t *testing.T) {
 	}
 	if users, err := r.svc.Users(ctx); err != nil || len(users) != 1 {
 		t.Fatalf("Users = %v, %v", users, err)
+	}
+}
+
+// Who manages what (amendment A49): the first user is an admin (one asked
+// for a single mesh is refused), a later one gets what is asked; a session
+// carries its user's role and grants, read afresh each time; the last admin
+// is neither demoted nor disabled; grants name real users and meshes, are
+// audited in their mesh, and a revoke of none is no change.
+func TestAdminsAndGrants(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	cookie, s := r.enrollOrLogin(t)
+	if !s.Admin || len(s.Meshes) != 0 || !s.CanManage(store.FirstMesh) || !s.CanManage(99) {
+		t.Fatalf("the admin's session = %+v", s)
+	}
+	ops, err := r.svc.AddUser(ctx, "cli", "ops", password, Access{})
+	if err != nil || ops.Admin {
+		t.Fatalf("a second user = %+v, %v", ops, err)
+	}
+	if boss, err := r.svc.AddUser(ctx, "cli", "boss", password, Access{Admin: true}); err != nil || !boss.Admin {
+		t.Fatalf("an admin = %+v, %v", boss, err)
+	}
+	if err := r.svc.Grant(ctx, "cli", "ops", "default"); err != nil {
+		t.Fatal(err)
+	}
+	if g, err := r.svc.Grants(ctx); err != nil || strings.Join(g[ops.ID], ",") != "default" {
+		t.Fatalf("Grants = %v, %v", g, err)
+	}
+
+	// The admin is demoted and granted the first mesh: the session follows.
+	if err := r.svc.SetAdmin(ctx, "cli", "admin", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.svc.Grant(ctx, "cli", "admin", "default"); err != nil {
+		t.Fatal(err)
+	}
+	if s, err := r.svc.Authorize(ctx, cookie); err != nil || s.Admin || len(s.Meshes) != 1 || !s.CanManage(store.FirstMesh) || s.CanManage(99) {
+		t.Fatalf("the demoted session = %+v, %v", s, err)
+	}
+	if s, err := r.svc.Current(ctx, cookie); err != nil || s.Admin || len(s.Meshes) != 1 {
+		t.Fatalf("Current = %+v, %v", s, err)
+	}
+	if err := r.svc.SetAdmin(ctx, "cli", "boss", false); !errors.Is(err, ErrLastAdmin) {
+		t.Fatalf("demoting the last admin = %v", err)
+	}
+	if err := r.svc.SetDisabled(ctx, "cli", "boss", true); !errors.Is(err, ErrLastAdmin) {
+		t.Fatalf("disabling the last admin = %v", err)
+	}
+	if err := r.svc.SetAdmin(ctx, "cli", "admin", true); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		user, mesh string
+		want       error
+	}{{"ops", "lab", ErrNoMesh}, {"ghost", "default", ErrNoUser}} {
+		if err := r.svc.Grant(ctx, "cli", c.user, c.mesh); !errors.Is(err, c.want) {
+			t.Errorf("Grant(%s, %s) = %v, want %v", c.user, c.mesh, err, c.want)
+		}
+	}
+	if err := r.svc.Grant(ctx, "cli", "ops", "Lab!"); err == nil {
+		t.Error("a bad mesh name was granted")
+	}
+	if err := r.svc.SetAdmin(ctx, "cli", "Bad Name", true); err == nil {
+		t.Error("a bad user name was made an admin")
+	}
+	for range 2 {
+		if err := r.svc.Revoke(ctx, "cli", "ops", "default"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if g, err := r.svc.Grants(ctx); err != nil || len(g[ops.ID]) != 0 {
+		t.Fatalf("Grants after the revoke = %v, %v", g, err)
+	}
+	var own, all []store.AuditEntry
+	if err := r.st.MeshTx(ctx, store.FirstMesh, func(tx *store.MeshTx) error {
+		if own, err = tx.OwnAuditLog(20, 0); err != nil {
+			return err
+		}
+		all, err = tx.AuditLog(20, 0)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(own) != 3 || own[0].Action != "user.revoke" || own[1].Action != "user.grant" || own[2].Action != "user.grant" {
+		t.Errorf("the mesh's own audit = %+v", own)
+	}
+	if !slices.ContainsFunc(all, func(e store.AuditEntry) bool { return e.Action == "user.unadmin" && e.Target == "admin" }) {
+		t.Errorf("no user.unadmin among %+v", all)
+	}
+
+	// The first user is an admin: one asked for a mesh is not added.
+	for _, c := range []struct {
+		a     Access
+		admin bool
+		mesh  string
+		err   error
+	}{
+		{Access{}, true, "", nil},
+		{Access{Admin: true}, true, "", nil},
+		{Access{Mesh: "default"}, false, "", ErrFirstAdmin},
+	} {
+		st, err := store.Open(ctx, filepath.Join(t.TempDir(), "mesh.db"), store.Options{Now: r.clock.Now})
+		if err != nil {
+			t.Fatal(err)
+		}
+		svc := New(Config{DB: st, Now: r.clock.Now, Params: cheap})
+		u, err := svc.AddUser(ctx, "cli", "first", password, c.a)
+		g, gerr := svc.Grants(ctx)
+		users, uerr := svc.Users(ctx)
+		_ = st.Close()
+		if !errors.Is(err, c.err) || gerr != nil || uerr != nil || u.Admin != c.admin || strings.Join(g[u.ID], ",") != c.mesh ||
+			(c.err != nil) != (len(users) == 0) {
+			t.Errorf("AddUser(%+v) on an empty control plane = %+v, %v; grants %v, users %d", c.a, u, err, g, len(users))
+		}
+	}
+	if _, err := r.svc.AddUser(ctx, "cli", "both", password, Access{Admin: true, Mesh: "default"}); err == nil || !strings.Contains(err.Error(), "not both") {
+		t.Fatalf("an admin for one mesh = %v", err)
+	}
+	if _, err := r.svc.AddUser(ctx, "cli", "bad", password, Access{Mesh: "Lab!"}); err == nil {
+		t.Fatal("a bad mesh name was granted")
+	}
+
+	// A later user added for a mesh manages it alone.
+	if _, err := r.svc.AddUser(ctx, "cli", "lost", password, Access{Mesh: "none"}); !errors.Is(err, ErrNoMesh) {
+		t.Fatalf("a user for no such mesh = %v", err)
+	}
+	carol, err := r.svc.AddUser(ctx, "cli", "carol", password, Access{Mesh: "default"})
+	if g, gerr := r.svc.Grants(ctx); err != nil || gerr != nil || carol.Admin || strings.Join(g[carol.ID], ",") != "default" {
+		t.Fatalf("a user for one mesh = %+v, %v; grants %v, %v", carol, err, g, gerr)
 	}
 }

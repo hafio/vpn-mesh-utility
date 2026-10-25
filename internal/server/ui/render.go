@@ -46,6 +46,8 @@ type page struct {
 	Mesh   string
 	Base   string
 	Meshes []string
+	// Admin shows the control plane's own pages in the navigation.
+	Admin bool
 }
 
 // renderer holds one parsed template set per page: layout.html, the shared
@@ -118,7 +120,7 @@ func writeHTML(w http.ResponseWriter, status int, body []byte) {
 // show renders a page for a signed-in user.
 func (u *ui) show(w http.ResponseWriter, r *http.Request, s auth.Session, status int, name, nav, title string, p page) {
 	p.Title, p.Nav, p.User, p.CSRF, p.Version = title, nav, s.Username, s.CSRF, u.Version
-	p.Mesh, p.Base = u.mesh.Name, u.base()
+	p.Mesh, p.Base, p.Admin = u.mesh.Name, u.base(), s.Admin
 	for _, m := range u.meshes {
 		p.Meshes = append(p.Meshes, m.Name)
 	}
@@ -161,9 +163,9 @@ func message(err error) (int, string) {
 	case errors.Is(err, auth.ErrBadCode), errors.Is(err, store.ErrTOTPReplay), errors.Is(err, auth.ErrWrongPassword),
 		errors.Is(err, auth.ErrNoEnrollment), errors.Is(err, auth.ErrHasTOTP):
 		return http.StatusBadRequest, err.Error()
-	case errors.Is(err, auth.ErrUserExists):
+	case errors.Is(err, auth.ErrUserExists), errors.Is(err, auth.ErrLastAdmin):
 		return http.StatusConflict, err.Error()
-	case errors.Is(err, auth.ErrNoUser):
+	case errors.Is(err, auth.ErrNoUser), errors.Is(err, auth.ErrNoMesh):
 		return http.StatusNotFound, err.Error()
 	}
 	return api.ErrorMessage(err)

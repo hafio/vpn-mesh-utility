@@ -153,7 +153,8 @@ func (s *Service) create(ctx context.Context, u store.User, now time.Time) (stri
 }
 
 func session(row store.Session, u store.User) Session {
-	return Session{UserID: u.ID, Username: u.Username, CSRF: row.CSRF, TOTPOK: row.TOTPOK, ExpiresAt: time.Unix(row.ExpiresAt, 0)}
+	return Session{UserID: u.ID, Username: u.Username, CSRF: row.CSRF, TOTPOK: row.TOTPOK, ExpiresAt: time.Unix(row.ExpiresAt, 0),
+		Admin: u.Admin}
 }
 
 // load reads a live session and its user inside tx.
@@ -342,7 +343,8 @@ func (s *Service) Current(ctx context.Context, cookie string) (Session, error) {
 			return err
 		}
 		out = session(row, u)
-		return nil
+		out.Meshes, err = tx.UserMeshes(u.ID)
+		return err
 	})
 	return out, err
 }
@@ -377,7 +379,8 @@ func (s *Service) Authorize(ctx context.Context, cookie string) (Session, error)
 			return err
 		}
 		out = session(row, u)
-		return nil
+		out.Meshes, err = tx.UserMeshes(u.ID)
+		return err
 	})
 	return out, err
 }
@@ -390,9 +393,20 @@ func (s *Service) Logout(ctx context.Context, cookie string) error {
 	return s.db.Tx(ctx, func(tx *store.Tx) error { return tx.DeleteSession(hashCookie(cookie)) })
 }
 
-// AddUser creates an account; the user enrolls an authenticator at their
-// first sign-in.
-func (s *Service) AddUser(ctx context.Context, actor, username, password string) (store.User, error) {
+// Access is what a new user may manage (amendment A49): everything (Admin),
+// or one mesh, by name, granted at once.
+type Access struct {
+	Admin bool
+	Mesh  string
+}
+
+// AddUser creates an account with its access; the user enrolls an
+// authenticator at their first sign-in. The first user (the control plane
+// has no enabled admin yet) is always an admin, so one asked to manage a
+// single mesh is refused with ErrFirstAdmin. A mesh needs no user of its
+// own: the admins, or the control plane's host, manage it. The answer's
+// Admin says which the user became.
+func (s *Service) AddUser(ctx context.Context, actor, username, password string, a Access) (store.User, error) {
 	name, err := validate.Username("username", username)
 	if err != nil {
 		return store.User{}, err
@@ -400,20 +414,167 @@ func (s *Service) AddUser(ctx context.Context, actor, username, password string)
 	if err := CheckPassword(password); err != nil {
 		return store.User{}, err
 	}
-	u := store.User{Username: name, PasswordHash: HashPassword(password, s.params)}
+	if a.Mesh != "" {
+		if a.Admin {
+			return store.User{}, &validate.Error{Field: "mesh", Reason: "an admin manages every mesh; give the admin role or a mesh, not both"}
+		}
+		if _, err := validate.Name("mesh", a.Mesh); err != nil {
+			return store.User{}, err
+		}
+	}
+	u := store.User{Username: name, PasswordHash: HashPassword(password, s.params), Admin: a.Admin}
 	err = s.db.Tx(ctx, func(tx *store.Tx) error {
+		n, err := tx.Admins()
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			if a.Mesh != "" {
+				return ErrFirstAdmin
+			}
+			u.Admin = true
+		}
+		var m store.Mesh
+		if a.Mesh != "" {
+			if m, err = tx.MeshByName(a.Mesh); errors.Is(err, store.ErrNotFound) {
+				return fmt.Errorf("%w: %q", ErrNoMesh, a.Mesh)
+			} else if err != nil {
+				return err
+			}
+		}
 		if err := tx.InsertUser(&u); err != nil {
 			if errors.Is(err, store.ErrConflict) {
 				return fmt.Errorf("%w: %q", ErrUserExists, name)
 			}
 			return err
 		}
-		return tx.Audit(actor, 0, "user.add", name, nil)
+		if err := tx.Audit(actor, 0, "user.add", name, map[string]any{"admin": u.Admin}); err != nil {
+			return err
+		}
+		if m.ID == 0 {
+			return nil
+		}
+		if _, err := tx.GrantMesh(u.ID, m.ID); err != nil {
+			return err
+		}
+		return tx.In(m.ID).Audit(actor, 0, "user.grant", name, map[string]any{"mesh": m.Name})
 	})
 	if err != nil {
 		return store.User{}, err
 	}
 	return u, nil
+}
+
+// ErrFirstAdmin refuses a first user who would manage one mesh: the first
+// user is the control plane's admin.
+var ErrFirstAdmin = errors.New("the control plane has no admin yet and its first user becomes one, who manages every mesh; add them without a mesh (`meshctl user add <name>`)")
+
+// ErrLastAdmin refuses a change that would leave the control plane without
+// an enabled admin.
+var ErrLastAdmin = errors.New("the control plane needs at least one admin; make another user an admin first (`meshctl user grant <name> --admin`)")
+
+// keepAdmin refuses to take away the last enabled admin.
+func keepAdmin(tx *store.Tx) error {
+	n, err := tx.Admins()
+	if err != nil {
+		return err
+	}
+	if n <= 1 {
+		return ErrLastAdmin
+	}
+	return nil
+}
+
+// SetAdmin makes a user an admin or takes it away; the last enabled admin
+// stays one. It applies at the user's next request.
+func (s *Service) SetAdmin(ctx context.Context, actor, username string, admin bool) error {
+	action := "user.admin"
+	if !admin {
+		action = "user.unadmin"
+	}
+	return s.access(ctx, actor, username, func(tx *store.Tx, u store.User) (string, any, error) {
+		if !admin && u.Admin && !u.Disabled {
+			if err := keepAdmin(tx); err != nil {
+				return "", nil, err
+			}
+		}
+		return action, nil, tx.SetUserAdmin(u.ID, admin)
+	})
+}
+
+// Grant lets a user manage a mesh; Revoke takes it away. Both are audited in
+// the mesh when they change something, and apply at the user's next
+// request.
+func (s *Service) Grant(ctx context.Context, actor, username, mesh string) error {
+	return s.grant(ctx, actor, username, mesh, true)
+}
+
+// Revoke takes a mesh away from a user; see Grant.
+func (s *Service) Revoke(ctx context.Context, actor, username, mesh string) error {
+	return s.grant(ctx, actor, username, mesh, false)
+}
+
+// ErrNoMesh means a grant names a mesh the control plane does not have.
+var ErrNoMesh = errors.New("this control plane has no such mesh; `meshctl mesh list` shows its meshes")
+
+func (s *Service) grant(ctx context.Context, actor, username, mesh string, on bool) error {
+	if _, err := validate.Name("mesh", mesh); err != nil {
+		return err
+	}
+	return s.access(ctx, actor, username, func(tx *store.Tx, u store.User) (string, any, error) {
+		m, err := tx.MeshByName(mesh)
+		if errors.Is(err, store.ErrNotFound) {
+			return "", nil, fmt.Errorf("%w: %q", ErrNoMesh, mesh)
+		}
+		if err != nil {
+			return "", nil, err
+		}
+		var done bool
+		if on {
+			done, err = tx.GrantMesh(u.ID, m.ID)
+		} else {
+			done, err = tx.RevokeMesh(u.ID, m.ID)
+		}
+		if err != nil || !done {
+			return "", nil, err
+		}
+		action := map[bool]string{true: "user.grant", false: "user.revoke"}[on]
+		return "", nil, tx.In(m.ID).Audit(actor, 0, action, u.Username, map[string]any{"mesh": m.Name})
+	})
+}
+
+// access changes what a user may manage. change returns the audit action
+// to record as the control plane's, or "" when it audited on its own.
+func (s *Service) access(ctx context.Context, actor, username string, change func(*store.Tx, store.User) (string, any, error)) error {
+	name, err := validate.Username("username", username)
+	if err != nil {
+		return err
+	}
+	return s.db.Tx(ctx, func(tx *store.Tx) error {
+		u, err := tx.UserByName(name)
+		if errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("%w: %q", ErrNoUser, name)
+		}
+		if err != nil {
+			return err
+		}
+		action, detail, err := change(tx, u)
+		if err != nil || action == "" {
+			return err
+		}
+		return tx.Audit(actor, 0, action, name, detail)
+	})
+}
+
+// Grants are the names of the meshes granted to each user, by user id.
+func (s *Service) Grants(ctx context.Context) (map[int64][]string, error) {
+	var out map[int64][]string
+	err := s.db.Tx(ctx, func(tx *store.Tx) error {
+		var err error
+		out, err = tx.Grants()
+		return err
+	})
+	return out, err
 }
 
 // ChangePassword replaces the signed-in user's password after checking the
@@ -470,12 +631,18 @@ func (s *Service) ResetTOTP(ctx context.Context, actor, username string) error {
 }
 
 // SetDisabled disables or enables a user; disabling ends their sessions.
+// The last enabled admin stays enabled.
 func (s *Service) SetDisabled(ctx context.Context, actor, username string, disabled bool) error {
 	action := "user.enable"
 	if disabled {
 		action = "user.disable"
 	}
 	return s.updateUser(ctx, actor, username, action, func(tx *store.Tx, u store.User) error {
+		if disabled && u.Admin && !u.Disabled {
+			if err := keepAdmin(tx); err != nil {
+				return err
+			}
+		}
 		return tx.SetUserDisabled(u.ID, disabled)
 	})
 }

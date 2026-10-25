@@ -85,7 +85,7 @@ func newRig(t *testing.T) *rig {
 		t.Fatal(err)
 	}
 	svc := auth.New(auth.Config{DB: st, Sealer: sealer, Now: clock.Now, Params: auth.Params{Time: 1, MemoryKiB: 64, Threads: 1}})
-	if _, err := svc.AddUser(context.Background(), "cli", "admin", password); err != nil {
+	if _, err := svc.AddUser(context.Background(), "cli", "admin", password, auth.Access{Admin: true}); err != nil {
 		t.Fatal(err)
 	}
 	r := &rig{t: t, st: st, svc: svc, clock: clock}
@@ -141,11 +141,17 @@ func code(t *testing.T, secret string, at time.Time) string {
 	return c
 }
 
-// signIn walks the first sign-in (password, then enrolment) through the UI
-// and returns the full session's cookie and CSRF token.
+// signIn walks the admin's first sign-in (password, then enrolment) through
+// the UI and returns the full session's cookie and CSRF token.
 func (r *rig) signIn() (string, string) {
 	r.t.Helper()
-	w := r.do(http.MethodPost, "/login", "", url.Values{"username": {"admin"}, "password": {password}})
+	return r.signInAs("admin")
+}
+
+// signInAs is signIn for any user with the rig's password.
+func (r *rig) signInAs(name string) (string, string) {
+	r.t.Helper()
+	w := r.do(http.MethodPost, "/login", "", url.Values{"username": {name}, "password": {password}})
 	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/login/enroll" {
 		r.t.Fatalf("POST /login = %d %s\n%s", w.Code, w.Header().Get("Location"), w.Body)
 	}
@@ -165,7 +171,9 @@ func (r *rig) signIn() (string, string) {
 	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/" {
 		r.t.Fatalf("POST /login/enroll = %d %s\n%s", w.Code, w.Header().Get("Location"), w.Body)
 	}
-	r.secret = key.Secret()
+	if name == "admin" {
+		r.secret = key.Secret()
+	}
 	return cookie, s.CSRF
 }
 
@@ -720,7 +728,7 @@ func TestStoreFailuresAreLoggedNotShown(t *testing.T) {
 		{http.MethodGet, "/m/default/firewall/zones"}, {http.MethodGet, "/m/default/firewall/objects"}, {http.MethodGet, "/m/default/firewall/reach"},
 		{http.MethodPost, "/m/default/firewall/policies/allow-all/remove"}, {http.MethodPost, "/m/default/firewall/zones"},
 		{http.MethodPost, "/m/default/nodes/vps-1/phone"}, {http.MethodPost, "/m/default/firewall/timezone"}, {http.MethodGet, "/meshes"},
-		{http.MethodGet, "/m/default/settings?lookup=fails"},
+		{http.MethodGet, "/m/default/settings?lookup=fails"}, {http.MethodGet, "/users"},
 	} {
 		var form url.Values
 		if c.method == http.MethodPost {
@@ -1040,7 +1048,8 @@ func TestPageGoldens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := page{User: "admin", CSRF: "csrf-token", Version: "v1.0.0", Mesh: "default", Base: "/m/default", Meshes: []string{"default", "lab"}}
+	base := page{User: "admin", CSRF: "csrf-token", Version: "v1.0.0", Mesh: "default", Base: "/m/default", Meshes: []string{"default", "lab"},
+		Admin: true}
 	rows := []nodeRow{
 		{Name: "vps-1", Role: "server", MeshIP: "10.77.0.1", Endpoint: "203.0.113.10:51820", Class: "ok", State: "in sync",
 			Versions: "v4 / v4", Agent: "v1.0.0", Seen: "12s ago", Peers: []peerAge{{Name: "vps-2", Age: "40s ago"}}},
@@ -1119,7 +1128,7 @@ func TestEveryPageRenders(t *testing.T) {
 		"nodes": nodesData{}, "enrollment": enrollmentData{Node: "vps-1", Token: "t"},
 		"node": nodeData{Node: api.NodeInfo{Rollback: &proto.Rollback{From: 5, To: 4, Reason: "no answer from the server"}}}, "remove": api.NodeInfo{Name: "x"},
 		"versions": versionsData{}, "version": versionData{Current: true}, "audit": auditData{}, "settings": settingsData{},
-		"users": []userRow{{Name: "ops"}, {Name: "admin", Self: true}}, "account": nil, "error": nil, "meshes": meshesData{Meshes: []api.MeshInfo{{Name: "default"}}},
+		"users": usersData{Rows: []userRow{{Name: "ops"}, {Name: "admin", Self: true}}, Meshes: []string{"default"}}, "account": nil, "error": nil, "meshes": meshesData{Meshes: []api.MeshInfo{{Name: "default"}}},
 		"dns": dnsData{}, "firewall": fwPage{Tabs: fwTabs, View: policiesView{Policies: []policyRow{{Pos: 1, Name: "p", First: true}}}},
 		"policy": fwPage{View: policyView{}}, "zones": fwPage{View: zonesView{Zones: []zoneRow{{Name: "z"}}}},
 		"zone": fwPage{View: zoneView{Inbound: []ruleRow{{N: 1, Text: "x", System: true}}}}, "objects": fwPage{View: objectsView{}},

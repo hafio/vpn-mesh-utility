@@ -1,15 +1,26 @@
 {{define "content"}}
 <table>
-<thead><tr><th>User</th><th>Authenticator</th><th>State</th><th>Created</th><th></th></tr></thead>
+<thead><tr><th>User</th><th>Manages</th><th>Authenticator</th><th>State</th><th>Created</th><th></th></tr></thead>
 <tbody>
-{{- range .Data}}
+{{- range .Data.Rows}}
+{{- $name := .Name}}
 <tr>
 <td>{{.Name}}{{if .Self}} (you){{end}}</td>
+<td>{{if .Admin}}everything (admin){{else if .Meshes}}{{range $i, $m := .Meshes}}{{if $i}}, {{end}}{{$m}}{{end}}{{else}}no mesh yet{{end}}</td>
 <td>{{if .TOTP}}enrolled{{else}}at next sign-in{{end}}</td>
 <td>{{if .Disabled}}disabled{{else}}active{{end}}</td>
 <td>{{.Created}}</td>
 <td class="actions">
+{{- if not .Admin}}
+{{- if .Grantable}}
+<form method="post" action="/users/{{$name}}/grant"><input type="hidden" name="csrf" value="{{$.CSRF}}"><select name="mesh" aria-label="Mesh to grant {{$name}}">{{range .Grantable}}<option>{{.}}</option>{{end}}</select><button type="submit">Grant</button></form>
+{{- end}}
+{{- if .Meshes}}
+<form method="post" action="/users/{{$name}}/revoke"><input type="hidden" name="csrf" value="{{$.CSRF}}"><select name="mesh" aria-label="Mesh to take away from {{$name}}">{{range .Meshes}}<option>{{.}}</option>{{end}}</select><button type="submit">Revoke</button></form>
+{{- end}}
+{{- end}}
 {{- if not .Self}}
+<form method="post" action="/users/{{.Name}}/admin"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="admin" value="{{if .Admin}}off{{else}}on{{end}}"><button type="submit">{{if .Admin}}Remove admin{{else}}Make admin{{end}}</button></form>
 {{- if .Disabled}}
 <form method="post" action="/users/{{.Name}}/enable"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit">Enable</button></form>
 {{- else}}
@@ -22,12 +33,15 @@
 {{- end}}
 </tbody>
 </table>
+<p class="hint">An admin manages every mesh, the meshes themselves and the users; anyone else manages, fully, the meshes granted to them, and nothing else. A user added for a mesh is no admin: an admin, or the control plane's host, manages the rest.</p>
 <h2>Add a user</h2>
 <form method="post" action="/users" class="grid">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
 <label>Username <input name="username" required autocomplete="off"></label>
 <label>Password <input name="password" type="password" minlength="12" required autocomplete="new-password"></label>
 <label>Repeat <input name="password2" type="password" minlength="12" required autocomplete="new-password"></label>
+<label>Manages <select name="mesh"><option value="">no mesh yet</option>{{range .Data.Meshes}}<option>{{.}}</option>{{end}}</select></label>
+<label><input type="checkbox" name="admin"> Admin (every mesh, the meshes and the users)</label>
 <button type="submit">Add user</button>
 </form>
 {{end}}

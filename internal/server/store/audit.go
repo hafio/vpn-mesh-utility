@@ -59,6 +59,12 @@ func (t *MeshTx) AuditLog(limit int, before int64) ([]AuditEntry, error) {
 	return t.auditLog(`id < ? AND (mesh_id = ? OR mesh_id IS NULL)`, before, t.mesh, limit)
 }
 
+// OwnAuditLog lists the mesh's entries alone, newest first: what a user who
+// manages only this mesh sees (amendment A49).
+func (t *MeshTx) OwnAuditLog(limit int, before int64) ([]AuditEntry, error) {
+	return t.auditLog(`id < ? AND mesh_id = ?`, before, t.mesh, limit)
+}
+
 // auditLog reads entries matching where, whose first argument is before;
 // the last of args is the limit.
 func (t *Tx) auditLog(where string, before int64, args ...any) ([]AuditEntry, error) {

@@ -545,6 +545,34 @@ meshctl user add <name> [flags]
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
+| `--admin` | `false` | an admin manages every mesh, the meshes themselves and the users (the first user always is one) |
+| `--data` | `/data` | the server's data directory |
+| `--mesh` |  | the mesh the user manages, alone (not for the first user, an admin; meshctl user grant adds more) |
+
+## meshctl user grant
+
+Let a user manage a mesh (--mesh), or make them an admin (--admin).
+
+```
+meshctl user grant <name> [flags]
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--admin` | `false` | the admin role instead of a mesh |
+| `--data` | `/data` | the server's data directory |
+| `--mesh` |  | the mesh to grant or take away |
+
+## meshctl user list
+
+List the web UI users, the admins and the meshes granted to each.
+
+```
+meshctl user list [flags]
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
 | `--data` | `/data` | the server's data directory |
 
 ## meshctl user passwd
@@ -570,6 +598,20 @@ meshctl user reset-totp <name> [flags]
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--data` | `/data` | the server's data directory |
+
+## meshctl user revoke
+
+Take a mesh away from a user (--mesh), or their admin role (--admin).
+
+```
+meshctl user revoke <name> [flags]
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--admin` | `false` | the admin role instead of a mesh |
+| `--data` | `/data` | the server's data directory |
+| `--mesh` |  | the mesh to grant or take away |
 
 ## meshctl version
 

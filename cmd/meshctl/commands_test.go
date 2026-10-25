@@ -536,6 +536,89 @@ func TestUserCommands(t *testing.T) {
 	}
 }
 
+// user add --admin|--mesh, grant, revoke and list (amendment A49): the first
+// user is an admin (never one for a single mesh), the last admin stays one,
+// and grant and revoke take a mesh or the admin role, not both.
+func TestUserAccessCommands(t *testing.T) {
+	data := shortDir(t)
+	e, _, _ := testEnv(nil)
+	run := func(want int, args ...string) string {
+		t.Helper()
+		e.password = passwords("correct horse battery", "correct horse battery")
+		code, out, errOut := runWith(e, append(args, "--data", data)...)
+		if code != want {
+			t.Fatalf("meshctl %s = %d, want %d\n%s%s", strings.Join(args, " "), code, want, out, errOut)
+		}
+		return out + errOut
+	}
+	if out := run(exitOK, "user", "add", "root"); !strings.Contains(out, "added user root as an admin") {
+		t.Fatalf("the first user:\n%s", out)
+	}
+	if out := run(exitOK, "user", "add", "ops"); !strings.Contains(out, "meshctl user grant ops --mesh <mesh>") {
+		t.Fatalf("a second user:\n%s", out)
+	}
+	if out := run(exitOK, "user", "add", "boss", "--admin"); !strings.Contains(out, "added user boss as an admin") {
+		t.Fatalf("an admin:\n%s", out)
+	}
+	if out := run(exitOK, "user", "grant", "ops", "--mesh", "default"); !strings.Contains(out, "ops manages mesh default") {
+		t.Fatalf("grant:\n%s", out)
+	}
+	for _, c := range []struct {
+		want int
+		args []string
+		says string
+	}{
+		{exitFailure, []string{"user", "grant", "ops", "--mesh", "none"}, "no such mesh"},
+		{exitFailure, []string{"user", "grant", "ghost", "--mesh", "default"}, "does not exist"},
+		{exitUsage, []string{"user", "grant", "ops"}, "--mesh <mesh> or --admin"},
+		{exitUsage, []string{"user", "revoke", "ops", "--mesh", "default", "--admin"}, "--mesh <mesh> or --admin"},
+	} {
+		if out := run(c.want, c.args...); !strings.Contains(out, c.says) {
+			t.Errorf("meshctl %s:\n%s", strings.Join(c.args, " "), out)
+		}
+	}
+	out := run(exitOK, "user", "list")
+	for _, want := range []string{"NAME  MANAGES", "boss  everything (admin)", "ops   default", "root  everything (admin)", "at next sign-in"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("user list lacks %q:\n%s", want, out)
+		}
+	}
+	if out := run(exitOK, "user", "revoke", "ops", "--mesh", "default"); !strings.Contains(out, "ops no longer manages mesh default") {
+		t.Fatalf("revoke:\n%s", out)
+	}
+	if out := run(exitOK, "user", "revoke", "root", "--admin"); !strings.Contains(out, "root is no longer an admin") {
+		t.Fatalf("revoke --admin:\n%s", out)
+	}
+	if out := run(exitFailure, "user", "revoke", "boss", "--admin"); !strings.Contains(out, "at least one admin") {
+		t.Fatalf("the last admin:\n%s", out)
+	}
+	if out := run(exitOK, "user", "grant", "ops", "--admin"); !strings.Contains(out, "ops is now an admin") {
+		t.Fatalf("grant --admin:\n%s", out)
+	}
+	if out := run(exitOK, "user", "list"); !strings.Contains(out, "ops   everything (admin)") || !strings.Contains(out, "root  -") {
+		t.Fatalf("user list after the changes:\n%s", out)
+	}
+	if out := run(exitUsage, "user", "add", "x", "--admin", "--mesh", "default"); !strings.Contains(out, "not both") {
+		t.Fatalf("an admin for one mesh:\n%s", out)
+	}
+
+	if out := run(exitOK, "user", "add", "lab", "--mesh", "default"); !strings.Contains(out, "added user lab, who manages mesh default") {
+		t.Fatalf("a user for one mesh:\n%s", out)
+	}
+	if out := run(exitOK, "user", "list"); !strings.Contains(out, "lab   default") {
+		t.Fatalf("user list:\n%s", out)
+	}
+
+	// The first user is an admin, never one for a single mesh.
+	data = shortDir(t)
+	if out := run(exitFailure, "user", "add", "lab", "--mesh", "default"); !strings.Contains(out, "first user becomes one") {
+		t.Fatalf("a first user for one mesh:\n%s", out)
+	}
+	if out := run(exitOK, "user", "list"); strings.Contains(out, "lab") {
+		t.Fatalf("user list after the refusal:\n%s", out)
+	}
+}
+
 func TestImportCommand(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("import takes the Linux-only data dir lock")

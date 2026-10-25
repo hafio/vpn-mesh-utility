@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"net/http"
 	"regexp"
+	"slices"
 	"time"
 )
 
@@ -40,7 +41,16 @@ type Session struct {
 	// TOTPOK is false until the second factor passed.
 	TOTPOK    bool
 	ExpiresAt time.Time
+	// Admin and Meshes are what the user may manage (amendment A49): an
+	// admin everything, any other user the meshes granted to them, by id.
+	// Current and Authorize read both with the session, so a change applies
+	// at the user's next request.
+	Admin  bool
+	Meshes []int64
 }
+
+// CanManage reports whether the session's user may manage a mesh.
+func (s Session) CanManage(mesh int64) bool { return s.Admin || slices.Contains(s.Meshes, mesh) }
 
 // CheckCSRF reports whether r carries the session's CSRF token, compared in
 // constant time.

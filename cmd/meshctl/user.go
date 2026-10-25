@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"flag"
@@ -8,6 +9,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
+	"text/tabwriter"
 
 	"golang.org/x/term"
 
@@ -22,10 +25,13 @@ import (
 
 func userCommands() []command {
 	return []command{
-		{name: "add", args: "<name>", summary: "create a web UI user; they enroll an authenticator at their first sign-in", setup: setupUser(addUser)},
+		{name: "add", args: "<name>", summary: "create a web UI user; they enroll an authenticator at their first sign-in", setup: setupUserAdd},
+		{name: "grant", args: "<name>", summary: "let a user manage a mesh (--mesh), or make them an admin (--admin)", setup: setupUserGrant(true)},
+		{name: "list", summary: "list the web UI users, the admins and the meshes granted to each", setup: setupUserList},
 		{name: "passwd", args: "<name>", summary: "set a user's password and end their sessions", setup: setupUser(passwdUser)},
 		{name: "reset-totp", args: "<name>", summary: "remove a user's authenticator (they enroll a new one at their next sign-in) and end their sessions",
 			setup: setupUser(resetTOTP)},
+		{name: "revoke", args: "<name>", summary: "take a mesh away from a user (--mesh), or their admin role (--admin)", setup: setupUserGrant(false)},
 	}
 }
 
@@ -35,30 +41,127 @@ type userAction func(ctx context.Context, e *env, svc *auth.Service, name string
 func setupUser(act userAction) func(fs *flag.FlagSet, e *env) action {
 	return func(fs *flag.FlagSet, e *env) action {
 		data := fs.String("data", "/data", "the server's data directory")
+		return userRun(data, e, act)
+	}
+}
+
+// userRun opens the database and runs act on the one positional name.
+func userRun(data *string, e *env, act userAction) action {
+	return func(ctx context.Context, args []string) error {
+		if err := wantArgs(args, 1, "<name>"); err != nil {
+			return err
+		}
+		st, err := store.Open(ctx, filepath.Join(*data, server.DBFile), store.Options{Now: e.now})
+		if err != nil {
+			return err
+		}
+		defer st.Close()
+		return act(ctx, e, auth.New(auth.Config{DB: st, Now: e.now}), args[0])
+	}
+}
+
+// setupUserAdd creates a user (amendment A49): an admin with --admin, one
+// who manages a mesh with --mesh. The first user is always an admin.
+func setupUserAdd(fs *flag.FlagSet, e *env) action {
+	data := fs.String("data", "/data", "the server's data directory")
+	admin := fs.Bool("admin", false, "an admin manages every mesh, the meshes themselves and the users (the first user always is one)")
+	mesh := fs.String("mesh", "", "the mesh the user manages, alone (not for the first user, an admin; meshctl user grant adds more)")
+	run := userRun(data, e, func(ctx context.Context, e *env, svc *auth.Service, name string) error {
+		pw, err := newPassword(e, name)
+		if err != nil {
+			return err
+		}
+		u, err := svc.AddUser(ctx, actorCLI, name, pw, auth.Access{Admin: *admin, Mesh: *mesh})
+		if err != nil {
+			return err
+		}
+		role := "; grant them meshes with `meshctl user grant " + name + " --mesh <mesh>`"
+		switch {
+		case u.Admin:
+			role = " as an admin"
+		case *mesh != "":
+			role = ", who manages mesh " + *mesh
+		}
+		fmt.Fprintf(e.stdout, "added user %s%s; they enroll an authenticator app at their first sign-in\n", name, role)
+		return nil
+	})
+	return func(ctx context.Context, args []string) error {
+		if *admin && *mesh != "" {
+			return usagef("an admin manages every mesh; give --admin or --mesh, not both")
+		}
+		return run(ctx, args)
+	}
+}
+
+// setupUserGrant is user grant (on) and user revoke: one mesh, or the admin
+// role.
+func setupUserGrant(on bool) func(fs *flag.FlagSet, e *env) action {
+	return func(fs *flag.FlagSet, e *env) action {
+		data := fs.String("data", "/data", "the server's data directory")
+		mesh := fs.String("mesh", "", "the mesh to grant or take away")
+		admin := fs.Bool("admin", false, "the admin role instead of a mesh")
+		run := userRun(data, e, func(ctx context.Context, e *env, svc *auth.Service, name string) error {
+			if *admin {
+				if err := svc.SetAdmin(ctx, actorCLI, name, on); err != nil {
+					return err
+				}
+				fmt.Fprintf(e.stdout, "%s %s an admin\n", name, map[bool]string{true: "is now", false: "is no longer"}[on])
+				return nil
+			}
+			if on {
+				if err := svc.Grant(ctx, actorCLI, name, *mesh); err != nil {
+					return err
+				}
+				fmt.Fprintf(e.stdout, "%s manages mesh %s\n", name, *mesh)
+				return nil
+			}
+			if err := svc.Revoke(ctx, actorCLI, name, *mesh); err != nil {
+				return err
+			}
+			fmt.Fprintf(e.stdout, "%s no longer manages mesh %s\n", name, *mesh)
+			return nil
+		})
 		return func(ctx context.Context, args []string) error {
-			if err := wantArgs(args, 1, "<name>"); err != nil {
-				return err
+			if (*mesh == "") == !*admin {
+				return usagef("give --mesh <mesh> or --admin, not both")
 			}
-			st, err := store.Open(ctx, filepath.Join(*data, server.DBFile), store.Options{Now: e.now})
-			if err != nil {
-				return err
-			}
-			defer st.Close()
-			return act(ctx, e, auth.New(auth.Config{DB: st, Now: e.now}), args[0])
+			return run(ctx, args)
 		}
 	}
 }
 
-func addUser(ctx context.Context, e *env, svc *auth.Service, name string) error {
-	pw, err := newPassword(e, name)
-	if err != nil {
-		return err
+func setupUserList(fs *flag.FlagSet, e *env) action {
+	data := fs.String("data", "/data", "the server's data directory")
+	return func(ctx context.Context, args []string) error {
+		if err := wantArgs(args, 0, ""); err != nil {
+			return err
+		}
+		st, err := store.Open(ctx, filepath.Join(*data, server.DBFile), store.Options{Now: e.now, ReadOnly: true})
+		if err != nil {
+			return err
+		}
+		defer st.Close()
+		svc := auth.New(auth.Config{DB: st, Now: e.now})
+		users, err := svc.Users(ctx)
+		if err != nil {
+			return err
+		}
+		grants, err := svc.Grants(ctx)
+		if err != nil {
+			return err
+		}
+		tw := tabwriter.NewWriter(e.stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(tw, "NAME\tMANAGES\tAUTHENTICATOR\tSTATE")
+		for _, u := range users {
+			manages := cmp.Or(strings.Join(grants[u.ID], ", "), "-")
+			if u.Admin {
+				manages = "everything (admin)"
+			}
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", u.Username, manages, map[bool]string{true: "enrolled", false: "at next sign-in"}[u.TOTPEnrolled],
+				map[bool]string{true: "disabled", false: "active"}[u.Disabled])
+		}
+		return tw.Flush()
 	}
-	if _, err := svc.AddUser(ctx, actorCLI, name, pw); err != nil {
-		return err
-	}
-	fmt.Fprintf(e.stdout, "added user %s; they enroll an authenticator app at their first sign-in\n", name)
-	return nil
 }
 
 func passwdUser(ctx context.Context, e *env, svc *auth.Service, name string) error {

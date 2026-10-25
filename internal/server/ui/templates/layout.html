@@ -25,8 +25,10 @@
 <a href="{{.Base}}/audit"{{if eq .Nav "audit"}} class="active"{{end}}>Audit</a>
 <a href="{{.Base}}/settings"{{if eq .Nav "settings"}} class="active"{{end}}>Settings</a>
 {{- end}}
+{{- if .Admin}}
 <a href="/meshes"{{if eq .Nav "meshes"}} class="active"{{end}}>Meshes</a>
 <a href="/users"{{if eq .Nav "users"}} class="active"{{end}}>Users</a>
+{{- end}}
 <a href="/account"{{if eq .Nav "account"}} class="active"{{end}}>{{.User}}</a>
 </nav>
 <form method="post" action="/logout" class="inline">

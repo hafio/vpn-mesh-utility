@@ -85,15 +85,18 @@ func New(d Deps) (http.Handler, error) {
 		"POST /logout":                  u.logout,
 		"GET /{$}":                      u.home,
 		"GET /m/{mesh}":                 u.meshHome,
-		"GET /meshes":                   u.meshesPage,
-		"POST /meshes":                  u.addMesh,
-		"POST /meshes/{name}":           u.renameMesh,
-		"POST /meshes/{name}/remove":    u.removeMesh,
-		"GET /users":                    u.usersPage,
-		"POST /users":                   u.addUser,
-		"POST /users/{name}/disable":    u.disableUser,
-		"POST /users/{name}/enable":     u.enableUser,
-		"POST /users/{name}/reset-totp": u.resetUser,
+		"GET /meshes":                   u.adminOnly(u.meshesPage),
+		"POST /meshes":                  u.adminOnly(u.addMesh),
+		"POST /meshes/{name}":           u.adminOnly(u.renameMesh),
+		"POST /meshes/{name}/remove":    u.adminOnly(u.removeMesh),
+		"GET /users":                    u.adminOnly(u.usersPage),
+		"POST /users":                   u.adminOnly(u.addUser),
+		"POST /users/{name}/disable":    u.adminOnly(u.disableUser),
+		"POST /users/{name}/enable":     u.adminOnly(u.enableUser),
+		"POST /users/{name}/reset-totp": u.adminOnly(u.resetUser),
+		"POST /users/{name}/admin":      u.adminOnly(u.setAdmin),
+		"POST /users/{name}/grant":      u.adminOnly(u.grantMesh),
+		"POST /users/{name}/revoke":     u.adminOnly(u.revokeMesh),
 		"GET /account":                  u.accountPage,
 		"POST /account/password":        u.changePassword,
 	} {
@@ -155,11 +158,12 @@ type handler func(w http.ResponseWriter, r *http.Request, s auth.Session)
 // links and switcher are that mesh's (amendment A49).
 type meshHandler func(u *ui, w http.ResponseWriter, r *http.Request, s auth.Session)
 
-// inMesh runs h for the mesh the path names; one the control plane does not
-// have is a 404 that points at the Meshes page.
+// inMesh runs h for the mesh the path names. One the control plane does not
+// have, or the user may not manage, is the same 404, so a user learns no
+// mesh they were not granted.
 func (u *ui) inMesh(h meshHandler) handler {
 	return func(w http.ResponseWriter, r *http.Request, s auth.Session) {
-		meshes, err := u.meshList(r)
+		meshes, err := u.meshList(r, s)
 		if err != nil {
 			u.fail(w, r, s, err)
 			return
@@ -167,7 +171,7 @@ func (u *ui) inMesh(h meshHandler) handler {
 		name := r.PathValue("mesh")
 		i := slices.IndexFunc(meshes, func(m store.Mesh) bool { return m.Name == name })
 		if i < 0 {
-			u.show(w, r, s, http.StatusNotFound, "error", "", "Not Found", page{Error: "this control plane has no such mesh; the Meshes page lists them"})
+			u.show(w, r, s, http.StatusNotFound, "error", "", "Not Found", page{Error: "you manage no such mesh; the dashboard opens one you do"})
 			return
 		}
 		c := *u
@@ -176,15 +180,26 @@ func (u *ui) inMesh(h meshHandler) handler {
 	}
 }
 
-// meshList is every mesh, by id.
-func (u *ui) meshList(r *http.Request) ([]store.Mesh, error) {
-	var out []store.Mesh
+// adminOnly runs h for an admin; anyone else is told who may (amendment A49).
+func (u *ui) adminOnly(h handler) handler {
+	return func(w http.ResponseWriter, r *http.Request, s auth.Session) {
+		if !s.Admin {
+			u.show(w, r, s, http.StatusForbidden, "error", "", "Forbidden", page{Error: "only an admin manages the meshes and the users; ask one"})
+			return
+		}
+		h(w, r, s)
+	}
+}
+
+// meshList is every mesh the session's user may manage, by id.
+func (u *ui) meshList(r *http.Request, s auth.Session) ([]store.Mesh, error) {
+	var all []store.Mesh
 	err := u.DB.Tx(r.Context(), func(tx *store.Tx) error {
 		var err error
-		out, err = tx.Meshes()
+		all, err = tx.Meshes()
 		return err
 	})
-	return out, err
+	return slices.DeleteFunc(all, func(m store.Mesh) bool { return !s.CanManage(m.ID) }), err
 }
 
 // base is the path of the current mesh's pages ("/m/<mesh>"), "" on the
@@ -196,15 +211,20 @@ func (u *ui) base() string {
 	return "/m/" + u.mesh.Name
 }
 
-// home opens the first mesh, or the Meshes page while there is none.
+// home opens the first mesh the user manages; an admin with none goes to
+// the Meshes page, anyone else is told to ask one.
 func (u *ui) home(w http.ResponseWriter, r *http.Request, s auth.Session) {
-	meshes, err := u.meshList(r)
+	meshes, err := u.meshList(r, s)
 	if err != nil {
 		u.fail(w, r, s, err)
 		return
 	}
-	if len(meshes) == 0 {
+	switch {
+	case len(meshes) == 0 && s.Admin:
 		http.Redirect(w, r, "/meshes", http.StatusSeeOther)
+		return
+	case len(meshes) == 0:
+		u.show(w, r, s, http.StatusForbidden, "error", "", "No mesh yet", page{Error: "no mesh is granted to you yet; ask an admin to grant you one"})
 		return
 	}
 	http.Redirect(w, r, "/m/"+meshes[0].Name+"/", http.StatusSeeOther)

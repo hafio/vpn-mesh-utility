@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -640,10 +641,15 @@ type auditData struct {
 const auditPerPage = 100
 
 func (u *ui) auditPage(w http.ResponseWriter, r *http.Request, s auth.Session) {
+	// An admin sees the control plane's own entries (users, meshes) too.
 	var es []store.AuditEntry
 	err := u.Nodes.Tx(r.Context(), func(tx *store.MeshTx) error {
 		var err error
-		es, err = tx.AuditLog(auditPerPage, before(r))
+		if s.Admin {
+			es, err = tx.AuditLog(auditPerPage, before(r))
+		} else {
+			es, err = tx.OwnAuditLog(auditPerPage, before(r))
+		}
 		return err
 	})
 	if err != nil {
@@ -785,6 +791,18 @@ type userRow struct {
 	Disabled bool
 	Created  string
 	Self     bool
+	// Admin manages everything; anyone else Meshes, the meshes granted to
+	// them (amendment A49). Grantable are the meshes they do not have yet.
+	Admin     bool
+	Meshes    []string
+	Grantable []string
+}
+
+// usersData is the Users page: every user, and the meshes the add form
+// offers.
+type usersData struct {
+	Rows   []userRow
+	Meshes []string
 }
 
 func (u *ui) usersPage(w http.ResponseWriter, r *http.Request, s auth.Session) {
@@ -797,29 +815,83 @@ func (u *ui) renderUsers(w http.ResponseWriter, r *http.Request, s auth.Session,
 		u.fail(w, r, s, err)
 		return
 	}
+	grants, err := u.Auth.Grants(r.Context())
+	if err != nil {
+		u.fail(w, r, s, err)
+		return
+	}
+	meshes, err := u.meshList(r, s)
+	if err != nil {
+		u.fail(w, r, s, err)
+		return
+	}
 	var rows []userRow
 	for _, x := range users {
-		rows = append(rows, userRow{Name: x.Username, TOTP: x.TOTPEnrolled, Disabled: x.Disabled, Created: u.stamp(x.CreatedAt),
-			Self: x.ID == s.UserID})
+		row := userRow{Name: x.Username, TOTP: x.TOTPEnrolled, Disabled: x.Disabled, Created: u.stamp(x.CreatedAt),
+			Self: x.ID == s.UserID, Admin: x.Admin, Meshes: grants[x.ID]}
+		for _, m := range meshes {
+			if !slices.Contains(row.Meshes, m.Name) {
+				row.Grantable = append(row.Grantable, m.Name)
+			}
+		}
+		rows = append(rows, row)
 	}
-	p.Data = rows
+	d := usersData{Rows: rows}
+	for _, m := range meshes {
+		d.Meshes = append(d.Meshes, m.Name)
+	}
+	p.Data = d
 	u.show(w, r, s, status, "users", "users", "Users", p)
 }
 
 func (u *ui) addUser(w http.ResponseWriter, r *http.Request, s auth.Session) {
 	name, pw := strings.TrimSpace(r.PostFormValue("username")), r.PostFormValue("password")
-	var err error
+	var (
+		x   store.User
+		err error
+	)
+	a := auth.Access{Admin: r.PostFormValue("admin") != "", Mesh: r.PostFormValue("mesh")}
 	if pw != r.PostFormValue("password2") {
 		err = &validate.Error{Field: "password", Reason: "the two passwords differ"}
 	} else {
-		_, err = u.Auth.AddUser(r.Context(), actor(s).Name, name, pw)
+		x, err = u.Auth.AddUser(r.Context(), actor(s).Name, name, pw, a)
 	}
 	if err != nil {
 		status, msg := message(err)
 		u.renderUsers(w, r, s, status, page{Error: msg})
 		return
 	}
-	u.renderUsers(w, r, s, http.StatusOK, page{Flash: "Added " + name + "; they set up an authenticator at their first sign-in"})
+	role := "; grant them meshes below"
+	switch {
+	case x.Admin:
+		role = " as an admin"
+	case a.Mesh != "":
+		role = ", who manages mesh " + a.Mesh
+	}
+	u.renderUsers(w, r, s, http.StatusOK, page{Flash: "Added " + name + role + "; they set up an authenticator at their first sign-in"})
+}
+
+// setAdmin makes a user an admin (admin=on) or takes it away; your own role
+// stays, so an admin cannot lock themself out.
+func (u *ui) setAdmin(w http.ResponseWriter, r *http.Request, s auth.Session) {
+	on := r.PostFormValue("admin") == "on"
+	done := map[bool]string{true: "Made an admin:", false: "No longer an admin:"}[on]
+	u.userChange(w, r, s, done, func(name string) error {
+		if name == s.Username {
+			return &validate.Error{Field: "user", Reason: "you cannot change your own role; another admin can"}
+		}
+		return u.Auth.SetAdmin(r.Context(), actor(s).Name, name, on)
+	})
+}
+
+func (u *ui) grantMesh(w http.ResponseWriter, r *http.Request, s auth.Session) {
+	mesh := r.PostFormValue("mesh")
+	u.userChange(w, r, s, "Granted mesh "+mesh+" to", func(name string) error { return u.Auth.Grant(r.Context(), actor(s).Name, name, mesh) })
+}
+
+func (u *ui) revokeMesh(w http.ResponseWriter, r *http.Request, s auth.Session) {
+	mesh := r.PostFormValue("mesh")
+	u.userChange(w, r, s, "Took mesh "+mesh+" away from", func(name string) error { return u.Auth.Revoke(r.Context(), actor(s).Name, name, mesh) })
 }
 
 func (u *ui) disableUser(w http.ResponseWriter, r *http.Request, s auth.Session) {
