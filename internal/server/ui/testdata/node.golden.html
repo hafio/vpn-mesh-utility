@@ -11,14 +11,16 @@
 <body hx-headers='{"X-CSRF-Token": "csrf-token"}'>
 <header>
 <span class="brand">meshctl</span>
+<span class="mesh">default</span>
 <nav>
-<a href="/">Dashboard</a>
-<a href="/nodes" class="active">Nodes</a>
-<a href="/dns">DNS</a>
-<a href="/firewall">Firewall</a>
-<a href="/versions">Versions</a>
-<a href="/audit">Audit</a>
-<a href="/settings">Settings</a>
+<a href="/m/default/">Dashboard</a>
+<a href="/m/default/nodes" class="active">Nodes</a>
+<a href="/m/default/dns">DNS</a>
+<a href="/m/default/firewall">Firewall</a>
+<a href="/m/default/versions">Versions</a>
+<a href="/m/default/audit">Audit</a>
+<a href="/m/default/settings">Settings</a>
+<a href="/meshes">Meshes</a>
 <a href="/users">Users</a>
 <a href="/account">admin</a>
 </nav>
@@ -27,6 +29,10 @@
 <button type="submit" class="link">Sign out</button>
 </form>
 </header>
+<nav class="meshes" aria-label="Meshes">
+<a href="/m/default/" class="active" aria-current="page">default</a>
+<a href="/m/lab/">lab</a>
+</nav>
 <main>
 <h1>vps-1</h1>
 <p class="flash">Saved; config v5 is on its way to the agents</p>
@@ -51,7 +57,7 @@
 </table>
 
 <h2>Edit</h2>
-<form method="post" action="/nodes/vps-1" class="grid">
+<form method="post" action="/m/default/nodes/vps-1" class="grid">
 <input type="hidden" name="csrf" value="csrf-token">
 <label>Mesh IP <input name="mesh_ip" value="10.77.0.1"></label>
 <label>Endpoint <input name="endpoint" value="203.0.113.10:51820" placeholder="IPv4:port"></label>
@@ -66,9 +72,9 @@
 
 <h2>Actions</h2>
 <div class="actions">
-<form method="post" action="/nodes/vps-1/disable"><input type="hidden" name="csrf" value="csrf-token"><button type="submit">Disable</button></form>
-<form method="post" action="/nodes/vps-1/token"><input type="hidden" name="csrf" value="csrf-token"><button type="submit">New join token</button></form>
-<a class="button danger" href="/nodes/vps-1/remove">Remove</a>
+<form method="post" action="/m/default/nodes/vps-1/disable"><input type="hidden" name="csrf" value="csrf-token"><button type="submit">Disable</button></form>
+<form method="post" action="/m/default/nodes/vps-1/token"><input type="hidden" name="csrf" value="csrf-token"><button type="submit">New join token</button></form>
+<a class="button danger" href="/m/default/nodes/vps-1/remove">Remove</a>
 </div>
 <h2>Computed config</h2>
 <pre>{

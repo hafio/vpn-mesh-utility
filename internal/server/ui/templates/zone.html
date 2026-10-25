@@ -3,12 +3,12 @@
 {{template "fwtabs" .}}
 {{- with .View}}
 <p>Addresses: {{if .Addresses}}{{.Addresses}}{{else}}none{{end}}. Saving a new name renames it, and the policies that name it follow.</p>
-<form method="post" action="/firewall/zones/{{.Form.Old}}" class="grid">
+<form method="post" action="{{$.Base}}/firewall/zones/{{.Form.Old}}" class="grid">
 <input type="hidden" name="csrf" value="{{$.CSRF}}">
 {{- template "fwzonefields" .Form}}
 <button type="submit">Save</button>
 </form>
-<form method="post" action="/firewall/zones/{{.Form.Old}}/remove" class="inline">
+<form method="post" action="{{$.Base}}/firewall/zones/{{.Form.Old}}/remove" class="inline">
 <input type="hidden" name="csrf" value="{{$.CSRF}}">
 <button type="submit" class="danger">Remove this zone</button>
 </form>

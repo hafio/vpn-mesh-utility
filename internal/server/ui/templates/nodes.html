@@ -3,7 +3,7 @@
 <thead><tr><th>Node</th><th>Role</th><th>Mesh IP</th><th>Endpoint</th><th>State</th></tr></thead>
 <tbody>
 {{- range .Data.Rows}}
-<tr><td><a href="/nodes/{{.Name}}">{{.Name}}</a></td><td>{{.Role}}</td><td>{{.MeshIP}}</td><td>{{if .Endpoint}}{{.Endpoint}}{{else}}-{{end}}</td><td><span class="state {{.Class}}">{{.State}}</span></td></tr>
+<tr><td><a href="{{$.Base}}/nodes/{{.Name}}">{{.Name}}</a></td><td>{{.Role}}</td><td>{{.MeshIP}}</td><td>{{if .Endpoint}}{{.Endpoint}}{{else}}-{{end}}</td><td><span class="state {{.Class}}">{{.State}}</span></td></tr>
 {{- else}}
 <tr><td colspan="5">No nodes yet.</td></tr>
 {{- end}}
@@ -11,7 +11,7 @@
 </table>
 
 <h2>Add a node</h2>
-<form method="post" action="/nodes" class="grid">
+<form method="post" action="{{$.Base}}/nodes" class="grid">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
 {{- with .Data.Form}}
 <label>Name <input name="name" value="{{.Name}}" required pattern="[a-z0-9-]{1,32}"></label>

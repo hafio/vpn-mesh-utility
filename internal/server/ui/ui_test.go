@@ -48,8 +48,10 @@ type rig struct {
 	clock *testfix.Clock
 	// secret is the admin's authenticator secret once signIn has enrolled it.
 	secret string
-	// broken fails every mesh transaction; sign-in keeps the real store.
+	// broken fails every mesh transaction but the next pass ones (a mesh
+	// page's lookup of its mesh); sign-in keeps the real store.
 	broken atomic.Bool
+	pass   atomic.Int32
 	logs   bytes.Buffer
 }
 
@@ -60,10 +62,11 @@ var errDisk = errors.New("disk I/O error: /data/mesh.db")
 type faultyDB struct {
 	st     *store.Store
 	broken *atomic.Bool
+	pass   *atomic.Int32
 }
 
 func (f faultyDB) Tx(ctx context.Context, fn func(*store.Tx) error) error {
-	if f.broken.Load() {
+	if f.broken.Load() && f.pass.Add(-1) < 0 {
 		return errDisk
 	}
 	return f.st.Tx(ctx, fn)
@@ -86,7 +89,7 @@ func newRig(t *testing.T) *rig {
 		t.Fatal(err)
 	}
 	r := &rig{t: t, st: st, svc: svc, clock: clock}
-	db := faultyDB{st: st, broken: &r.broken}
+	db := faultyDB{st: st, broken: &r.broken, pass: &r.pass}
 	hub := api.NewHub()
 	r.rec = api.NewReconciler(db, hub, nil)
 	d := api.Deps{DB: db, Hub: hub, Reconciler: r.rec, Now: clock.Now, ServerURL: origin, Version: "v1.0.0"}
@@ -169,7 +172,7 @@ func (r *rig) signIn() (string, string) {
 func TestEveryResponseCarriesTheSecurityHeaders(t *testing.T) {
 	r := newRig(t)
 	cookie, _ := r.signIn()
-	for _, p := range []string{"/login", "/", "/nodes", "/versions", "/audit", "/settings", "/users", "/account", "/static/app.css", "/nope"} {
+	for _, p := range []string{"/login", "/", "/m/default/nodes", "/m/default/versions", "/m/default/audit", "/m/default/settings", "/users", "/account", "/static/app.css", "/nope"} {
 		w := r.do(http.MethodGet, p, cookie, nil)
 		h := w.Header()
 		// same-origin keeps the browser's Origin on the UI's own posts
@@ -187,7 +190,7 @@ func TestSignInFlow(t *testing.T) {
 		t.Fatalf("the sign-in page = %d", w.Code)
 	}
 	cookie, csrf := r.signIn()
-	if w := r.do(http.MethodGet, "/", cookie, nil); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Sign out") {
+	if w := r.do(http.MethodGet, "/m/default/", cookie, nil); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Sign out") {
 		t.Fatalf("dashboard = %d", w.Code)
 	}
 	for _, p := range []string{"/login", "/login/totp"} {
@@ -234,7 +237,7 @@ func TestSignInFlow(t *testing.T) {
 	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/" {
 		t.Fatalf("the right code = %d %s\n%s", w.Code, w.Header().Get("Location"), w.Body)
 	}
-	if w := r.do(http.MethodGet, "/", pending, nil); w.Code != http.StatusOK {
+	if w := r.do(http.MethodGet, "/m/default/", pending, nil); w.Code != http.StatusOK {
 		t.Fatalf("the dashboard after the code = %d", w.Code)
 	}
 }
@@ -255,13 +258,13 @@ func TestBadSignInsAreRefusedAndThrottled(t *testing.T) {
 
 func TestPagesNeedAFullSession(t *testing.T) {
 	r := newRig(t)
-	if w := r.do(http.MethodGet, "/nodes", "", nil); w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/login" {
+	if w := r.do(http.MethodGet, "/m/default/nodes", "", nil); w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/login" {
 		t.Fatalf("GET without a session = %d", w.Code)
 	}
-	if w := r.do(http.MethodPost, "/nodes", "", url.Values{"name": {"x"}}); w.Code != http.StatusUnauthorized {
+	if w := r.do(http.MethodPost, "/m/default/nodes", "", url.Values{"name": {"x"}}); w.Code != http.StatusUnauthorized {
 		t.Fatalf("POST without a session = %d", w.Code)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/fragments/nodes", nil)
+	req := httptest.NewRequest(http.MethodGet, "/m/default/fragments/nodes", nil)
 	req.Header.Set("HX-Request", "true")
 	w := httptest.NewRecorder()
 	r.h.ServeHTTP(w, req)
@@ -281,15 +284,15 @@ func TestChangesNeedOriginAndCSRF(t *testing.T) {
 	r := newRig(t)
 	cookie, csrf := r.signIn()
 	add := url.Values{"name": {"vps-1"}, "role": {"server"}}
-	if w := r.do(http.MethodPost, "/nodes", cookie, add); w.Code != http.StatusForbidden {
+	if w := r.do(http.MethodPost, "/m/default/nodes", cookie, add); w.Code != http.StatusForbidden {
 		t.Fatalf("without the CSRF token = %d", w.Code)
 	}
 	add.Set("csrf", "wrong")
-	if w := r.do(http.MethodPost, "/nodes", cookie, add); w.Code != http.StatusForbidden {
+	if w := r.do(http.MethodPost, "/m/default/nodes", cookie, add); w.Code != http.StatusForbidden {
 		t.Fatalf("with a wrong CSRF token = %d", w.Code)
 	}
 	add.Set("csrf", csrf)
-	req := httptest.NewRequest(http.MethodPost, "/nodes", strings.NewReader(add.Encode()))
+	req := httptest.NewRequest(http.MethodPost, "/m/default/nodes", strings.NewReader(add.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Origin", "https://evil.example")
 	req.AddCookie(&http.Cookie{Name: auth.CookieName, Value: cookie})
@@ -328,21 +331,21 @@ func TestNodeLifecycle(t *testing.T) {
 		return r.do(http.MethodPost, path, cookie, form)
 	}
 
-	w := post("/nodes", url.Values{"name": {"vps-1"}, "role": {"server"}, "endpoint": {"203.0.113.10:51820"}, "can_exit": {"on"}})
+	w := post("/m/default/nodes", url.Values{"name": {"vps-1"}, "role": {"server"}, "endpoint": {"203.0.113.10:51820"}, "can_exit": {"on"}})
 	body := w.Body.String()
 	if w.Code != http.StatusOK || !strings.Contains(body, "shown once") || !strings.Contains(body, "install.sh | sudo sh -s -- --token ") {
 		t.Fatalf("add = %d\n%s", w.Code, body)
 	}
-	if w := post("/nodes", url.Values{"name": {"Bad Name"}, "role": {"server"}}); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), `value="Bad Name"`) {
+	if w := post("/m/default/nodes", url.Values{"name": {"Bad Name"}, "role": {"server"}}); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), `value="Bad Name"`) {
 		t.Fatalf("a bad name = %d (and the form must keep what was typed)", w.Code)
 	}
-	if w := post("/nodes", url.Values{"name": {"x"}, "role": {"server"}, "mtu": {"lots"}}); w.Code != http.StatusBadRequest {
+	if w := post("/m/default/nodes", url.Values{"name": {"x"}, "role": {"server"}, "mtu": {"lots"}}); w.Code != http.StatusBadRequest {
 		t.Fatalf("a non-numeric MTU = %d", w.Code)
 	}
-	if w := r.do(http.MethodGet, "/nodes/vps-1", cookie, nil); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "203.0.113.10:51820") {
+	if w := r.do(http.MethodGet, "/m/default/nodes/vps-1", cookie, nil); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "203.0.113.10:51820") {
 		t.Fatalf("node page = %d", w.Code)
 	}
-	if w := post("/nodes/vps-1", url.Values{"endpoint": {"203.0.113.10:51820"}, "listen_port": {"51820"}, "mtu": {"1380"}}); w.Code != http.StatusOK ||
+	if w := post("/m/default/nodes/vps-1", url.Values{"endpoint": {"203.0.113.10:51820"}, "listen_port": {"51820"}, "mtu": {"1380"}}); w.Code != http.StatusOK ||
 		!strings.Contains(w.Body.String(), "Saved") {
 		t.Fatalf("edit = %d\n%s", w.Code, w.Body)
 	}
@@ -351,20 +354,20 @@ func TestNodeLifecycle(t *testing.T) {
 		t.Fatalf("after edit %+v (an unticked box clears can_exit)", n)
 	}
 	for _, step := range []string{"disable", "enable"} {
-		if w := post("/nodes/vps-1/"+step, url.Values{}); w.Code != http.StatusOK {
+		if w := post("/m/default/nodes/vps-1/"+step, url.Values{}); w.Code != http.StatusOK {
 			t.Fatalf("%s = %d", step, w.Code)
 		}
 	}
-	if w := post("/nodes/vps-1/token", url.Values{}); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "New join token") {
+	if w := post("/m/default/nodes/vps-1/token", url.Values{}); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "New join token") {
 		t.Fatalf("token = %d", w.Code)
 	}
-	if w := r.do(http.MethodGet, "/nodes/vps-1/remove", cookie, nil); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Remove vps-1") {
+	if w := r.do(http.MethodGet, "/m/default/nodes/vps-1/remove", cookie, nil); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Remove vps-1") {
 		t.Fatalf("remove page = %d", w.Code)
 	}
-	if w := post("/nodes/vps-1/remove", url.Values{}); w.Code != http.StatusSeeOther || len(r.nodes()) != 0 {
+	if w := post("/m/default/nodes/vps-1/remove", url.Values{}); w.Code != http.StatusSeeOther || len(r.nodes()) != 0 {
 		t.Fatalf("remove = %d, %d nodes left", w.Code, len(r.nodes()))
 	}
-	if w := r.do(http.MethodGet, "/nodes/vps-1", cookie, nil); w.Code != http.StatusNotFound {
+	if w := r.do(http.MethodGet, "/m/default/nodes/vps-1", cookie, nil); w.Code != http.StatusNotFound {
 		t.Fatalf("a removed node's page = %d", w.Code)
 	}
 	var audit []store.AuditEntry
@@ -378,7 +381,7 @@ func TestNodeLifecycle(t *testing.T) {
 	if len(audit) != 1 || audit[0].Action != "node.rm" || audit[0].Actor != "user:admin" || audit[0].UserID == 0 {
 		t.Fatalf("audit %+v", audit)
 	}
-	if w := r.do(http.MethodGet, "/audit", cookie, nil); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "node.rm") {
+	if w := r.do(http.MethodGet, "/m/default/audit", cookie, nil); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "node.rm") {
 		t.Fatalf("audit page = %d", w.Code)
 	}
 }
@@ -391,17 +394,17 @@ func TestSpokeRunsInAContainer(t *testing.T) {
 	r.seedServers()
 	cookie, csrf := r.signIn()
 	form := url.Values{"name": {"nas"}, "role": {"spoke"}, "csrf": {csrf}}
-	if w := r.do(http.MethodPost, "/nodes", cookie, form); w.Code != http.StatusOK {
+	if w := r.do(http.MethodPost, "/m/default/nodes", cookie, form); w.Code != http.StatusOK {
 		t.Fatalf("add spoke = %d\n%s", w.Code, w.Body)
 	}
-	body := r.do(http.MethodGet, "/nodes/nas", cookie, nil).Body.String()
+	body := r.do(http.MethodGet, "/m/default/nodes/nas", cookie, nil).Body.String()
 	if !strings.Contains(body, "Run in a container") || !strings.Contains(body, "docs/containers.md") || strings.Contains(body, "/compose") {
 		t.Fatalf("the spoke page must point at the samples:\n%s", body)
 	}
-	if body := r.do(http.MethodGet, "/nodes/vps-1", cookie, nil).Body.String(); strings.Contains(body, "Run in a container") {
+	if body := r.do(http.MethodGet, "/m/default/nodes/vps-1", cookie, nil).Body.String(); strings.Contains(body, "Run in a container") {
 		t.Fatalf("a server's page offers to run it in a container:\n%s", body)
 	}
-	if w := r.do(http.MethodGet, "/nodes/nas/compose", cookie, nil); w.Code == http.StatusOK {
+	if w := r.do(http.MethodGet, "/m/default/nodes/nas/compose", cookie, nil); w.Code == http.StatusOK {
 		t.Fatalf("a compose file downloaded:\n%s", w.Body)
 	}
 }
@@ -415,10 +418,10 @@ func TestContainerModePages(t *testing.T) {
 	r.seedServers()
 	cookie, csrf := r.signIn()
 	form := url.Values{"name": {"box"}, "role": {"spoke"}, "mode": {"container"}, "csrf": {csrf}}
-	if w := r.do(http.MethodPost, "/nodes", cookie, form); w.Code != http.StatusOK {
+	if w := r.do(http.MethodPost, "/m/default/nodes", cookie, form); w.Code != http.StatusOK {
 		t.Fatalf("add a container-mode spoke = %d\n%s", w.Code, w.Body)
 	}
-	body := r.do(http.MethodGet, "/nodes/box", cookie, nil).Body.String()
+	body := r.do(http.MethodGet, "/m/default/nodes/box", cookie, nil).Body.String()
 	for _, want := range []string{"container: only its containers are on the mesh", testfix.ContainerSubnet, "Containers on the mesh",
 		"<td>meshctl-mesh</td>", "<td>10.77.128.128/25</td>", "<tr><th>Agent address</th><td>10.77.128.2</td></tr>", "MESHCTL_TOKEN", "docs/containers.md"} {
 		if !strings.Contains(body, want) {
@@ -430,7 +433,7 @@ func TestContainerModePages(t *testing.T) {
 	}
 	// The DNS page lists what box's runtime reported (amendment A38): how a
 	// published name resolves, and why one is not.
-	if body := r.do(http.MethodGet, "/dns", cookie, nil).Body.String(); !strings.Contains(body, "No container has reported a name yet") {
+	if body := r.do(http.MethodGet, "/m/default/dns", cookie, nil).Body.String(); !strings.Contains(body, "No container has reported a name yet") {
 		t.Fatalf("the DNS page without names:\n%s", body)
 	}
 	if err := r.st.MeshTx(context.Background(), store.FirstMesh, func(tx *store.MeshTx) error {
@@ -444,7 +447,7 @@ func TestContainerModePages(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	body = r.do(http.MethodGet, "/dns", cookie, nil).Body.String()
+	body = r.do(http.MethodGet, "/m/default/dns", cookie, nil).Body.String()
 	for _, want := range []string{"<code>web.mesh</code>, <code>web.box.mesh</code>", "not published: node vps-1 has this name"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the DNS page lacks %q:\n%s", want, body)
@@ -452,16 +455,16 @@ func TestContainerModePages(t *testing.T) {
 	}
 
 	form = url.Values{"name": {"pc"}, "role": {"spoke"}, "containers": {"on"}, "csrf": {csrf}}
-	if w := r.do(http.MethodPost, "/nodes", cookie, form); w.Code != http.StatusOK {
+	if w := r.do(http.MethodPost, "/m/default/nodes", cookie, form); w.Code != http.StatusOK {
 		t.Fatalf("add a host-mode spoke with containers = %d\n%s", w.Code, w.Body)
 	}
-	if body := r.do(http.MethodGet, "/nodes/pc", cookie, nil).Body.String(); !strings.Contains(body, "10.77.129.0/24") ||
+	if body := r.do(http.MethodGet, "/m/default/nodes/pc", cookie, nil).Body.String(); !strings.Contains(body, "10.77.129.0/24") ||
 		!strings.Contains(body, `name="containers" checked`) {
 		t.Fatalf("the host-mode page must show its containers:\n%s", body)
 	}
 	// A host-mode node with containers shows its network's values: the
 	// agent's bridge, no agent address of its own, the servers for Swarm.
-	body = r.do(http.MethodGet, "/nodes/pc", cookie, nil).Body.String()
+	body = r.do(http.MethodGet, "/m/default/nodes/pc", cookie, nil).Body.String()
 	for _, want := range []string{"Containers on the mesh", "on the bridge meshctl0", "<td>10.77.129.128/25</td>", "<td>10.77.129.1, search mesh, ndots:1",
 		"a Swarm service: 10.77.0.1, 10.77.0.2"} {
 		if !strings.Contains(body, want) {
@@ -472,11 +475,11 @@ func TestContainerModePages(t *testing.T) {
 		t.Errorf("the host-mode page names an agent address:\n%s", body)
 	}
 	edit := url.Values{"mtu": {"1420"}, "keepalive": {"25"}, "csrf": {csrf}} // containers unticked
-	if w := r.do(http.MethodPost, "/nodes/pc", cookie, edit); w.Code != http.StatusOK || strings.Contains(w.Body.String(), "10.77.129.0/24") {
+	if w := r.do(http.MethodPost, "/m/default/nodes/pc", cookie, edit); w.Code != http.StatusOK || strings.Contains(w.Body.String(), "10.77.129.0/24") {
 		t.Fatalf("untick containers = %d\n%s", w.Code, w.Body)
 	}
 	form = url.Values{"name": {"ph"}, "role": {"phone"}, "mode": {"container"}, "csrf": {csrf}}
-	if w := r.do(http.MethodPost, "/nodes", cookie, form); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "no agent") {
+	if w := r.do(http.MethodPost, "/m/default/nodes", cookie, form); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "no agent") {
 		t.Fatalf("a container-mode phone = %d\n%s", w.Code, w.Body)
 	}
 }
@@ -493,24 +496,24 @@ func TestDNSPage(t *testing.T) {
 		form.Set("csrf", csrf)
 		return r.do(http.MethodPost, path, cookie, form)
 	}
-	body := r.do(http.MethodGet, "/dns", cookie, nil).Body.String()
+	body := r.do(http.MethodGet, "/m/default/dns", cookie, nil).Body.String()
 	for _, want := range []string{"<td>vps-1.mesh</td><td>10.77.0.1</td>", "automatic", "1.1.1.1, 9.9.9.9", "any other container uses its own resolver"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("the DNS page lacks %q:\n%s", want, body)
 		}
 	}
-	if w := post("/dns", url.Values{"name": {"files"}, "node": {"vps-2"}}); w.Code != http.StatusOK ||
-		!strings.Contains(w.Body.String(), "Record files added; config v") || !strings.Contains(w.Body.String(), `action="/dns/files/remove"`) {
+	if w := post("/m/default/dns", url.Values{"name": {"files"}, "node": {"vps-2"}}); w.Code != http.StatusOK ||
+		!strings.Contains(w.Body.String(), "Record files added; config v") || !strings.Contains(w.Body.String(), `action="/m/default/dns/files/remove"`) {
 		t.Fatalf("add record = %d\n%s", w.Code, w.Body)
 	}
-	if w := post("/dns", url.Values{"name": {"vps-1"}, "ip": {"10.77.1.5"}}); w.Code != http.StatusConflict ||
+	if w := post("/m/default/dns", url.Values{"name": {"vps-1"}, "ip": {"10.77.1.5"}}); w.Code != http.StatusConflict ||
 		!strings.Contains(w.Body.String(), "has the name of a node") || !strings.Contains(w.Body.String(), `value="10.77.1.5"`) {
 		t.Fatalf("a record named like a node = %d\n%s", w.Code, w.Body)
 	}
-	if w := r.do(http.MethodPost, "/dns", cookie, url.Values{"name": {"x"}, "ip": {"10.77.1.5"}}); w.Code != http.StatusForbidden {
+	if w := r.do(http.MethodPost, "/m/default/dns", cookie, url.Values{"name": {"x"}, "ip": {"10.77.1.5"}}); w.Code != http.StatusForbidden {
 		t.Fatalf("a record without the CSRF token = %d", w.Code)
 	}
-	if w := post("/dns/files/remove", url.Values{}); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Record files removed") {
+	if w := post("/m/default/dns/files/remove", url.Values{}); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Record files removed") {
 		t.Fatalf("remove record = %d\n%s", w.Code, w.Body)
 	}
 
@@ -538,37 +541,37 @@ func TestDualStackPages(t *testing.T) {
 		t.Fatalf("no node %s", name)
 		return store.Node{}
 	}
-	if body := r.do(http.MethodGet, "/nodes", cookie, nil).Body.String(); strings.Contains(body, `name="ip_family"`) {
+	if body := r.do(http.MethodGet, "/m/default/nodes", cookie, nil).Body.String(); strings.Contains(body, `name="ip_family"`) {
 		t.Fatal("the add form offers families before the mesh has IPv6")
 	}
-	if body := r.do(http.MethodGet, "/settings", cookie, nil).Body.String(); !strings.Contains(body, "The mesh runs IPv4 only") ||
-		!strings.Contains(body, `action="/settings/ipv6"`) {
+	if body := r.do(http.MethodGet, "/m/default/settings", cookie, nil).Body.String(); !strings.Contains(body, "The mesh runs IPv4 only") ||
+		!strings.Contains(body, `action="/m/default/settings/ipv6"`) {
 		t.Fatalf("Settings without IPv6:\n%s", body)
 	}
-	if w := post("/settings/ipv6", url.Values{"ipv6_prefix": {"fd10::/40"}}); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "/48 to /64") {
+	if w := post("/m/default/settings/ipv6", url.Values{"ipv6_prefix": {"fd10::/40"}}); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "/48 to /64") {
 		t.Fatalf("a /40 = %d\n%s", w.Code, w.Body)
 	}
-	if w := post("/settings/ipv6", url.Values{"ipv6_prefix": {testfix.MeshCIDR6}}); w.Code != http.StatusOK ||
+	if w := post("/m/default/settings/ipv6", url.Values{"ipv6_prefix": {testfix.MeshCIDR6}}); w.Code != http.StatusOK ||
 		!strings.Contains(w.Body.String(), "IPv6 prefix "+testfix.MeshCIDR6+"; 2 node(s) have an IPv6 mesh address; config v") ||
 		!strings.Contains(w.Body.String(), "<code>"+testfix.MeshCIDR6+"</code>") {
 		t.Fatalf("set the prefix = %d\n%s", w.Code, w.Body)
 	}
 
-	if w := post("/nodes", url.Values{"name": {"pad"}, "role": {"spoke"}, "ip_family": {"ipv6"}}); w.Code != http.StatusOK {
+	if w := post("/m/default/nodes", url.Values{"name": {"pad"}, "role": {"spoke"}, "ip_family": {"ipv6"}}); w.Code != http.StatusOK {
 		t.Fatalf("add an IPv6-only spoke = %d\n%s", w.Code, w.Body)
 	}
 	if n := byName("pad"); n.MeshIP != "" || n.MeshIP6 != "fd10:77::2:1" || n.Family != proto.FamilyIPv6 {
 		t.Fatalf("pad %+v", n)
 	}
-	if w := post("/nodes", url.Values{"name": {"x"}, "role": {"spoke"}, "ip6": {"fd20::5"}}); w.Code != http.StatusBadRequest ||
+	if w := post("/m/default/nodes", url.Values{"name": {"x"}, "role": {"spoke"}, "ip6": {"fd20::5"}}); w.Code != http.StatusBadRequest ||
 		!strings.Contains(w.Body.String(), "outside the mesh") || !strings.Contains(w.Body.String(), `value="fd20::5"`) {
 		t.Fatalf("an IPv6 outside the mesh = %d\n%s", w.Code, w.Body)
 	}
-	body := r.do(http.MethodGet, "/nodes", cookie, nil).Body.String()
+	body := r.do(http.MethodGet, "/m/default/nodes", cookie, nil).Body.String()
 	if !strings.Contains(body, `name="ip_family"`) || !strings.Contains(body, "<td>fd10:77::2:1</td>") {
 		t.Fatalf("the nodes page with IPv6:\n%s", body)
 	}
-	body = r.do(http.MethodGet, "/nodes/pad", cookie, nil).Body.String()
+	body = r.do(http.MethodGet, "/m/default/nodes/pad", cookie, nil).Body.String()
 	for _, want := range []string{"none (IPv6 only)", "<th>Mesh IPv6</th><td>fd10:77::2:1</td>", "ipv6 only", `name="ipv6_form"`, `<option value="ipv6" selected>`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("pad's page lacks %q", want)
@@ -581,18 +584,18 @@ func TestDualStackPages(t *testing.T) {
 		}
 		return v
 	}
-	if w := post("/nodes/pad", spoke("ip_family", "dual", "mesh_ip6", "fd10:77::2:1")); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Saved") {
+	if w := post("/m/default/nodes/pad", spoke("ip_family", "dual", "mesh_ip6", "fd10:77::2:1")); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Saved") {
 		t.Fatalf("pad to dual = %d\n%s", w.Code, w.Body)
 	}
 	if n := byName("pad"); n.MeshIP != "10.77.2.1" || n.MeshIP6 != "fd10:77::2:1" {
 		t.Fatalf("pad after dual %+v", n)
 	}
-	if w := post("/nodes/pad", spoke("ip_family", "dual", "mesh_ip6", "fd10:77::2:7")); w.Code != http.StatusOK ||
+	if w := post("/m/default/nodes/pad", spoke("ip_family", "dual", "mesh_ip6", "fd10:77::2:7")); w.Code != http.StatusOK ||
 		!strings.Contains(w.Body.String(), "pad moves from fd10:77::2:1 to fd10:77::2:7") {
 		t.Fatalf("pad's IPv6 moved = %d\n%s", w.Code, w.Body)
 	}
 	// Going IPv4 only drops the IPv6 fields the form still carries.
-	if w := post("/nodes/pad", spoke("ip_family", "ipv4", "mesh_ip6", "fd10:77::2:7", "containers6", "on")); w.Code != http.StatusOK {
+	if w := post("/m/default/nodes/pad", spoke("ip_family", "ipv4", "mesh_ip6", "fd10:77::2:7", "containers6", "on")); w.Code != http.StatusOK {
 		t.Fatalf("pad to ipv4 = %d\n%s", w.Code, w.Body)
 	}
 	if n := byName("pad"); n.MeshIP6 != "" || n.Family != proto.FamilyIPv4 {
@@ -600,32 +603,32 @@ func TestDualStackPages(t *testing.T) {
 	}
 	server := url.Values{"ipv6_form": {"1"}, "ip_family": {"dual"}, "endpoint": {testfix.VPS1.Endpoint}, "endpoint6": {"[2001:db8::10]:51820"},
 		"listen_port": {"51820"}, "mtu": {"1420"}}
-	if w := post("/nodes/vps-1", server); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "<th>Endpoint (IPv6)</th><td>[2001:db8::10]:51820</td>") {
+	if w := post("/m/default/nodes/vps-1", server); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "<th>Endpoint (IPv6)</th><td>[2001:db8::10]:51820</td>") {
 		t.Fatalf("vps-1's IPv6 endpoint = %d\n%s", w.Code, w.Body)
 	}
 	server.Set("endpoint6", "203.0.113.10:51820")
-	if w := post("/nodes/vps-1", server); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "[IPv6]:port") {
+	if w := post("/m/default/nodes/vps-1", server); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "[IPv6]:port") {
 		t.Fatalf("an IPv4 endpoint6 = %d\n%s", w.Code, w.Body)
 	}
 
-	if body := r.do(http.MethodGet, "/dns", cookie, nil).Body.String(); !strings.Contains(body, `name="ip6"`) || !strings.Contains(body, "10.77.0.1, fd10:77::1") {
+	if body := r.do(http.MethodGet, "/m/default/dns", cookie, nil).Body.String(); !strings.Contains(body, `name="ip6"`) || !strings.Contains(body, "10.77.0.1, fd10:77::1") {
 		t.Fatalf("the DNS page with IPv6:\n%s", body)
 	}
-	if w := post("/dns", url.Values{"name": {"printer6"}, "ip6": {"fd10:77::1:200"}}); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "<td>fd10:77::1:200</td>") {
+	if w := post("/m/default/dns", url.Values{"name": {"printer6"}, "ip6": {"fd10:77::1:200"}}); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "<td>fd10:77::1:200</td>") {
 		t.Fatalf("an IPv6 record = %d\n%s", w.Code, w.Body)
 	}
 	settings := url.Values{"default_mtu": {"1420"}, "upstream_dns": {"2606:4700:4700::1111, 9.9.9.9"}}
-	if w := post("/settings", settings); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Settings saved") {
+	if w := post("/m/default/settings", settings); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Settings saved") {
 		t.Fatalf("an IPv6 upstream = %d\n%s", w.Code, w.Body)
 	}
-	if w := post("/settings/ipv6", url.Values{"ipv6_prefix": {"off"}}); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "printer6") {
+	if w := post("/m/default/settings/ipv6", url.Values{"ipv6_prefix": {"off"}}); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "printer6") {
 		// The IPv6 record would point outside the mesh.
 		t.Fatalf("off with an IPv6 record = %d\n%s", w.Code, w.Body)
 	}
-	if w := post("/dns/printer6/remove", url.Values{}); w.Code != http.StatusOK {
+	if w := post("/m/default/dns/printer6/remove", url.Values{}); w.Code != http.StatusOK {
 		t.Fatalf("remove printer6 = %d", w.Code)
 	}
-	if w := post("/settings/ipv6", url.Values{"ipv6_prefix": {"off"}}); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "IPv6 given up") ||
+	if w := post("/m/default/settings/ipv6", url.Values{"ipv6_prefix": {"off"}}); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "IPv6 given up") ||
 		!strings.Contains(w.Body.String(), "The mesh runs IPv4 only") {
 		t.Fatalf("off = %d\n%s", w.Code, w.Body)
 	}
@@ -642,20 +645,20 @@ func TestEditSpoke(t *testing.T) {
 		form.Set("csrf", csrf)
 		return r.do(http.MethodPost, path, cookie, form)
 	}
-	if w := r.do(http.MethodGet, "/nodes/vps-1", cookie, nil); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "listen_port") {
+	if w := r.do(http.MethodGet, "/m/default/nodes/vps-1", cookie, nil); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "listen_port") {
 		t.Fatalf("an enrolled server's page shows its computed config: %d\n%s", w.Code, w.Body)
 	}
-	if w := post("/nodes/vps-2", url.Values{"endpoint": {testfix.VPS2.Endpoint}, "listen_port": {"51820"}, "mtu": {"1420"}, "can_exit": {"on"}}); w.Code != http.StatusOK {
+	if w := post("/m/default/nodes/vps-2", url.Values{"endpoint": {testfix.VPS2.Endpoint}, "listen_port": {"51820"}, "mtu": {"1420"}, "can_exit": {"on"}}); w.Code != http.StatusOK {
 		t.Fatalf("make vps-2 an exit = %d\n%s", w.Code, w.Body)
 	}
-	if w := post("/nodes", url.Values{"name": {"laptop"}, "role": {"spoke"}}); w.Code != http.StatusOK {
+	if w := post("/m/default/nodes", url.Values{"name": {"laptop"}, "role": {"spoke"}}); w.Code != http.StatusOK {
 		t.Fatalf("add spoke = %d\n%s", w.Code, w.Body)
 	}
-	body := r.do(http.MethodGet, "/nodes/laptop", cookie, nil).Body.String()
+	body := r.do(http.MethodGet, "/m/default/nodes/laptop", cookie, nil).Body.String()
 	if !strings.Contains(body, `<option value="vps-1"`) || strings.Count(body, `<option value="vps-2"`) != 2 {
 		t.Fatalf("the spoke page must offer both servers as hubs and vps-2 as an exit:\n%s", body)
 	}
-	if w := post("/nodes/laptop", url.Values{"hub": {"vps-1"}, "exit": {"vps-2"}, "keepalive": {"15"}, "mtu": {"1380"}}); w.Code != http.StatusOK ||
+	if w := post("/m/default/nodes/laptop", url.Values{"hub": {"vps-1"}, "exit": {"vps-2"}, "keepalive": {"15"}, "mtu": {"1380"}}); w.Code != http.StatusOK ||
 		!strings.Contains(w.Body.String(), "Saved") {
 		t.Fatalf("edit spoke = %d\n%s", w.Code, w.Body)
 	}
@@ -675,7 +678,7 @@ func TestEditSpoke(t *testing.T) {
 		"keepalive too long":     {url.Values{"keepalive": {"9999"}, "mtu": {"1380"}}, http.StatusBadRequest},
 		"hub not a node":         {url.Values{"hub": {"ghost"}, "keepalive": {"15"}, "mtu": {"1380"}}, http.StatusNotFound},
 	} {
-		if w := post("/nodes/laptop", c.form); w.Code != c.want || !strings.Contains(w.Body.String(), "<h1>laptop</h1>") {
+		if w := post("/m/default/nodes/laptop", c.form); w.Code != c.want || !strings.Contains(w.Body.String(), "<h1>laptop</h1>") {
 			t.Errorf("%s = %d, want %d on the node page\n%s", name, w.Code, c.want, w.Body)
 		}
 	}
@@ -683,21 +686,21 @@ func TestEditSpoke(t *testing.T) {
 		t.Fatalf("a refused edit changed the spoke: %+v", n)
 	}
 	// A new mesh IP from the form (amendment A41), and what it does not reach.
-	if w := post("/nodes/laptop", url.Values{"mesh_ip": {"10.77.2.9"}, "hub": {"vps-1"}, "keepalive": {"15"}, "mtu": {"1380"}}); w.Code != http.StatusOK ||
+	if w := post("/m/default/nodes/laptop", url.Values{"mesh_ip": {"10.77.2.9"}, "hub": {"vps-1"}, "keepalive": {"15"}, "mtu": {"1380"}}); w.Code != http.StatusOK ||
 		!strings.Contains(w.Body.String(), "laptop moves from 10.77.2.1 to 10.77.2.9") || !strings.Contains(w.Body.String(), `name="mesh_ip" value="10.77.2.9"`) {
 		t.Fatalf("a new mesh IP = %d\n%s", w.Code, w.Body)
 	}
-	if w := post("/nodes/laptop", url.Values{"mesh_ip": {"10.77.0.1"}, "hub": {"vps-1"}, "keepalive": {"15"}, "mtu": {"1380"}}); w.Code != http.StatusBadRequest ||
+	if w := post("/m/default/nodes/laptop", url.Values{"mesh_ip": {"10.77.0.1"}, "hub": {"vps-1"}, "keepalive": {"15"}, "mtu": {"1380"}}); w.Code != http.StatusBadRequest ||
 		!strings.Contains(w.Body.String(), "already assigned") {
 		t.Fatalf("a taken mesh IP = %d\n%s", w.Code, w.Body)
 	}
-	if w := post("/nodes/laptop/disable", url.Values{}); w.Code != http.StatusOK {
+	if w := post("/m/default/nodes/laptop/disable", url.Values{}); w.Code != http.StatusOK {
 		t.Fatalf("disable = %d", w.Code)
 	}
-	if w := post("/nodes/laptop/token", url.Values{}); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "enable it first") {
+	if w := post("/m/default/nodes/laptop/token", url.Values{}); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "enable it first") {
 		t.Fatalf("a token for a disabled node = %d\n%s", w.Code, w.Body)
 	}
-	if w := post("/nodes/ghost/disable", url.Values{}); w.Code != http.StatusNotFound {
+	if w := post("/m/default/nodes/ghost/disable", url.Values{}); w.Code != http.StatusNotFound {
 		t.Fatalf("disabling an unknown node = %d", w.Code)
 	}
 }
@@ -709,18 +712,25 @@ func TestStoreFailuresAreLoggedNotShown(t *testing.T) {
 	cookie, csrf := r.signIn()
 	r.broken.Store(true)
 	for _, c := range []struct{ method, path string }{
-		{http.MethodGet, "/"}, {http.MethodGet, "/fragments/nodes"}, {http.MethodGet, "/nodes"}, {http.MethodGet, "/nodes/vps-1"},
-		{http.MethodGet, "/nodes/vps-1/remove"}, {http.MethodGet, "/versions"}, {http.MethodGet, "/versions/1"},
-		{http.MethodGet, "/audit"}, {http.MethodGet, "/settings"}, {http.MethodGet, "/export"},
-		{http.MethodPost, "/nodes/vps-1"}, {http.MethodPost, "/nodes/vps-1/remove"}, {http.MethodPost, "/versions/1/rollback"},
-		{http.MethodGet, "/dns"}, {http.MethodGet, "/firewall"}, {http.MethodPost, "/dns/files/remove"},
-		{http.MethodGet, "/firewall/zones"}, {http.MethodGet, "/firewall/objects"}, {http.MethodGet, "/firewall/reach"},
-		{http.MethodPost, "/firewall/policies/allow-all/remove"}, {http.MethodPost, "/firewall/zones"},
-		{http.MethodPost, "/nodes/vps-1/phone"}, {http.MethodPost, "/firewall/timezone"},
+		{http.MethodGet, "/"}, {http.MethodGet, "/m/default/fragments/nodes"}, {http.MethodGet, "/m/default/nodes"}, {http.MethodGet, "/m/default/nodes/vps-1"},
+		{http.MethodGet, "/m/default/nodes/vps-1/remove"}, {http.MethodGet, "/m/default/versions"}, {http.MethodGet, "/m/default/versions/1"},
+		{http.MethodGet, "/m/default/audit"}, {http.MethodGet, "/m/default/settings"}, {http.MethodGet, "/m/default/export"},
+		{http.MethodPost, "/m/default/nodes/vps-1"}, {http.MethodPost, "/m/default/nodes/vps-1/remove"}, {http.MethodPost, "/m/default/versions/1/rollback"},
+		{http.MethodGet, "/m/default/dns"}, {http.MethodGet, "/m/default/firewall"}, {http.MethodPost, "/m/default/dns/files/remove"},
+		{http.MethodGet, "/m/default/firewall/zones"}, {http.MethodGet, "/m/default/firewall/objects"}, {http.MethodGet, "/m/default/firewall/reach"},
+		{http.MethodPost, "/m/default/firewall/policies/allow-all/remove"}, {http.MethodPost, "/m/default/firewall/zones"},
+		{http.MethodPost, "/m/default/nodes/vps-1/phone"}, {http.MethodPost, "/m/default/firewall/timezone"}, {http.MethodGet, "/meshes"},
+		{http.MethodGet, "/m/default/settings?lookup=fails"},
 	} {
 		var form url.Values
 		if c.method == http.MethodPost {
 			form = url.Values{"csrf": {csrf}}
+		}
+		// A mesh page's lookup of its mesh goes through, so the failure
+		// reaches the page; the last case fails at the lookup itself.
+		r.pass.Store(0)
+		if strings.HasPrefix(c.path, "/m/") && !strings.HasSuffix(c.path, "?lookup=fails") {
+			r.pass.Store(1)
 		}
 		r.logs.Reset()
 		w := r.do(c.method, c.path, cookie, form)
@@ -763,30 +773,30 @@ func TestRollbackThatAddsNodesNeedsConfirmation(t *testing.T) {
 	r := newRig(t)
 	r.seedServers()
 	cookie, csrf := r.signIn()
-	if w := r.do(http.MethodPost, "/nodes/vps-2/remove", cookie, url.Values{"csrf": {csrf}}); w.Code != http.StatusSeeOther {
+	if w := r.do(http.MethodPost, "/m/default/nodes/vps-2/remove", cookie, url.Values{"csrf": {csrf}}); w.Code != http.StatusSeeOther {
 		t.Fatalf("remove = %d", w.Code)
 	}
-	w := r.do(http.MethodGet, "/versions/1", cookie, nil)
+	w := r.do(http.MethodGet, "/m/default/versions/1", cookie, nil)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "node vps-2 added") || !strings.Contains(w.Body.String(), `name="confirm"`) {
 		t.Fatalf("version page = %d\n%s", w.Code, w.Body)
 	}
-	if w := r.do(http.MethodPost, "/versions/1/rollback", cookie, url.Values{"csrf": {csrf}}); w.Code != http.StatusConflict || len(r.nodes()) != 1 {
+	if w := r.do(http.MethodPost, "/m/default/versions/1/rollback", cookie, url.Values{"csrf": {csrf}}); w.Code != http.StatusConflict || len(r.nodes()) != 1 {
 		t.Fatalf("an unconfirmed rollback = %d, %d nodes", w.Code, len(r.nodes()))
 	}
-	w = r.do(http.MethodPost, "/versions/1/rollback", cookie, url.Values{"csrf": {csrf}, "confirm": {"yes"}})
-	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/versions/3" || len(r.nodes()) != 2 {
+	w = r.do(http.MethodPost, "/m/default/versions/1/rollback", cookie, url.Values{"csrf": {csrf}, "confirm": {"yes"}})
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/m/default/versions/3" || len(r.nodes()) != 2 {
 		t.Fatalf("a confirmed rollback = %d %s, %d nodes", w.Code, w.Header().Get("Location"), len(r.nodes()))
 	}
-	if w := r.do(http.MethodGet, "/versions", cookie, nil); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "restores v1") {
+	if w := r.do(http.MethodGet, "/m/default/versions", cookie, nil); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "restores v1") {
 		t.Fatalf("versions page = %d\n%s", w.Code, w.Body)
 	}
-	if w := r.do(http.MethodGet, "/versions/abc", cookie, nil); w.Code != http.StatusBadRequest {
+	if w := r.do(http.MethodGet, "/m/default/versions/abc", cookie, nil); w.Code != http.StatusBadRequest {
 		t.Fatalf("a bad version number = %d", w.Code)
 	}
-	if w := r.do(http.MethodGet, "/versions/99", cookie, nil); w.Code != http.StatusNotFound {
+	if w := r.do(http.MethodGet, "/m/default/versions/99", cookie, nil); w.Code != http.StatusNotFound {
 		t.Fatalf("an unknown version = %d", w.Code)
 	}
-	w = r.do(http.MethodPost, "/versions/3/rollback", cookie, url.Values{"csrf": {csrf}})
+	w = r.do(http.MethodPost, "/m/default/versions/3/rollback", cookie, url.Values{"csrf": {csrf}})
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "already matches") {
 		t.Fatalf("a rollback to the current version = %d\n%s", w.Code, w.Body)
 	}
@@ -813,57 +823,57 @@ func TestSettings(t *testing.T) {
 		"extra domain":      form("dns_extra_domains", "lan, 10.in-addr.arpa"),
 		"server's domain":   form("dns_extra_domains", "example.com"),
 	} {
-		if w := r.do(http.MethodPost, "/settings", cookie, f); w.Code != http.StatusBadRequest {
+		if w := r.do(http.MethodPost, "/m/default/settings", cookie, f); w.Code != http.StatusBadRequest {
 			t.Errorf("%s = %d\n%s", name, w.Code, w.Body)
 		}
 	}
 	// The CIDR may change while the mesh is empty.
 	for _, cidr := range []string{"10.88.0.0/16", "10.77.0.0/16"} {
-		if w := r.do(http.MethodPost, "/settings", cookie, form("mesh_cidr", cidr, "default_mtu", "1400")); w.Code != http.StatusOK {
+		if w := r.do(http.MethodPost, "/m/default/settings", cookie, form("mesh_cidr", cidr, "default_mtu", "1400")); w.Code != http.StatusOK {
 			t.Fatalf("save %s = %d\n%s", cidr, w.Code, w.Body)
 		}
 	}
 	r.seedServers()
-	w := r.do(http.MethodGet, "/settings", cookie, nil)
+	w := r.do(http.MethodGet, "/m/default/settings", cookie, nil)
 	if !strings.Contains(w.Body.String(), `value="10.77.0.0/16" readonly`) || !strings.Contains(w.Body.String(), `value="1400"`) {
 		t.Fatalf("settings page after save:\n%s", w.Body)
 	}
-	if w := r.do(http.MethodPost, "/settings", cookie, form("mesh_cidr", "10.99.0.0/16")); w.Code != http.StatusBadRequest {
+	if w := r.do(http.MethodPost, "/m/default/settings", cookie, form("mesh_cidr", "10.99.0.0/16")); w.Code != http.StatusBadRequest {
 		t.Fatalf("changing the CIDR of a populated mesh = %d", w.Code)
 	}
-	if w := r.do(http.MethodPost, "/settings", cookie, form("default_hub", "vps-2")); w.Code != http.StatusOK {
+	if w := r.do(http.MethodPost, "/m/default/settings", cookie, form("default_hub", "vps-2")); w.Code != http.StatusOK {
 		t.Fatalf("default hub = %d", w.Code)
 	}
 	// The zone renames every node's name; the DNS page shows the new one.
-	if !strings.Contains(r.do(http.MethodGet, "/settings", cookie, nil).Body.String(), `name="dns_zone" value="mesh"`) {
+	if !strings.Contains(r.do(http.MethodGet, "/m/default/settings", cookie, nil).Body.String(), `name="dns_zone" value="mesh"`) {
 		t.Fatal("the settings page does not show the default zone")
 	}
-	if w := r.do(http.MethodPost, "/settings", cookie, form("dns_zone", "home.arpa")); w.Code != http.StatusOK {
+	if w := r.do(http.MethodPost, "/m/default/settings", cookie, form("dns_zone", "home.arpa")); w.Code != http.StatusOK {
 		t.Fatalf("dns zone = %d\n%s", w.Code, w.Body)
 	}
-	if body := r.do(http.MethodGet, "/dns", cookie, nil).Body.String(); !strings.Contains(body, "vps-1.home.arpa") {
+	if body := r.do(http.MethodGet, "/m/default/dns", cookie, nil).Body.String(); !strings.Contains(body, "vps-1.home.arpa") {
 		t.Fatalf("the DNS page after the zone change:\n%s", body)
 	}
 	// Extra domains (amendment A39): saved sorted, shown on both pages; one
 	// around the zone is the plan's to refuse; an empty field clears them,
 	// and a form without the field keeps them.
-	if w := r.do(http.MethodPost, "/settings", cookie, form("dns_extra_domains", "home.arpa.lab, Example.Lan")); w.Code != http.StatusOK ||
+	if w := r.do(http.MethodPost, "/m/default/settings", cookie, form("dns_extra_domains", "home.arpa.lab, Example.Lan")); w.Code != http.StatusOK ||
 		!strings.Contains(w.Body.String(), `value="example.lan, home.arpa.lab"`) {
 		t.Fatalf("extra domains = %d\n%s", w.Code, w.Body)
 	}
-	if body := r.do(http.MethodGet, "/dns", cookie, nil).Body.String(); !strings.Contains(body, "<code>example.lan</code>, <code>home.arpa.lab</code>") {
+	if body := r.do(http.MethodGet, "/m/default/dns", cookie, nil).Body.String(); !strings.Contains(body, "<code>example.lan</code>, <code>home.arpa.lab</code>") {
 		t.Fatalf("the DNS page lacks the extra domains:\n%s", body)
 	}
-	if w := r.do(http.MethodPost, "/settings", cookie, form("dns_extra_domains", "arpa.home")); w.Code != http.StatusOK {
+	if w := r.do(http.MethodPost, "/m/default/settings", cookie, form("dns_extra_domains", "arpa.home")); w.Code != http.StatusOK {
 		t.Fatalf("another set of domains = %d\n%s", w.Code, w.Body)
 	}
-	if w := r.do(http.MethodPost, "/settings", cookie, form("dns_zone", "home.arpa", "dns_extra_domains", "lab.home.arpa")); w.Code != http.StatusConflict {
+	if w := r.do(http.MethodPost, "/m/default/settings", cookie, form("dns_zone", "home.arpa", "dns_extra_domains", "lab.home.arpa")); w.Code != http.StatusConflict {
 		t.Fatalf("a domain inside the zone = %d\n%s", w.Code, w.Body)
 	}
-	if w := r.do(http.MethodPost, "/settings", cookie, form()); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `value="arpa.home"`) {
+	if w := r.do(http.MethodPost, "/m/default/settings", cookie, form()); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `value="arpa.home"`) {
 		t.Fatalf("a form without the field = %d\n%s", w.Code, w.Body)
 	}
-	if w := r.do(http.MethodPost, "/settings", cookie, form("dns_extra_domains", "")); w.Code != http.StatusOK ||
+	if w := r.do(http.MethodPost, "/m/default/settings", cookie, form("dns_extra_domains", "")); w.Code != http.StatusOK ||
 		!strings.Contains(w.Body.String(), `name="dns_extra_domains" value=""`) {
 		t.Fatalf("clearing them = %d\n%s", w.Code, w.Body)
 	}
@@ -907,7 +917,7 @@ func TestUsersAndAccount(t *testing.T) {
 	if w := post("/account/password", url.Values{"current": {password}, "new": {"a new horse battery"}, "new2": {"a new horse battery"}}); w.Code != http.StatusSeeOther {
 		t.Fatalf("change password = %d\n%s", w.Code, w.Body)
 	}
-	if w := r.do(http.MethodGet, "/", cookie, nil); w.Code != http.StatusSeeOther {
+	if w := r.do(http.MethodGet, "/m/default/", cookie, nil); w.Code != http.StatusSeeOther {
 		t.Fatal("a password change must end the session")
 	}
 }
@@ -916,17 +926,17 @@ func TestDashboardFragmentAndExport(t *testing.T) {
 	r := newRig(t)
 	r.seedServers()
 	cookie, _ := r.signIn()
-	w := r.do(http.MethodGet, "/fragments/nodes", cookie, nil)
+	w := r.do(http.MethodGet, "/m/default/fragments/nodes", cookie, nil)
 	body := w.Body.String()
-	if w.Code != http.StatusOK || !strings.HasPrefix(body, "\n<div id=\"nodes\" hx-get=\"/fragments/nodes\"") || strings.Contains(body, "<html") {
+	if w.Code != http.StatusOK || !strings.HasPrefix(body, "\n<div id=\"nodes\" hx-get=\"/m/default/fragments/nodes\"") || strings.Contains(body, "<html") {
 		t.Fatalf("fragment = %d\n%s", w.Code, body)
 	}
 	if !strings.Contains(body, "no heartbeat yet") {
 		t.Fatalf("the dashboard must show nodes without a heartbeat in red:\n%s", body)
 	}
-	w = r.do(http.MethodGet, "/export", cookie, nil)
+	w = r.do(http.MethodGet, "/m/default/export", cookie, nil)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "name: vps-1") ||
-		w.Header().Get("Content-Disposition") != `attachment; filename="mesh-2026-10-12.yaml"` {
+		w.Header().Get("Content-Disposition") != `attachment; filename="default-2026-10-12.yaml"` {
 		t.Fatalf("export = %d %v", w.Code, w.Header())
 	}
 }
@@ -958,7 +968,7 @@ func TestWrongEnrolmentCodeKeepsTheSecret(t *testing.T) {
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), group(key.Secret(), 4)) {
 		t.Fatalf("a wrong enrolment code = %d\n%s", w.Code, w.Body)
 	}
-	if w := r.do(http.MethodGet, "/", cookie, nil); w.Code != http.StatusSeeOther {
+	if w := r.do(http.MethodGet, "/m/default/", cookie, nil); w.Code != http.StatusSeeOther {
 		t.Fatalf("a failed enrolment reached the dashboard: %d", w.Code)
 	}
 }
@@ -1030,7 +1040,7 @@ func TestPageGoldens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := page{User: "admin", CSRF: "csrf-token", Version: "v1.0.0"}
+	base := page{User: "admin", CSRF: "csrf-token", Version: "v1.0.0", Mesh: "default", Base: "/m/default", Meshes: []string{"default", "lab"}}
 	rows := []nodeRow{
 		{Name: "vps-1", Role: "server", MeshIP: "10.77.0.1", Endpoint: "203.0.113.10:51820", Class: "ok", State: "in sync",
 			Versions: "v4 / v4", Agent: "v1.0.0", Seen: "12s ago", Peers: []peerAge{{Name: "vps-2", Age: "40s ago"}}},
@@ -1041,7 +1051,7 @@ func TestPageGoldens(t *testing.T) {
 		"dashboard": func() page {
 			p := base
 			p.Title, p.Nav = "Dashboard", "dashboard"
-			p.Data = dashboardData{Rows: rows, Warnings: []string{`warning: node "vps-3": no endpoint`}}
+			p.Data = dashboardData{Base: "/m/default", Rows: rows, Warnings: []string{`warning: node "vps-3": no endpoint`}}
 			return p
 		}(),
 		"node": func() page {
@@ -1064,7 +1074,7 @@ func TestPageGoldens(t *testing.T) {
 				{Name: "policy: allow-all", Action: "allow"}}
 			form := newPolicyForm(2)
 			form.Zone = "Asia/Singapore"
-			p.Data = fwPage{Tab: "policies", Tabs: fwTabs, Warnings: []string{`warning: zone "lab" has no addresses`}, View: policiesView{
+			p.Data = fwPage{Tab: "policies", Tabs: tabsIn("/m/default"), Warnings: []string{`warning: zone "lab" has no addresses`}, View: policiesView{
 				Policies: []policyRow{
 					{Pos: 1, Up: 0, Down: 2, Name: "smb", Action: "allow", From: "group:laptops", To: "node:nas", Services: "tcp/445", First: true,
 						Schedule: "mon-fri 09:00-17:00", Inactive: true},
@@ -1109,7 +1119,7 @@ func TestEveryPageRenders(t *testing.T) {
 		"nodes": nodesData{}, "enrollment": enrollmentData{Node: "vps-1", Token: "t"},
 		"node": nodeData{Node: api.NodeInfo{Rollback: &proto.Rollback{From: 5, To: 4, Reason: "no answer from the server"}}}, "remove": api.NodeInfo{Name: "x"},
 		"versions": versionsData{}, "version": versionData{Current: true}, "audit": auditData{}, "settings": settingsData{},
-		"users": []userRow{{Name: "ops"}, {Name: "admin", Self: true}}, "account": nil, "error": nil,
+		"users": []userRow{{Name: "ops"}, {Name: "admin", Self: true}}, "account": nil, "error": nil, "meshes": meshesData{Meshes: []api.MeshInfo{{Name: "default"}}},
 		"dns": dnsData{}, "firewall": fwPage{Tabs: fwTabs, View: policiesView{Policies: []policyRow{{Pos: 1, Name: "p", First: true}}}},
 		"policy": fwPage{View: policyView{}}, "zones": fwPage{View: zonesView{Zones: []zoneRow{{Name: "z"}}}},
 		"zone": fwPage{View: zoneView{Inbound: []ruleRow{{N: 1, Text: "x", System: true}}}}, "objects": fwPage{View: objectsView{}},

@@ -1,5 +1,5 @@
 {{define "content"}}
-<form method="post" action="/settings" class="grid">
+<form method="post" action="{{$.Base}}/settings" class="grid">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
 {{- with .Data}}
 <label>Mesh CIDR <input name="mesh_cidr" value="{{.MeshCIDR}}"{{if .CIDRLocked}} readonly{{end}}></label>
@@ -25,11 +25,11 @@
 {{- with .Data}}
 <p>{{if .IPv6Prefix}}The mesh's IPv6 prefix is <code>{{.IPv6Prefix}}</code>; {{.IPv6Addressed}} node(s) have an IPv6 mesh address.{{else}}The mesh runs IPv4 only.{{end}} Setting a prefix gives every node that may have IPv6 (families: IPv4 and IPv6, or IPv6 only) an address in it; <code>off</code> takes them all away. A prefix that holds addresses is changed by giving IPv6 up first.</p>
 {{- end}}
-<form method="post" action="/settings/ipv6" class="grid">
+<form method="post" action="{{$.Base}}/settings/ipv6" class="grid">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
 <label>IPv6 prefix <input name="ipv6_prefix" value="{{.Data.IPv6Prefix}}" placeholder="auto, a /48 to /64, or off"></label>
 <button type="submit">Save IPv6</button>
 </form>
 <h2>Export</h2>
-<p><a href="/export">Download the mesh as YAML</a> (the same file as <code>meshctl export</code>; no secrets).</p>
+<p><a href="{{$.Base}}/export">Download the mesh as YAML</a> (the same file as <code>meshctl export</code>; no secrets).</p>
 {{end}}

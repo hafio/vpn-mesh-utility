@@ -11,14 +11,16 @@
 <body hx-headers='{"X-CSRF-Token": "csrf-token"}'>
 <header>
 <span class="brand">meshctl</span>
+<span class="mesh">default</span>
 <nav>
-<a href="/" class="active">Dashboard</a>
-<a href="/nodes">Nodes</a>
-<a href="/dns">DNS</a>
-<a href="/firewall">Firewall</a>
-<a href="/versions">Versions</a>
-<a href="/audit">Audit</a>
-<a href="/settings">Settings</a>
+<a href="/m/default/" class="active">Dashboard</a>
+<a href="/m/default/nodes">Nodes</a>
+<a href="/m/default/dns">DNS</a>
+<a href="/m/default/firewall">Firewall</a>
+<a href="/m/default/versions">Versions</a>
+<a href="/m/default/audit">Audit</a>
+<a href="/m/default/settings">Settings</a>
+<a href="/meshes">Meshes</a>
 <a href="/users">Users</a>
 <a href="/account">admin</a>
 </nav>
@@ -27,16 +29,20 @@
 <button type="submit" class="link">Sign out</button>
 </form>
 </header>
+<nav class="meshes" aria-label="Meshes">
+<a href="/m/default/" class="active" aria-current="page">default</a>
+<a href="/m/lab/">lab</a>
+</nav>
 <main>
 <h1>Dashboard</h1>
 
 
-<div id="nodes" hx-get="/fragments/nodes" hx-trigger="every 10s" hx-swap="outerHTML">
+<div id="nodes" hx-get="/m/default/fragments/nodes" hx-trigger="every 10s" hx-swap="outerHTML">
 <table>
 <thead><tr><th>Node</th><th>Role</th><th>Mesh IP</th><th>State</th><th>Applied / current</th><th>Agent</th><th>Last seen</th><th>Handshakes</th><th>Exit</th></tr></thead>
 <tbody>
 <tr>
-<td><a href="/nodes/vps-1">vps-1</a></td>
+<td><a href="/m/default/nodes/vps-1">vps-1</a></td>
 <td>server</td>
 <td>10.77.0.1</td>
 <td><span class="state ok">in sync</span></td>
@@ -47,7 +53,7 @@
 <td>-</td>
 </tr>
 <tr>
-<td><a href="/nodes/nas">nas</a></td>
+<td><a href="/m/default/nodes/nas">nas</a></td>
 <td>spoke</td>
 <td>10.77.1.1</td>
 <td><span class="state off">not joined</span></td>

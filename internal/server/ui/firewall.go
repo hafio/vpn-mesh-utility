@@ -31,6 +31,16 @@ var fwTabs = []fwTab{
 	{"reach", "/firewall/reach", "Reachability"},
 }
 
+// tabsIn are the tabs of the mesh whose pages start with base.
+func tabsIn(base string) []fwTab {
+	out := make([]fwTab, len(fwTabs))
+	for i, t := range fwTabs {
+		t.Path = base + t.Path
+		out[i] = t
+	}
+	return out
+}
+
 // fwPage is what every Firewall template gets: its tab, and its own data.
 type fwPage struct {
 	Tab      string
@@ -41,7 +51,7 @@ type fwPage struct {
 
 func (u *ui) showFirewall(w http.ResponseWriter, r *http.Request, s auth.Session, status int, name, tab, title string, p page,
 	warnings []string, view any) {
-	p.Data = fwPage{Tab: tab, Tabs: fwTabs, Warnings: warnings, View: view}
+	p.Data = fwPage{Tab: tab, Tabs: tabsIn(u.base()), Warnings: warnings, View: view}
 	u.show(w, r, s, status, name, "firewall", title, p)
 }
 

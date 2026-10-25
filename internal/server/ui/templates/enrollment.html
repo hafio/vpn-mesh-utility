@@ -8,5 +8,5 @@
 {{- range .Data.Warnings}}
 <p class="warning">{{.}}</p>
 {{- end}}
-<p><a href="/nodes/{{.Data.Node}}">Go to {{.Data.Node}}</a></p>
+<p><a href="{{$.Base}}/nodes/{{.Data.Node}}">Go to {{.Data.Node}}</a></p>
 {{end}}

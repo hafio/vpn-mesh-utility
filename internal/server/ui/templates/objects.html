@@ -8,13 +8,13 @@
 <thead><tr><th>Group</th><th>Nodes</th><th></th></tr></thead>
 <tbody>
 {{- range .Groups}}
-<tr><td><code>group:{{.Name}}</code>{{if .Description}}<br><span class="hint">{{.Description}}</span>{{end}}</td><td>{{.Entries}}</td><td><form method="post" action="/firewall/objects/group/{{.Name}}/remove" class="inline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit" class="link">Remove</button></form></td></tr>
+<tr><td><code>group:{{.Name}}</code>{{if .Description}}<br><span class="hint">{{.Description}}</span>{{end}}</td><td>{{.Entries}}</td><td><form method="post" action="{{$.Base}}/firewall/objects/group/{{.Name}}/remove" class="inline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit" class="link">Remove</button></form></td></tr>
 {{- else}}
 <tr><td colspan="3">No groups yet.</td></tr>
 {{- end}}
 </tbody>
 </table>
-<form method="post" action="/firewall/objects/group" class="grid">
+<form method="post" action="{{$.Base}}/firewall/objects/group" class="grid">
 <input type="hidden" name="csrf" value="{{$.CSRF}}">
 <label>Name <input name="name" value="{{if eq .Form.Kind "group"}}{{.Form.Name}}{{end}}" required maxlength="32"></label>
 <label>Nodes <input name="entries" value="{{if eq .Form.Kind "group"}}{{.Form.Entries}}{{end}}" placeholder="{{.Nodes}}"></label>
@@ -27,13 +27,13 @@
 <thead><tr><th>Object</th><th>Addresses</th><th></th></tr></thead>
 <tbody>
 {{- range .Addresses}}
-<tr><td><code>addr:{{.Name}}</code>{{if .Description}}<br><span class="hint">{{.Description}}</span>{{end}}</td><td>{{.Entries}}</td><td><form method="post" action="/firewall/objects/address/{{.Name}}/remove" class="inline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit" class="link">Remove</button></form></td></tr>
+<tr><td><code>addr:{{.Name}}</code>{{if .Description}}<br><span class="hint">{{.Description}}</span>{{end}}</td><td>{{.Entries}}</td><td><form method="post" action="{{$.Base}}/firewall/objects/address/{{.Name}}/remove" class="inline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit" class="link">Remove</button></form></td></tr>
 {{- else}}
 <tr><td colspan="3">No address objects yet.</td></tr>
 {{- end}}
 </tbody>
 </table>
-<form method="post" action="/firewall/objects/address" class="grid">
+<form method="post" action="{{$.Base}}/firewall/objects/address" class="grid">
 <input type="hidden" name="csrf" value="{{$.CSRF}}">
 <label>Name <input name="name" value="{{if eq .Form.Kind "address"}}{{.Form.Name}}{{end}}" required maxlength="32"></label>
 <label>Addresses <input name="entries" value="{{if eq .Form.Kind "address"}}{{.Form.Entries}}{{end}}" placeholder="10.77.1.5, 10.77.2.0/24, 10.77.3.10-10.77.3.20"></label>
@@ -46,13 +46,13 @@
 <thead><tr><th>Object</th><th>Services</th><th></th></tr></thead>
 <tbody>
 {{- range .Services}}
-<tr><td><code>svc:{{.Name}}</code>{{if .Description}}<br><span class="hint">{{.Description}}</span>{{end}}</td><td>{{.Entries}}</td><td><form method="post" action="/firewall/objects/service/{{.Name}}/remove" class="inline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit" class="link">Remove</button></form></td></tr>
+<tr><td><code>svc:{{.Name}}</code>{{if .Description}}<br><span class="hint">{{.Description}}</span>{{end}}</td><td>{{.Entries}}</td><td><form method="post" action="{{$.Base}}/firewall/objects/service/{{.Name}}/remove" class="inline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit" class="link">Remove</button></form></td></tr>
 {{- else}}
 <tr><td colspan="3">No service objects yet.</td></tr>
 {{- end}}
 </tbody>
 </table>
-<form method="post" action="/firewall/objects/service" class="grid">
+<form method="post" action="{{$.Base}}/firewall/objects/service" class="grid">
 <input type="hidden" name="csrf" value="{{$.CSRF}}">
 <label>Name <input name="name" value="{{if eq .Form.Kind "service"}}{{.Form.Name}}{{end}}" required maxlength="32"></label>
 <label>Services <input name="entries" value="{{if eq .Form.Kind "service"}}{{.Form.Entries}}{{end}}" placeholder="tcp/80, tcp/443, udp/1000-2000, icmp"></label>

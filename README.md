@@ -42,8 +42,8 @@ joins on its first start with `MESHCTL_TOKEN` (exported, in a `.env` file, or a 
 only when given a new token. meshctl writes no container deployment: [docs/containers.md](docs/containers.md)
 has compose, Podman and Kubernetes samples. One control plane holds several meshes (M9, in
 progress): `meshctl mesh add|list|show|set|rm`, each with its own network, DNS zone, IPv6 prefix,
-firewall and history, none sharing an address or a domain with another, and `--mesh` on every
-admin command. The live tests and the v1.0.0 release follow.
+firewall and history, none sharing an address or a domain with another, `--mesh` on every
+admin command, and each mesh's web UI pages under `/m/<mesh>/` with a Meshes page. The live tests and the v1.0.0 release follow.
 
 ## Quick start
 

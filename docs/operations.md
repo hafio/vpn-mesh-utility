@@ -369,7 +369,8 @@ an agent belongs to one (a host in two meshes runs two agents).
 With more than one mesh, a command without `--mesh` says which there are. Meshes share no network
 and no DNS domain: a mesh's IPv4 network and IPv6 prefix may not overlap another's, nor its zone
 or extra domains equal, sit inside or hold another's, since agents of two meshes may run on one
-host. The web UI works on the only mesh for now.
+host. On the web UI each mesh's pages are under `/m/<mesh>/`; its Meshes page lists, adds,
+renames and removes them.
 
 **Relay failover** (amendment A40). Two spokes with different hubs talk through one of them (the
 lower-id spoke's hub). When that hub goes down, the server moves the pair to the other spoke's hub,
@@ -469,15 +470,19 @@ an authenticator app (any TOTP app) and asks for one code to confirm it.
 docker exec -it <container> /app/meshctl user add admin
 ```
 
+Each mesh's pages are under `/m/<mesh>/` (amendment A49): the bar names the mesh, and with more
+than one a row below it switches between them; `/` opens the first mesh.
+
 | Page | What it does |
 | --- | --- |
+| Meshes | every mesh (open it, rename it, remove one without nodes); add one with its name and, optionally, its IPv4 network, DNS zone and IPv6 prefix (`auto`, `off` or a prefix) |
 | Dashboard | every node with its state (green in sync, amber applying / degraded / late, red silent or rolled back, grey disabled or not joined; a phone green while its tunnel is on, amber when its profile is out of date, grey idle), applied and current version, agent, last heartbeat (a phone's last handshake), handshake age per peer and exit; refreshes every 10 s |
 | Nodes | add a node (the join command is shown once), open one to see its computed config, peers and DNS state, edit it, disable / enable, issue a new token, make a phone's profile (a QR code, shown once), remove it |
 | DNS | the mesh zone: one name per node and the custom records (add, remove); the upstream resolvers |
 | Firewall | the mesh firewall (below): policies in order (add, edit, move, remove; each optionally scheduled) and the time zone of the schedules, zones with their inbound and outbound rules, objects (groups, addresses, services), and Reachability: check one flow, now or at a time, see how every zone reaches every other |
 | Versions | every config version with what it changed; roll back to one (a new version; a rollback that adds or removes nodes asks for confirmation) |
 | Audit | who changed what, newest first |
-| Settings | default MTU, default hub, upstream DNS; the mesh CIDR only while the mesh is empty; download the export |
+| Settings | the mesh's default MTU, default hub, upstream DNS, DNS zone, extra domains and IPv6 prefix; the mesh CIDR only while the mesh is empty; download its export (`<mesh>-YYYY-MM-DD.yaml`) |
 | Users | add users, disable them, reset their authenticator |
 | Account | change your password (signs you out everywhere) |
 

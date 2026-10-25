@@ -11,15 +11,21 @@
 <body{{if .CSRF}} hx-headers='{"X-CSRF-Token": "{{.CSRF}}"}'{{end}}>
 <header>
 <span class="brand">meshctl</span>
+{{- if .Mesh}}
+<span class="mesh">{{.Mesh}}</span>
+{{- end}}
 {{- if .User}}
 <nav>
-<a href="/"{{if eq .Nav "dashboard"}} class="active"{{end}}>Dashboard</a>
-<a href="/nodes"{{if eq .Nav "nodes"}} class="active"{{end}}>Nodes</a>
-<a href="/dns"{{if eq .Nav "dns"}} class="active"{{end}}>DNS</a>
-<a href="/firewall"{{if eq .Nav "firewall"}} class="active"{{end}}>Firewall</a>
-<a href="/versions"{{if eq .Nav "versions"}} class="active"{{end}}>Versions</a>
-<a href="/audit"{{if eq .Nav "audit"}} class="active"{{end}}>Audit</a>
-<a href="/settings"{{if eq .Nav "settings"}} class="active"{{end}}>Settings</a>
+{{- if .Base}}
+<a href="{{.Base}}/"{{if eq .Nav "dashboard"}} class="active"{{end}}>Dashboard</a>
+<a href="{{.Base}}/nodes"{{if eq .Nav "nodes"}} class="active"{{end}}>Nodes</a>
+<a href="{{.Base}}/dns"{{if eq .Nav "dns"}} class="active"{{end}}>DNS</a>
+<a href="{{.Base}}/firewall"{{if eq .Nav "firewall"}} class="active"{{end}}>Firewall</a>
+<a href="{{.Base}}/versions"{{if eq .Nav "versions"}} class="active"{{end}}>Versions</a>
+<a href="{{.Base}}/audit"{{if eq .Nav "audit"}} class="active"{{end}}>Audit</a>
+<a href="{{.Base}}/settings"{{if eq .Nav "settings"}} class="active"{{end}}>Settings</a>
+{{- end}}
+<a href="/meshes"{{if eq .Nav "meshes"}} class="active"{{end}}>Meshes</a>
 <a href="/users"{{if eq .Nav "users"}} class="active"{{end}}>Users</a>
 <a href="/account"{{if eq .Nav "account"}} class="active"{{end}}>{{.User}}</a>
 </nav>
@@ -29,6 +35,13 @@
 </form>
 {{- end}}
 </header>
+{{- if gt (len .Meshes) 1}}
+<nav class="meshes" aria-label="Meshes">
+{{- range .Meshes}}
+<a href="/m/{{.}}/"{{if eq . $.Mesh}} class="active" aria-current="page"{{end}}>{{.}}</a>
+{{- end}}
+</nav>
+{{- end}}
 <main>
 <h1>{{.Title}}</h1>
 {{- if .Flash}}

@@ -7,7 +7,7 @@
 <thead><tr><th>Zone</th><th>Within</th><th>Members</th><th>Addresses</th><th>Rules in / out</th></tr></thead>
 <tbody>
 {{- range .Zones}}
-<tr><td><a href="/firewall/zones/{{.Name}}">{{.Name}}</a>{{if .Description}}<br><span class="hint">{{.Description}}</span>{{end}}</td><td><span class="state {{if eq .Intra "allow"}}ok{{else}}bad{{end}}">{{.Intra}}</span></td><td>{{.Members}}</td><td>{{if .Addresses}}{{.Addresses}}{{else}}none{{end}}</td><td>{{.Inbound}} / {{.Outbound}}</td></tr>
+<tr><td><a href="{{$.Base}}/firewall/zones/{{.Name}}">{{.Name}}</a>{{if .Description}}<br><span class="hint">{{.Description}}</span>{{end}}</td><td><span class="state {{if eq .Intra "allow"}}ok{{else}}bad{{end}}">{{.Intra}}</span></td><td>{{.Members}}</td><td>{{if .Addresses}}{{.Addresses}}{{else}}none{{end}}</td><td>{{.Inbound}} / {{.Outbound}}</td></tr>
 {{- else}}
 <tr><td colspan="5">No zones yet.</td></tr>
 {{- end}}
@@ -15,7 +15,7 @@
 </table>
 
 <h2>Add a zone</h2>
-<form method="post" action="/firewall/zones" class="grid">
+<form method="post" action="{{$.Base}}/firewall/zones" class="grid">
 <input type="hidden" name="csrf" value="{{$.CSRF}}">
 {{- template "fwzonefields" .Form}}
 <button type="submit">Add zone</button>

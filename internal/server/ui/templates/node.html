@@ -20,7 +20,7 @@
 <tr><th>Containers</th><td>{{.Node.ContainerSubnet}}{{with .Node.ContainerSubnet6}}, {{.}}{{end}}</td></tr>
 {{- end}}
 {{- if .Node.Groups}}
-<tr><th>Groups</th><td>{{range $i, $g := .Node.Groups}}{{if $i}}, {{end}}{{$g}}{{end}} (<a href="/firewall/objects">firewall</a>)</td></tr>
+<tr><th>Groups</th><td>{{range $i, $g := .Node.Groups}}{{if $i}}, {{end}}{{$g}}{{end}} (<a href="{{$.Base}}/firewall/objects">firewall</a>)</td></tr>
 {{- end}}
 {{- if .IsServer}}
 <tr><th>Endpoint</th><td>{{if .Node.Endpoint}}{{.Node.Endpoint}}{{else}}not known yet{{end}}</td></tr>
@@ -64,7 +64,7 @@
 {{- end}}
 
 <h2>Edit</h2>
-<form method="post" action="/nodes/{{.Node.Name}}" class="grid">
+<form method="post" action="{{$.Base}}/nodes/{{.Node.Name}}" class="grid">
 <input type="hidden" name="csrf" value="{{$.CSRF}}">
 <label>Mesh IP <input name="mesh_ip" value="{{.Node.MeshIP}}"></label>
 {{- if .IPv6}}
@@ -114,7 +114,7 @@
 
 <h2>Profile for the WireGuard app</h2>
 <p>A new profile has a new key, so the phone's current profile stops working. It is shown once.</p>
-<form method="post" action="/nodes/{{.Node.Name}}/phone" class="grid">
+<form method="post" action="{{$.Base}}/nodes/{{.Node.Name}}/phone" class="grid">
 <input type="hidden" name="csrf" value="{{$.CSRF}}">
 <label>Internet <select name="exit">
 <option value="">off the tunnel (mesh only)</option>
@@ -152,14 +152,14 @@
 <h2>Actions</h2>
 <div class="actions">
 {{- if .Node.Disabled}}
-<form method="post" action="/nodes/{{.Node.Name}}/enable"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit">Enable</button></form>
+<form method="post" action="{{$.Base}}/nodes/{{.Node.Name}}/enable"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit">Enable</button></form>
 {{- else}}
-<form method="post" action="/nodes/{{.Node.Name}}/disable"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit">Disable</button></form>
+<form method="post" action="{{$.Base}}/nodes/{{.Node.Name}}/disable"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit">Disable</button></form>
 {{- if not .IsPhone}}
-<form method="post" action="/nodes/{{.Node.Name}}/token"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit">New join token</button></form>
+<form method="post" action="{{$.Base}}/nodes/{{.Node.Name}}/token"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit">New join token</button></form>
 {{- end}}
 {{- end}}
-<a class="button danger" href="/nodes/{{.Node.Name}}/remove">Remove</a>
+<a class="button danger" href="{{$.Base}}/nodes/{{.Node.Name}}/remove">Remove</a>
 </div>
 
 {{- if .Config}}

@@ -15,6 +15,6 @@
 {{- range .Warnings}}
 <p class="warning">{{.}}</p>
 {{- end}}
-<p><a href="/nodes/{{.Node}}">Go to {{.Node}}</a></p>
+<p><a href="{{$.Base}}/nodes/{{.Node}}">Go to {{.Node}}</a></p>
 {{- end}}
 {{end}}

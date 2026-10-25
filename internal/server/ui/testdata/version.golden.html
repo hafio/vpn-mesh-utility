@@ -11,14 +11,16 @@
 <body hx-headers='{"X-CSRF-Token": "csrf-token"}'>
 <header>
 <span class="brand">meshctl</span>
+<span class="mesh">default</span>
 <nav>
-<a href="/">Dashboard</a>
-<a href="/nodes">Nodes</a>
-<a href="/dns">DNS</a>
-<a href="/firewall">Firewall</a>
-<a href="/versions" class="active">Versions</a>
-<a href="/audit">Audit</a>
-<a href="/settings">Settings</a>
+<a href="/m/default/">Dashboard</a>
+<a href="/m/default/nodes">Nodes</a>
+<a href="/m/default/dns">DNS</a>
+<a href="/m/default/firewall">Firewall</a>
+<a href="/m/default/versions" class="active">Versions</a>
+<a href="/m/default/audit">Audit</a>
+<a href="/m/default/settings">Settings</a>
+<a href="/meshes">Meshes</a>
 <a href="/users">Users</a>
 <a href="/account">admin</a>
 </nav>
@@ -27,6 +29,10 @@
 <button type="submit" class="link">Sign out</button>
 </form>
 </header>
+<nav class="meshes" aria-label="Meshes">
+<a href="/m/default/" class="active" aria-current="page">default</a>
+<a href="/m/lab/">lab</a>
+</nav>
 <main>
 <h1>Config v3</h1>
 
@@ -45,7 +51,7 @@
 <li>setting default_mtu: 1400 -&gt; 1420</li>
 </ul>
 
-<form method="post" action="/versions/3/rollback">
+<form method="post" action="/m/default/versions/3/rollback">
 <input type="hidden" name="csrf" value="csrf-token">
 <label><input type="checkbox" name="confirm" value="yes"> I understand this adds or removes nodes</label>
 <button type="submit">Roll back to v3</button>

@@ -3,6 +3,8 @@
 // and no CDN. It signs users in through internal/server/auth and changes the
 // mesh only through api.Nodes and the reconciler, so a change made here is
 // versioned, audited and pushed exactly like one made with `meshctl node`.
+// Each mesh's pages live under /m/<mesh>/ (amendment A49); the users, the
+// account and the meshes themselves are the control plane's.
 //
 // Every response carries a strict CSP (no inline script or style). Every
 // request that changes something must come from this origin (Origin header)
@@ -15,11 +17,14 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/hafio/vpn-mesh-utility/internal/server/api"
 	"github.com/hafio/vpn-mesh-utility/internal/server/auth"
+	"github.com/hafio/vpn-mesh-utility/internal/server/store"
+	"github.com/hafio/vpn-mesh-utility/internal/validate"
 )
 
 // Deps are the UI's dependencies.
@@ -43,6 +48,11 @@ const CSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 's
 type ui struct {
 	Deps
 	pages *renderer
+	// mesh is the mesh a page of one mesh works on (inMesh), and meshes
+	// every mesh, for the switcher; both are zero on the control plane's
+	// own pages.
+	mesh   store.Mesh
+	meshes []store.Mesh
 }
 
 // New returns the UI handler. It serves every path the agent API does not.
@@ -70,63 +80,145 @@ func New(d Deps) (http.Handler, error) {
 	mux.HandleFunc("GET /login/enroll.png", u.pending(u.enrollQR))
 	mux.HandleFunc("POST /login/enroll", u.sameOrigin(u.pending(u.enroll)))
 
-	// Everything else needs a full session.
+	// Everything else needs a full session: the control plane's pages...
 	for pattern, h := range map[string]handler{
-		"POST /logout":                                u.logout,
-		"GET /{$}":                                    u.dashboard,
-		"GET /nodes":                                  u.nodesPage,
-		"POST /nodes":                                 u.addNode,
-		"GET /nodes/{name}":                           u.nodePage,
-		"POST /nodes/{name}":                          u.editNode,
-		"POST /nodes/{name}/disable":                  u.disableNode,
-		"POST /nodes/{name}/enable":                   u.enableNode,
-		"POST /nodes/{name}/token":                    u.tokenNode,
-		"POST /nodes/{name}/phone":                    u.phoneProfile,
-		"GET /nodes/{name}/remove":                    u.removePage,
-		"POST /nodes/{name}/remove":                   u.removeNode,
-		"GET /dns":                                    u.dnsPage,
-		"POST /dns":                                   u.addRecord,
-		"POST /dns/{name}/remove":                     u.removeRecord,
-		"GET /firewall":                               u.firewallPage,
-		"POST /firewall/policies":                     u.savePolicy,
-		"GET /firewall/policies/{name}":               u.policyPage,
-		"POST /firewall/policies/{name}":              u.savePolicy,
-		"POST /firewall/policies/{name}/move":         u.movePolicy,
-		"POST /firewall/policies/{name}/remove":       u.removePolicy,
-		"POST /firewall/timezone":                     u.saveTimeZone,
-		"GET /firewall/zones":                         u.zonesPage,
-		"POST /firewall/zones":                        u.saveZone,
-		"GET /firewall/zones/{name}":                  u.zonePage,
-		"POST /firewall/zones/{name}":                 u.saveZone,
-		"POST /firewall/zones/{name}/remove":          u.removeZone,
-		"GET /firewall/objects":                       u.objectsPage,
-		"POST /firewall/objects/{kind}":               u.saveObject,
-		"POST /firewall/objects/{kind}/{name}/remove": u.removeObject,
-		"GET /firewall/reach":                         u.reachPage,
-		"GET /versions":                               u.versionsPage,
-		"GET /versions/{n}":                           u.versionPage,
-		"POST /versions/{n}/rollback":                 u.rollback,
-		"GET /audit":                                  u.auditPage,
-		"GET /settings":                               u.settingsPage,
-		"POST /settings":                              u.saveSettings,
-		"POST /settings/ipv6":                         u.saveIPv6,
-		"GET /users":                                  u.usersPage,
-		"POST /users":                                 u.addUser,
-		"POST /users/{name}/disable":                  u.disableUser,
-		"POST /users/{name}/enable":                   u.enableUser,
-		"POST /users/{name}/reset-totp":               u.resetUser,
-		"GET /account":                                u.accountPage,
-		"POST /account/password":                      u.changePassword,
-		"GET /export":                                 u.exportYAML,
-		"GET /fragments/nodes":                        u.nodesFragment,
+		"POST /logout":                  u.logout,
+		"GET /{$}":                      u.home,
+		"GET /m/{mesh}":                 u.meshHome,
+		"GET /meshes":                   u.meshesPage,
+		"POST /meshes":                  u.addMesh,
+		"POST /meshes/{name}":           u.renameMesh,
+		"POST /meshes/{name}/remove":    u.removeMesh,
+		"GET /users":                    u.usersPage,
+		"POST /users":                   u.addUser,
+		"POST /users/{name}/disable":    u.disableUser,
+		"POST /users/{name}/enable":     u.enableUser,
+		"POST /users/{name}/reset-totp": u.resetUser,
+		"GET /account":                  u.accountPage,
+		"POST /account/password":        u.changePassword,
 	} {
 		mux.HandleFunc(pattern, u.signedIn(pattern, h))
+	}
+	// ...and each mesh's, under /m/<mesh>.
+	for pattern, h := range map[string]meshHandler{
+		"GET /{$}":                                    (*ui).dashboard,
+		"GET /nodes":                                  (*ui).nodesPage,
+		"POST /nodes":                                 (*ui).addNode,
+		"GET /nodes/{name}":                           (*ui).nodePage,
+		"POST /nodes/{name}":                          (*ui).editNode,
+		"POST /nodes/{name}/disable":                  (*ui).disableNode,
+		"POST /nodes/{name}/enable":                   (*ui).enableNode,
+		"POST /nodes/{name}/token":                    (*ui).tokenNode,
+		"POST /nodes/{name}/phone":                    (*ui).phoneProfile,
+		"GET /nodes/{name}/remove":                    (*ui).removePage,
+		"POST /nodes/{name}/remove":                   (*ui).removeNode,
+		"GET /dns":                                    (*ui).dnsPage,
+		"POST /dns":                                   (*ui).addRecord,
+		"POST /dns/{name}/remove":                     (*ui).removeRecord,
+		"GET /firewall":                               (*ui).firewallPage,
+		"POST /firewall/policies":                     (*ui).savePolicy,
+		"GET /firewall/policies/{name}":               (*ui).policyPage,
+		"POST /firewall/policies/{name}":              (*ui).savePolicy,
+		"POST /firewall/policies/{name}/move":         (*ui).movePolicy,
+		"POST /firewall/policies/{name}/remove":       (*ui).removePolicy,
+		"POST /firewall/timezone":                     (*ui).saveTimeZone,
+		"GET /firewall/zones":                         (*ui).zonesPage,
+		"POST /firewall/zones":                        (*ui).saveZone,
+		"GET /firewall/zones/{name}":                  (*ui).zonePage,
+		"POST /firewall/zones/{name}":                 (*ui).saveZone,
+		"POST /firewall/zones/{name}/remove":          (*ui).removeZone,
+		"GET /firewall/objects":                       (*ui).objectsPage,
+		"POST /firewall/objects/{kind}":               (*ui).saveObject,
+		"POST /firewall/objects/{kind}/{name}/remove": (*ui).removeObject,
+		"GET /firewall/reach":                         (*ui).reachPage,
+		"GET /versions":                               (*ui).versionsPage,
+		"GET /versions/{n}":                           (*ui).versionPage,
+		"POST /versions/{n}/rollback":                 (*ui).rollback,
+		"GET /audit":                                  (*ui).auditPage,
+		"GET /settings":                               (*ui).settingsPage,
+		"POST /settings":                              (*ui).saveSettings,
+		"POST /settings/ipv6":                         (*ui).saveIPv6,
+		"GET /export":                                 (*ui).exportYAML,
+		"GET /fragments/nodes":                        (*ui).nodesFragment,
+	} {
+		method, path, _ := strings.Cut(pattern, " ")
+		full := method + " /m/{mesh}" + path
+		mux.HandleFunc(full, u.signedIn(full, u.inMesh(h)))
 	}
 	return headers(mux), nil
 }
 
 // handler is a page handler with its session.
 type handler func(w http.ResponseWriter, r *http.Request, s auth.Session)
+
+// meshHandler is a page of one mesh. It runs on a copy of the UI whose Nodes,
+// links and switcher are that mesh's (amendment A49).
+type meshHandler func(u *ui, w http.ResponseWriter, r *http.Request, s auth.Session)
+
+// inMesh runs h for the mesh the path names; one the control plane does not
+// have is a 404 that points at the Meshes page.
+func (u *ui) inMesh(h meshHandler) handler {
+	return func(w http.ResponseWriter, r *http.Request, s auth.Session) {
+		meshes, err := u.meshList(r)
+		if err != nil {
+			u.fail(w, r, s, err)
+			return
+		}
+		name := r.PathValue("mesh")
+		i := slices.IndexFunc(meshes, func(m store.Mesh) bool { return m.Name == name })
+		if i < 0 {
+			u.show(w, r, s, http.StatusNotFound, "error", "", "Not Found", page{Error: "this control plane has no such mesh; the Meshes page lists them"})
+			return
+		}
+		c := *u
+		c.Nodes, c.mesh, c.meshes = u.Nodes.In(meshes[i].ID), meshes[i], meshes
+		h(&c, w, r, s)
+	}
+}
+
+// meshList is every mesh, by id.
+func (u *ui) meshList(r *http.Request) ([]store.Mesh, error) {
+	var out []store.Mesh
+	err := u.DB.Tx(r.Context(), func(tx *store.Tx) error {
+		var err error
+		out, err = tx.Meshes()
+		return err
+	})
+	return out, err
+}
+
+// base is the path of the current mesh's pages ("/m/<mesh>"), "" on the
+// control plane's own.
+func (u *ui) base() string {
+	if u.mesh.Name == "" {
+		return ""
+	}
+	return "/m/" + u.mesh.Name
+}
+
+// home opens the first mesh, or the Meshes page while there is none.
+func (u *ui) home(w http.ResponseWriter, r *http.Request, s auth.Session) {
+	meshes, err := u.meshList(r)
+	if err != nil {
+		u.fail(w, r, s, err)
+		return
+	}
+	if len(meshes) == 0 {
+		http.Redirect(w, r, "/meshes", http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/m/"+meshes[0].Name+"/", http.StatusSeeOther)
+}
+
+// meshHome sends /m/<mesh> to its dashboard, /m/<mesh>/.
+func (u *ui) meshHome(w http.ResponseWriter, r *http.Request, s auth.Session) {
+	name, err := validate.Name("mesh", r.PathValue("mesh"))
+	if err != nil {
+		u.fail(w, r, s, err)
+		return
+	}
+	http.Redirect(w, r, "/m/"+name+"/", http.StatusSeeOther)
+}
 
 // headers sets the security headers of every UI response.
 func headers(next http.Handler) http.Handler {
@@ -186,7 +278,7 @@ func (u *ui) pending(next handler) http.HandlerFunc {
 // refresh) do not extend the session.
 func (u *ui) signedIn(pattern string, next handler) http.HandlerFunc {
 	change := !strings.HasPrefix(pattern, "GET ")
-	background := strings.HasPrefix(pattern, "GET /fragments/")
+	background := strings.HasPrefix(pattern, "GET ") && strings.Contains(pattern, "/fragments/")
 	return func(w http.ResponseWriter, r *http.Request) {
 		var (
 			s   auth.Session

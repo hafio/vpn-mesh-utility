@@ -1,15 +1,15 @@
 {{define "content"}}
 {{- with .Data.View}}
-<p>Every node answers the <code>{{.Zone}}</code> zone on its mesh IP: one name per node, plus the custom records. It forwards other names to {{range $i, $u := .Upstream}}{{if $i}}, {{end}}{{$u}}{{end}} only in exit mode, and on a server for the phones whose hub it is (<a href="/settings">upstream resolvers</a>).</p>
+<p>Every node answers the <code>{{.Zone}}</code> zone on its mesh IP: one name per node, plus the custom records. It forwards other names to {{range $i, $u := .Upstream}}{{if $i}}, {{end}}{{$u}}{{end}} only in exit mode, and on a server for the phones whose hub it is (<a href="{{$.Base}}/settings">upstream resolvers</a>).</p>
 <p class="hint">A container on a node's mesh network uses that node's agent as its resolver and resolves these names and the containers' (below); any other container uses its own resolver, so <code>.{{.Zone}}</code> names do not resolve inside it.</p>
 {{- if .Domains}}
-<p>Extra domains (<a href="/settings">Settings</a>): {{range $i, $d := .Domains}}{{if $i}}, {{end}}<code>{{$d}}</code>{{end}}. Every node answers the containers' names in them and forwards every other name in them to the upstream resolvers.</p>
+<p>Extra domains (<a href="{{$.Base}}/settings">Settings</a>): {{range $i, $d := .Domains}}{{if $i}}, {{end}}<code>{{$d}}</code>{{end}}. Every node answers the containers' names in them and forwards every other name in them to the upstream resolvers.</p>
 {{- end}}
 <table>
 <thead><tr><th>Name</th><th>Address</th><th>Follows</th><th></th></tr></thead>
 <tbody>
 {{- range .Records}}
-<tr><td>{{.Name}}.{{$.Data.View.Zone}}</td><td>{{.IP}}{{if and .IP .IP6}}, {{end}}{{.IP6}}{{if not .Live}} (not on the mesh yet){{end}}</td><td>{{if .Node}}{{.Node}}{{else}}-{{end}}</td><td>{{if .Custom}}<form method="post" action="/dns/{{.Name}}/remove" class="inline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit" class="link">Remove</button></form>{{else}}automatic{{end}}</td></tr>
+<tr><td>{{.Name}}.{{$.Data.View.Zone}}</td><td>{{.IP}}{{if and .IP .IP6}}, {{end}}{{.IP6}}{{if not .Live}} (not on the mesh yet){{end}}</td><td>{{if .Node}}{{.Node}}{{else}}-{{end}}</td><td>{{if .Custom}}<form method="post" action="{{$.Base}}/dns/{{.Name}}/remove" class="inline"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit" class="link">Remove</button></form>{{else}}automatic{{end}}</td></tr>
 {{- end}}
 </tbody>
 </table>
@@ -31,7 +31,7 @@
 {{- end}}
 
 <h2>Add a record</h2>
-<form method="post" action="/dns" class="grid">
+<form method="post" action="{{$.Base}}/dns" class="grid">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
 {{- with .Data.Form}}
 <label>Name <input name="name" value="{{.Name}}" required placeholder="files or files.office"></label>

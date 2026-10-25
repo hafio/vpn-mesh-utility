@@ -1,8 +1,8 @@
 {{define "content"}}
 <p>Remove <strong>{{.Data.Name}}</strong> ({{.Data.Role}}, {{.Data.MeshIP}})? Every peer drops it on the next apply, and its keys are forgotten: to bring it back it must join again with a new token.</p>
-<form method="post" action="/nodes/{{.Data.Name}}/remove">
+<form method="post" action="{{$.Base}}/nodes/{{.Data.Name}}/remove">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
 <button type="submit" class="danger">Remove {{.Data.Name}}</button>
-<a href="/nodes/{{.Data.Name}}">Cancel</a>
+<a href="{{$.Base}}/nodes/{{.Data.Name}}">Cancel</a>
 </form>
 {{end}}

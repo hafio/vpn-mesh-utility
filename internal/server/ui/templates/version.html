@@ -9,7 +9,7 @@
 {{- else}}
 <p>Rolling back writes a new version that restores this one. It would change:</p>
 {{template "diff" .Rollback}}
-<form method="post" action="/versions/{{.Version.Number}}/rollback">
+<form method="post" action="{{$.Base}}/versions/{{.Version.Number}}/rollback">
 <input type="hidden" name="csrf" value="{{$.CSRF}}">
 {{- if .Rollback.ChangesMembership}}
 <label><input type="checkbox" name="confirm" value="yes"> I understand this adds or removes nodes</label>

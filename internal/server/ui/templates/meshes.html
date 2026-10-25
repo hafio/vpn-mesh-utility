@@ -1,0 +1,37 @@
+{{define "content"}}
+{{- with .Data}}
+<table>
+<thead><tr><th>Mesh</th><th>Slot</th><th>Nodes</th><th>IPv4 network</th><th>IPv6 prefix</th><th>DNS zone</th><th></th></tr></thead>
+<tbody>
+{{- range .Meshes}}
+<tr>
+<td><a href="/m/{{.Name}}/">{{.Name}}</a></td>
+<td>{{.Slot}}</td>
+<td>{{.Nodes}}</td>
+<td>{{.MeshCIDR}}</td>
+<td>{{if .MeshCIDR6}}{{.MeshCIDR6}}{{else}}-{{end}}</td>
+<td>{{.Zone}}</td>
+<td class="actions">
+<form method="post" action="/meshes/{{.Name}}"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input name="name" value="{{.Name}}" aria-label="New name of {{.Name}}" required maxlength="32"><button type="submit">Rename</button></form>
+{{- if eq .Nodes 0}}
+<form method="post" action="/meshes/{{.Name}}/remove"><input type="hidden" name="csrf" value="{{$.CSRF}}"><button type="submit">Remove</button></form>
+{{- end}}
+</td>
+</tr>
+{{- else}}
+<tr><td colspan="7">No mesh yet: add the first one below.</td></tr>
+{{- end}}
+</tbody>
+</table>
+<h2>Add a mesh</h2>
+<form method="post" action="/meshes" class="grid">
+<input type="hidden" name="csrf" value="{{$.CSRF}}">
+<label>Name <input name="name" value="{{.Form.Name}}" required maxlength="32" autocomplete="off"></label>
+<label>IPv4 network <input name="mesh_cidr" value="{{.Form.MeshCIDR}}" placeholder="the first free 10.x.0.0/16"></label>
+<label>DNS zone <input name="dns_zone" value="{{.Form.Zone}}" placeholder="the mesh's name"></label>
+<label>IPv6 prefix <input name="ipv6" value="{{.Form.IPv6}}" placeholder="auto, off or a /48 to /64"></label>
+<button type="submit">Add mesh</button>
+</form>
+<p class="hint">Meshes share no network and no DNS domain: an agent of each may run on one host. A mesh with nodes stays until they are removed; its other settings are on its own Settings page.</p>
+{{- end}}
+{{end}}

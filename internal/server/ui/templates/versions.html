@@ -3,13 +3,13 @@
 <thead><tr><th>Version</th><th>When</th><th>By</th><th>Change</th></tr></thead>
 <tbody>
 {{- range .Data.Rows}}
-<tr><td><a href="/versions/{{.Number}}">v{{.Number}}</a></td><td>{{.When}}</td><td>{{.Actor}}</td><td>{{.Summary}}{{if .RolledBackFrom}} (restores v{{.RolledBackFrom}}){{end}}</td></tr>
+<tr><td><a href="{{$.Base}}/versions/{{.Number}}">v{{.Number}}</a></td><td>{{.When}}</td><td>{{.Actor}}</td><td>{{.Summary}}{{if .RolledBackFrom}} (restores v{{.RolledBackFrom}}){{end}}</td></tr>
 {{- else}}
 <tr><td colspan="4">No config versions yet.</td></tr>
 {{- end}}
 </tbody>
 </table>
 {{- if .Data.Older}}
-<p><a href="/versions?before={{.Data.Older}}">Older versions</a></p>
+<p><a href="{{$.Base}}/versions?before={{.Data.Older}}">Older versions</a></p>
 {{- end}}
 {{end}}

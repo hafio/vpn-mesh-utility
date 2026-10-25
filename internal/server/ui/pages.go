@@ -55,6 +55,8 @@ type nodeRow struct {
 }
 
 type dashboardData struct {
+	// Base is the mesh's pages' path, for the table's links.
+	Base     string
 	Rows     []nodeRow
 	Warnings []string
 }
@@ -83,7 +85,7 @@ func (u *ui) dashboardData(r *http.Request) (dashboardData, error) {
 		names[n.ID] = n.Name
 	}
 	now := u.Now()
-	d := dashboardData{Warnings: list.Warnings}
+	d := dashboardData{Base: u.base(), Warnings: list.Warnings}
 	for _, n := range list.Nodes {
 		row := nodeRow{Name: n.Name, Role: n.Role, MeshIP: cmp.Or(n.MeshIP, n.MeshIP6), Endpoint: cmp.Or(n.Endpoint, n.Endpoint6), Exit: n.Exit,
 			Versions: fmt.Sprintf("v%d / v%d", n.AppliedVersion, n.ConfigVersion), Agent: n.AgentVersion, Seen: ago(n.Seen(), now)}
@@ -484,7 +486,7 @@ func (u *ui) removeNode(w http.ResponseWriter, r *http.Request, s auth.Session) 
 		u.fail(w, r, s, err)
 		return
 	}
-	http.Redirect(w, r, "/nodes", http.StatusSeeOther)
+	http.Redirect(w, r, u.base()+"/nodes", http.StatusSeeOther)
 }
 
 type versionRow struct {
@@ -623,7 +625,7 @@ func (u *ui) rollback(w http.ResponseWriter, r *http.Request, s auth.Session) {
 		u.renderVersion(w, r, s, http.StatusOK, page{Flash: "the mesh already matches this version; nothing changed"})
 		return
 	}
-	http.Redirect(w, r, fmt.Sprintf("/versions/%d", res.Version), http.StatusSeeOther)
+	http.Redirect(w, r, fmt.Sprintf("%s/versions/%d", u.base(), res.Version), http.StatusSeeOther)
 }
 
 type auditRow struct {
@@ -891,7 +893,7 @@ func (u *ui) exportYAML(w http.ResponseWriter, r *http.Request, s auth.Session) 
 		return
 	}
 	w.Header().Set("Content-Type", "application/yaml")
-	w.Header().Set("Content-Disposition", `attachment; filename="mesh-`+u.Now().Format("2006-01-02")+`.yaml"`)
+	w.Header().Set("Content-Disposition", `attachment; filename="`+u.mesh.Name+"-"+u.Now().Format("2006-01-02")+`.yaml"`)
 	_, _ = w.Write(b.Bytes()) // the browser went away; nothing to do
 }
 

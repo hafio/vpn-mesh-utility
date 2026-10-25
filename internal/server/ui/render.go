@@ -39,6 +39,13 @@ type page struct {
 	Error   string
 	Version string
 	Data    any
+	// Mesh is the mesh a page of one mesh shows and Base the path of its
+	// pages ("/m/<mesh>"), which every link to them starts with; Meshes are
+	// every mesh, for the switcher. All are empty on the control plane's
+	// own pages.
+	Mesh   string
+	Base   string
+	Meshes []string
 }
 
 // renderer holds one parsed template set per page: layout.html, the shared
@@ -111,6 +118,10 @@ func writeHTML(w http.ResponseWriter, status int, body []byte) {
 // show renders a page for a signed-in user.
 func (u *ui) show(w http.ResponseWriter, r *http.Request, s auth.Session, status int, name, nav, title string, p page) {
 	p.Title, p.Nav, p.User, p.CSRF, p.Version = title, nav, s.Username, s.CSRF, u.Version
+	p.Mesh, p.Base = u.mesh.Name, u.base()
+	for _, m := range u.meshes {
+		p.Meshes = append(p.Meshes, m.Name)
+	}
 	body, err := u.pages.render(name, p)
 	if err != nil {
 		u.Log.Error("render page", "page", name, "err", err)

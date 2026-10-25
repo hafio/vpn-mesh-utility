@@ -10,6 +10,6 @@
 </tbody>
 </table>
 {{- if .Data.Older}}
-<p><a href="/audit?before={{.Data.Older}}">Older entries</a></p>
+<p><a href="{{$.Base}}/audit?before={{.Data.Older}}">Older entries</a></p>
 {{- end}}
 {{end}}

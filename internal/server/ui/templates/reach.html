@@ -3,7 +3,7 @@
 {{template "fwtabs" .}}
 {{- with .View}}
 <h2>Check a flow</h2>
-<form method="get" action="/firewall/reach" class="grid">
+<form method="get" action="{{$.Base}}/firewall/reach" class="grid">
 <label>From <input name="from" value="{{.From}}" list="fw-nodes" placeholder="node or address" required></label>
 <label>To <input name="to" value="{{.To}}" list="fw-nodes" placeholder="node or address" required></label>
 <label>Service <input name="service" value="{{.Service}}" placeholder="tcp/22, udp/53 or icmp" required></label>
