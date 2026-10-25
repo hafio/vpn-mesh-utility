@@ -513,13 +513,13 @@ func (p *Policy) Rules() ([]exitmode.Rule, error) {
 	return slices.Clone(p.rules), nil
 }
 
-func (p *Policy) Routes() ([]exitmode.Route, error) {
+func (p *Policy) Routes(table int) ([]exitmode.Route, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if err := p.failure("Routes"); err != nil {
 		return nil, err
 	}
-	return slices.Clone(p.routes), nil
+	return slices.DeleteFunc(slices.Clone(p.routes), func(r exitmode.Route) bool { return r.Table != table }), nil
 }
 
 func (p *Policy) IPv6() exitmode.V6Support {
@@ -570,7 +570,7 @@ func (p *Policy) DelRoute(r exitmode.Route) error { return mutate(p, "DelRoute",
 func (p *Policy) AddRoute(r exitmode.Route) error {
 	p.mu.Lock()
 	if p.failure("AddRoute") == nil {
-		p.routes = slices.DeleteFunc(p.routes, func(x exitmode.Route) bool { return x.Family == r.Family && x != r })
+		p.routes = slices.DeleteFunc(p.routes, func(x exitmode.Route) bool { return x.Family == r.Family && x.Table == r.Table && x != r })
 	}
 	p.mu.Unlock()
 	return mutate(p, "AddRoute", &p.routes, r)
@@ -591,13 +591,13 @@ func (p *Policy) InstallRoute(r exitmode.Route) {
 	p.routes = append(p.routes, r)
 }
 
-// Net is a fake containers.Net: the agent's rules of both families, the
-// blackhole table, interface addresses, proxy neighbour entries and
+// Net is a fake containers.Net: the agents' rules of both families, the
+// blackhole tables, interface addresses, proxy neighbour entries and
 // bridges.
 type Net struct {
 	mu      sync.Mutex
 	rules   []containers.Rule
-	hole    map[bool]bool // by family, true for IPv6
+	hole    map[hole]bool
 	addrs   map[string][]netip.Prefix
 	proxies map[string][]netip.Addr
 	dropped []netip.Prefix
@@ -611,9 +611,15 @@ type Net struct {
 	FailOn string
 }
 
+// hole is a blackhole default route: its table and family.
+type hole struct {
+	table int
+	ipv6  bool
+}
+
 // NewNet returns a host with no interfaces.
 func NewNet() *Net {
-	return &Net{hole: map[bool]bool{}, addrs: map[string][]netip.Prefix{}, proxies: map[string][]netip.Addr{}}
+	return &Net{hole: map[hole]bool{}, addrs: map[string][]netip.Prefix{}, proxies: map[string][]netip.Addr{}}
 }
 
 // Attach gives an interface an address, as a runtime attaching the agent
@@ -638,18 +644,18 @@ func (n *Net) AddrsOf(link string) []netip.Prefix {
 	return slices.Clone(n.addrs[link])
 }
 
-// HasBlackhole reports the IPv4 blackhole route, for assertions.
-func (n *Net) HasBlackhole() bool {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	return n.hole[false]
-}
+// HasBlackhole reports slot 0's IPv4 blackhole route, for assertions.
+func (n *Net) HasBlackhole() bool { return n.HasBlackholeIn(containers.BlackholeTable, false) }
 
-// HasBlackhole6 reports the IPv6 blackhole route, for assertions.
-func (n *Net) HasBlackhole6() bool {
+// HasBlackhole6 reports slot 0's IPv6 blackhole route, for assertions.
+func (n *Net) HasBlackhole6() bool { return n.HasBlackholeIn(containers.BlackholeTable, true) }
+
+// HasBlackholeIn reports a table's blackhole route of a family, for
+// assertions.
+func (n *Net) HasBlackholeIn(table int, ipv6 bool) bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	return n.hole[true]
+	return n.hole[hole{table, ipv6}]
 }
 
 // ProxiesOf returns an interface's proxy neighbour entries, for
@@ -718,24 +724,29 @@ func (n *Net) IPv6Rules() (bool, error) {
 	return !n.NoIPv6Rules, n.failure("IPv6Rules")
 }
 
-func (n *Net) Blackhole(ipv6 bool) (bool, error) {
+func (n *Net) Blackhole(table int, ipv6 bool) (bool, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	return n.hole[ipv6], n.failure("Blackhole")
+	return n.hole[hole{table, ipv6}], n.failure("Blackhole")
 }
 
-func (n *Net) SetBlackhole(ipv6, on bool) error {
+// SetBlackhole records "blackhole true", "ipv6 blackhole false" and so on,
+// naming the table when it is not slot 0's.
+func (n *Net) SetBlackhole(table int, ipv6, on bool) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if err := n.failure("SetBlackhole"); err != nil {
 		return err
 	}
-	n.hole[ipv6] = on
+	n.hole[hole{table, ipv6}] = on
+	call := fmt.Sprintf("blackhole %v", on)
 	if ipv6 {
-		n.record(fmt.Sprintf("ipv6 blackhole %v", on))
-	} else {
-		n.record(fmt.Sprintf("blackhole %v", on))
+		call = "ipv6 " + call
 	}
+	if table != containers.BlackholeTable {
+		call += fmt.Sprintf(" table %d", table)
+	}
+	n.record(call)
 	return nil
 }
 

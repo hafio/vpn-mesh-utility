@@ -16,15 +16,25 @@ import (
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 
+	"github.com/hafio/vpn-mesh-utility/internal/proto"
 	"github.com/hafio/vpn-mesh-utility/internal/validate"
 )
 
 // NewKernel is the kernel of the agent's own network namespace: the host's
 // for a server in host mode, the agent container's for a container-mode
-// one.
-func NewKernel() Kernel { return nftKernel{} }
+// one. Its table is slot s's (amendment A49): meshctl, meshctl1, ...
+func NewKernel(s proto.Slot) Kernel {
+	k := nftKernel{table: &nftables.Table{Family: nftables.TableFamilyINet, Name: s.Table()}}
+	if s == 0 {
+		k.legacy = legacyTable
+	}
+	return k
+}
 
-type nftKernel struct{}
+// nftKernel holds one table, and replaces the legacy one (slot 0's only).
+type nftKernel struct {
+	table, legacy *nftables.Table
+}
 
 // markPrefix starts the comment on the table's first rule; the fingerprint
 // follows.
@@ -32,8 +42,6 @@ const markPrefix = "meshctl policy "
 
 // unmarked is what Installed reports for a table without our mark.
 const unmarked = "unmarked"
-
-var nftTable = &nftables.Table{Family: nftables.TableFamilyINet, Name: TableName}
 
 // legacyTable is the table agents before dual stack (M8) kept, in the ip
 // family: it goes when the inet one comes, so no stale policy filters on.
@@ -47,7 +55,7 @@ func conn() (*nftables.Conn, error) {
 	return c, nil
 }
 
-func (nftKernel) Installed() (string, error) {
+func (k nftKernel) Installed() (string, error) {
 	c, err := conn()
 	if err != nil {
 		return "", err
@@ -58,15 +66,15 @@ func (nftKernel) Installed() (string, error) {
 	}
 	found := false
 	for _, t := range tables {
-		found = found || t.Name == TableName
+		found = found || t.Name == k.table.Name
 	}
-	if hasLegacy(c) {
+	if k.hasLegacy(c) {
 		return unmarked, nil // replaced, the legacy table with it
 	}
 	if !found {
 		return "", nil
 	}
-	rules, err := c.GetRules(nftTable, &nftables.Chain{Name: chainForward, Table: nftTable})
+	rules, err := c.GetRules(k.table, &nftables.Chain{Name: chainForward, Table: k.table})
 	if err != nil || len(rules) == 0 {
 		return unmarked, nil // its chain is gone: replace it all
 	}
@@ -78,14 +86,14 @@ func (nftKernel) Installed() (string, error) {
 	return unmarked, nil
 }
 
-func (nftKernel) Replace(rs *Ruleset, fingerprint string) error {
+func (k nftKernel) Replace(rs *Ruleset, fingerprint string) error {
 	c, err := conn()
 	if err != nil {
 		return err
 	}
-	b := build(rs, fingerprint)
-	if hasLegacy(c) {
-		c.DelTable(legacyTable)
+	b := build(rs, fingerprint, k.table)
+	if k.hasLegacy(c) {
+		c.DelTable(k.legacy)
 	}
 	c.AddTable(b.table)
 	c.FlushTable(b.table)
@@ -95,46 +103,50 @@ func (nftKernel) Replace(rs *Ruleset, fingerprint string) error {
 	for _, op := range b.ops {
 		if op.set != nil {
 			if err := c.AddSet(op.set, op.elems); err != nil {
-				return fmt.Errorf("prepare a set of the table %s: %w", TableName, err)
+				return fmt.Errorf("prepare a set of the table %s: %w", k.table.Name, err)
 			}
 			continue
 		}
 		c.AddRule(op.rule)
 	}
 	if err := c.Flush(); err != nil {
-		return fmt.Errorf("commit the table %s: %w", TableName, err)
+		return fmt.Errorf("commit the table %s: %w", k.table.Name, err)
 	}
 	return nil
 }
 
-func (nftKernel) Remove() error {
+func (k nftKernel) Remove() error {
 	c, err := conn()
 	if err != nil {
 		return err
 	}
 	// Only a table that is there can be deleted in a batch; when the
 	// listing fails, the commit says why.
-	inet, legacy := true, hasLegacy(c)
+	inet, legacy := true, k.hasLegacy(c)
 	if tables, err := c.ListTablesOfFamily(nftables.TableFamilyINet); err == nil {
-		inet = slices.ContainsFunc(tables, func(t *nftables.Table) bool { return t.Name == TableName })
+		inet = slices.ContainsFunc(tables, func(t *nftables.Table) bool { return t.Name == k.table.Name })
 	}
 	if inet || !legacy {
-		c.DelTable(nftTable)
+		c.DelTable(k.table)
 	}
 	if legacy {
-		c.DelTable(legacyTable)
+		c.DelTable(k.legacy)
 	}
 	if err := c.Flush(); err != nil {
-		return fmt.Errorf("delete the table %s: %w", TableName, err)
+		return fmt.Errorf("delete the table %s: %w", k.table.Name, err)
 	}
 	return nil
 }
 
-// hasLegacy reports whether the ip family holds the agent's old table; a
-// listing that fails says no, and the commit that follows fails for itself.
-func hasLegacy(c *nftables.Conn) bool {
+// hasLegacy reports whether the ip family holds the agent's old table (slot
+// 0's only); a listing that fails says no, and the commit that follows
+// fails for itself.
+func (k nftKernel) hasLegacy(c *nftables.Conn) bool {
+	if k.legacy == nil {
+		return false
+	}
 	tables, err := c.ListTablesOfFamily(nftables.TableFamilyIPv4)
-	return err == nil && slices.ContainsFunc(tables, func(t *nftables.Table) bool { return t.Name == TableName })
+	return err == nil && slices.ContainsFunc(tables, func(t *nftables.Table) bool { return t.Name == k.legacy.Name })
 }
 
 func (nftKernel) Forget(mesh netip.Prefix) (int, error) {
@@ -191,11 +203,11 @@ var nfprotos = map[int]byte{IPv4: unix.NFPROTO_IPV4, IPv6: unix.NFPROTO_IPV6}
 // build turns rs into the batch Replace sends: the table, its chains (the
 // base ones accepting what no rule decides), then each rule with its
 // anonymous sets; the first rule carries the fingerprint.
-func build(rs *Ruleset, fingerprint string) nftBatch {
-	b := nftBatch{table: nftTable}
+func build(rs *Ruleset, fingerprint string, table *nftables.Table) nftBatch {
+	b := nftBatch{table: table}
 	chains := map[string]*nftables.Chain{}
 	for _, c := range rs.Chains {
-		ch := &nftables.Chain{Name: c.Name, Table: nftTable}
+		ch := &nftables.Chain{Name: c.Name, Table: table}
 		if c.Hook != "" {
 			accept := nftables.ChainPolicyAccept
 			ch.Type, ch.Hooknum, ch.Priority, ch.Policy = nftables.ChainTypeFilter, nftHooks[c.Hook], nftables.ChainPriorityFilter, &accept
@@ -206,14 +218,14 @@ func build(rs *Ruleset, fingerprint string) nftBatch {
 	var setID uint32
 	set := func(key nftables.SetDatatype, elems []nftables.SetElement) *nftables.Set {
 		setID++ // unique in the batch, where the kernel resolves it
-		s := &nftables.Set{Table: nftTable, ID: setID, Name: "__set%d", Anonymous: true, Constant: true, Interval: true, KeyType: key}
+		s := &nftables.Set{Table: table, ID: setID, Name: "__set%d", Anonymous: true, Constant: true, Interval: true, KeyType: key}
 		b.ops = append(b.ops, nftOp{set: s, elems: elems})
 		return s
 	}
 	first := true
 	for _, c := range rs.Chains {
 		for _, r := range c.Rules {
-			rule := &nftables.Rule{Table: nftTable, Chain: chains[c.Name], Exprs: exprs(r, set)}
+			rule := &nftables.Rule{Table: table, Chain: chains[c.Name], Exprs: exprs(r, set)}
 			if first {
 				rule.UserData = userdata.AppendString(nil, userdata.TypeComment, markPrefix+fingerprint)
 				first = false

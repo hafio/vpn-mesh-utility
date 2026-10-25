@@ -425,6 +425,35 @@ func TestRunFollowsTheServer(t *testing.T) {
 	}
 }
 
+// The agent of a mesh in slot 2 (amendment A49) applies its mesh's config
+// on the slot's interface, wg2, and its local UI's default is the slot's
+// port.
+func TestRunNamesItsSlot(t *testing.T) {
+	cfg := testfix.ServerConfig()
+	cfg.Node.Slot = 2
+	dir, pub := newDir(t)
+	_, srv := newFakeServer(t, pub, cfg, nil)
+	n := testfix.VPS1
+	if err := dir.SaveEnrollment(state.Enrollment{Server: srv.URL, NodeID: n.ID, Name: n.Name, Role: n.Role, MeshIP: n.MeshIP,
+		Mesh: "lab", Slot: 2}); err != nil {
+		t.Fatal(err)
+	}
+	r := start(t, dir, "")
+	eventually(t, "the config on wg2", func() bool {
+		d, ok := r.host.DeviceOf("wg2")
+		return ok && len(d.Peers) == len(cfg.Peers)
+	})
+	if _, ok := r.host.DeviceOf(Interface); ok {
+		t.Fatal("slot 2's agent made wg0")
+	}
+	if got := uiListen(UIAuto, 2); got != "127.0.0.1:7445" {
+		t.Errorf("slot 2's UI = %s", got)
+	}
+	if got := uiListen("127.0.0.1:9000", 2); got != "127.0.0.1:9000" {
+		t.Errorf("a UI address given = %s", got)
+	}
+}
+
 // The poll covers a proxy that swallows the stream (amendment A16).
 func TestRunPollsWhenTheStreamIsSilent(t *testing.T) {
 	dir, f := joinedTo(t, testfix.ServerConfig())
@@ -697,14 +726,15 @@ func (s *fakeService) Install(context.Context) error {
 
 func TestJoin(t *testing.T) {
 	var got proto.JoinRequest
-	nodeID := int64(7)
+	nodeID, mesh, slot := int64(7), "", 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != proto.PathJoin || r.Header.Get(proto.HeaderSignature) != "" {
 			t.Errorf("join must be an unsigned POST to %s", proto.PathJoin)
 		}
 		b, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(b, &got)
-		_ = json.NewEncoder(w).Encode(proto.JoinResponse{NodeID: nodeID, Name: "vps-1", Role: proto.RoleServer, MeshIP: "10.77.0.1"})
+		_ = json.NewEncoder(w).Encode(proto.JoinResponse{NodeID: nodeID, Name: "vps-1", Role: proto.RoleServer, MeshIP: "10.77.0.1",
+			Mesh: mesh, MeshUUID: "8c2b6f3e-0d1a-4c55-9e7a-1f2d3c4b5a69", Slot: slot})
 	}))
 	defer srv.Close()
 	data := filepath.Join(t.TempDir(), "data")
@@ -753,6 +783,27 @@ func TestJoin(t *testing.T) {
 	}
 	if again, _ := dir.LoadKeys(); !again.Identity.Equal(keys.Identity) {
 		t.Fatal("re-join replaced the identity key")
+	}
+
+	// A mesh in slot 1 (amendment A49) is recorded, and its names said; a
+	// slot this agent does not know is refused and nothing recorded.
+	mesh, slot = "lab", 1
+	out.Reset()
+	if _, err := Join(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	if e, err := dir.Enrollment(); err != nil || e.Mesh != "lab" || e.Slot != 1 || e.MeshUUID == "" {
+		t.Fatalf("enrollment %+v, %v", e, err)
+	}
+	if !strings.Contains(out.String(), "mesh lab, slot 1: interface wg1, local UI port 7444") {
+		t.Fatalf("join output: %s", out.String())
+	}
+	slot = proto.MaxSlot + 1
+	if _, err := Join(context.Background(), opts); err == nil || !strings.Contains(err.Error(), "slot 64") {
+		t.Fatalf("join into slot 64 = %v", err)
+	}
+	if e, err := dir.Enrollment(); err != nil || e.Slot != 1 {
+		t.Fatalf("enrollment after the refusal %+v, %v", e, err)
 	}
 }
 

@@ -56,6 +56,11 @@
 //
 // Every rule and route here carries protocol 201 and a priority of its
 // own, so Sync lists, and removes, only these.
+//
+// These are slot 0's names and numbers. The agent of a mesh in slot s
+// (amendment A49) uses rules 10*s higher (1010.., 5210..), table 51821+2s,
+// its own interface and the bridge meshctl<s>; Sync touches no other
+// slot's rules.
 package containers
 
 import (
@@ -70,22 +75,36 @@ import (
 // Tables a rule looks up.
 const (
 	MainTable = 254
-	// BlackholeTable holds only a blackhole default route.
+	// BlackholeTable holds only a blackhole default route: slot 0's
+	// (proto.Slot.ContainersTable).
 	BlackholeTable = 51821
 )
 
-// The priorities of the gateway's rules (container mode) and of the guard
-// (host mode); each set is consecutive from its base.
+// The priorities of slot 0's gateway rules (container mode) and guard
+// (host mode); each set is consecutive from its base, a slot's base
+// proto.Slot.RuleShift higher.
 const (
 	PriorityGateway = 1000
 	PriorityGuard   = 5200
 	rulesPerSet     = 7
 )
 
-// Owned reports whether a rule at priority is one of this package's.
+// SlotOf is the slot whose rule sits at priority, if any slot's does.
+func SlotOf(priority int) (proto.Slot, bool) {
+	for _, base := range []int{PriorityGateway, PriorityGuard} {
+		d := priority - base
+		if s := proto.Slot(d / 10); d >= 0 && d%10 < rulesPerSet && s.Valid() {
+			return s, true
+		}
+	}
+	return 0, false
+}
+
+// Owned reports whether a rule at priority is one of this package's, of
+// any slot.
 func Owned(priority int) bool {
-	return (priority >= PriorityGateway && priority < PriorityGateway+rulesPerSet) ||
-		(priority >= PriorityGuard && priority < PriorityGuard+rulesPerSet)
+	_, ok := SlotOf(priority)
+	return ok
 }
 
 // Rule is one policy rule, of IPv4 or of IPv6: an input interface (""
@@ -125,16 +144,17 @@ func (r Rule) String() string {
 // the bridge, and the main table's drops.
 type Net interface {
 	// Rules returns the rules of both families with protocol 201 at an
-	// Owned priority (IPv4 ones only without IPv6 policy routing).
+	// Owned priority, of every slot (IPv4 ones only without IPv6 policy
+	// routing).
 	Rules() ([]Rule, error)
 	AddRule(r Rule) error
 	DelRule(r Rule) error
 	// IPv6Rules reports whether the kernel has IPv6 policy routing.
 	IPv6Rules() (bool, error)
-	// Blackhole reports whether BlackholeTable holds the family's
-	// blackhole default.
-	Blackhole(ipv6 bool) (bool, error)
-	SetBlackhole(ipv6, on bool) error
+	// Blackhole reports whether table holds the family's blackhole
+	// default.
+	Blackhole(table int, ipv6 bool) (bool, error)
+	SetBlackhole(table int, ipv6, on bool) error
 	// LinkHolding is the interface, other than skip, that holds an
 	// address inside p; "" when none does.
 	LinkHolding(p netip.Prefix, skip string) (string, error)
@@ -201,59 +221,59 @@ func parse(k proto.Containers) (network, error) {
 
 func host(a netip.Addr) netip.Prefix { return netip.PrefixFrom(a, a.BitLen()) }
 
-// Gateway is the container-mode gateway's rules for k: wg the tunnel,
+// Gateway is slot s's container-mode gateway rules for k: wg the tunnel,
 // meshIf the interface on the mesh network.
-func Gateway(k proto.Containers, wg, meshIf string) ([]Rule, error) {
+func Gateway(k proto.Containers, s proto.Slot, wg, meshIf string) ([]Rule, error) {
 	n, err := parse(k)
 	if err != nil {
 		return nil, err
 	}
-	rules := gateway(false, n.subnet, n.mesh, n.bridge, wg, meshIf, k.Relay)
+	rules := gateway(s, false, n.subnet, n.mesh, n.bridge, wg, meshIf, k.Relay)
 	if n.subnet6.IsValid() {
-		rules = append(rules, gateway(true, n.subnet6, n.mesh6, n.bridge6, wg, meshIf, k.Relay)...)
+		rules = append(rules, gateway(s, true, n.subnet6, n.mesh6, n.bridge6, wg, meshIf, k.Relay)...)
 	}
 	return rules, nil
 }
 
 // gateway is one family's gateway rules.
-func gateway(v6 bool, subnet, mesh netip.Prefix, bridge netip.Addr, wg, meshIf string, relay bool) []Rule {
-	p := PriorityGateway
+func gateway(s proto.Slot, v6 bool, subnet, mesh netip.Prefix, bridge netip.Addr, wg, meshIf string, relay bool) []Rule {
+	p, hole := PriorityGateway+s.RuleShift(), s.ContainersTable()
 	rules := []Rule{
 		{Priority: p, IPv6: v6, Iif: "lo", Table: MainTable},
-		{Priority: p + 1, IPv6: v6, Iif: wg, Dst: host(bridge), Table: BlackholeTable},
+		{Priority: p + 1, IPv6: v6, Iif: wg, Dst: host(bridge), Table: hole},
 		{Priority: p + 2, IPv6: v6, Iif: wg, Dst: subnet, Table: MainTable},
 	}
 	if relay {
 		rules = append(rules, Rule{Priority: p + 3, IPv6: v6, Iif: wg, Dst: mesh, Table: MainTable})
 	}
 	return append(rules,
-		Rule{Priority: p + 4, IPv6: v6, Iif: meshIf, Src: host(bridge), Table: BlackholeTable},
+		Rule{Priority: p + 4, IPv6: v6, Iif: meshIf, Src: host(bridge), Table: hole},
 		Rule{Priority: p + 5, IPv6: v6, Iif: meshIf, Src: subnet, Dst: mesh, Table: MainTable},
-		Rule{Priority: p + 6, IPv6: v6, Table: BlackholeTable},
+		Rule{Priority: p + 6, IPv6: v6, Table: hole},
 	)
 }
 
-// Guard is a host-mode node's rules for k: its subnet is reached from wg,
-// the bridge and the host itself, and from nowhere else; IPv6 from the
-// bridge goes to the mesh or is refused.
-func Guard(k proto.Containers, wg string) ([]Rule, error) {
+// Guard is slot s's host-mode rules for k: its subnet is reached from wg,
+// the slot's bridge and the host itself, and from nowhere else; IPv6 from
+// the bridge goes to the mesh or is refused.
+func Guard(k proto.Containers, s proto.Slot, wg string) ([]Rule, error) {
 	n, err := parse(k)
 	if err != nil {
 		return nil, err
 	}
-	p, br := PriorityGuard, proto.ContainerBridge
+	p, br, hole := PriorityGuard+s.RuleShift(), s.Bridge(), s.ContainersTable()
 	rules := []Rule{
 		{Priority: p, Iif: wg, Dst: n.subnet, Table: MainTable},
 		{Priority: p + 1, Iif: br, Table: MainTable},
 		{Priority: p + 2, Iif: "lo", Dst: n.subnet, Table: MainTable},
-		{Priority: p + 3, Dst: n.subnet, Table: BlackholeTable},
+		{Priority: p + 3, Dst: n.subnet, Table: hole},
 	}
 	if n.subnet6.IsValid() {
 		rules = append(rules,
 			Rule{Priority: p, IPv6: true, Iif: wg, Dst: n.subnet6, Table: MainTable},
 			Rule{Priority: p + 1, IPv6: true, Iif: br, Dst: n.mesh6, Table: MainTable},
 			Rule{Priority: p + 2, IPv6: true, Iif: "lo", Dst: n.subnet6, Table: MainTable},
-			Rule{Priority: p + 3, IPv6: true, Dst: n.subnet6, Table: BlackholeTable},
+			Rule{Priority: p + 3, IPv6: true, Dst: n.subnet6, Table: hole},
 			Rule{Priority: p + 4, IPv6: true, Iif: br, Unreachable: true},
 		)
 	}
@@ -267,18 +287,18 @@ var ErrIPv6Unrouted = errors.New("containers: the kernel has no IPv6 policy rout
 	"which isolates the containers' IPv6, so their network carries IPv4 only; " +
 	"take their IPv6 off the mesh (`meshctl node set <name> --containers6=false`)")
 
-// Sync makes the host match k -- nil takes the rules and the blackhole
-// routes away; addresses, proxy entries and the bridge stay, since a
-// runtime may still use them, and so do the IPv6 ones when k has no IPv6
-// -- and returns how many changes it made. wg is the tunnel; proxied are
+// Sync makes the host match k for slot s -- nil takes the slot's rules
+// and blackhole routes away; addresses, proxy entries and the bridge stay,
+// since a runtime may still use them, and so do the IPv6 ones when k has no
+// IPv6 -- and returns how many changes it made. wg is the tunnel; proxied are
 // the IPv6 mesh addresses the mesh side answers neighbour discovery for
 // (the node's own and those it routes over wg), of which those of the
 // mesh's prefix outside the node's /112 are kept. Without IPv6 policy
 // routing the IPv4 side is set up, the IPv6 side left out and the /112
 // dropped, and the error is ErrIPv6Unrouted.
-func Sync(nt Net, sys Sysctls, k *proto.Containers, wg string, proxied []netip.Addr) (int, error) {
+func Sync(nt Net, sys Sysctls, k *proto.Containers, s proto.Slot, wg string, proxied []netip.Addr) (int, error) {
 	if k == nil {
-		return syncRules(nt, nil)
+		return syncRules(nt, s, nil)
 	}
 	n, err := parse(*k)
 	if err != nil {
@@ -300,19 +320,19 @@ func Sync(nt Net, sys Sysctls, k *proto.Containers, wg string, proxied []netip.A
 		if link == "" {
 			return 0, fmt.Errorf("containers: no interface holds an address of %s, so the agent is not on the %s network: "+
 				"create it with the node's values (`meshctl node show <name>`; docs/containers.md), then recreate the agent's container",
-				n.subnet, proto.MeshNetwork)
+				n.subnet, s.Network())
 		}
 		c, err := ensureAddr(nt, link, netip.PrefixFrom(n.gateway, n.mesh.Bits()))
 		changes += c
 		if err != nil {
 			return changes, err
 		}
-		if want, err = Gateway(*k, wg, link); err != nil {
+		if want, err = Gateway(*k, s, wg, link); err != nil {
 			return changes, err
 		}
 		addr6 = n.gateway6
 	case proto.ModeHost:
-		link = proto.ContainerBridge
+		link = s.Bridge()
 		created, err := nt.EnsureBridge(link)
 		if err != nil {
 			return 0, fmt.Errorf("containers: bridge %s: %w", link, err)
@@ -325,9 +345,9 @@ func Sync(nt Net, sys Sysctls, k *proto.Containers, wg string, proxied []netip.A
 		if err != nil {
 			return changes, err
 		}
-		sysctls = []proto.Sysctl{{Key: proto.SysctlBridgeForwarding, Value: "1"}, {Key: proto.SysctlBridgeProxyARP, Value: "1"},
-			{Key: proto.SysctlWGForwarding, Value: "1"}}
-		if want, err = Guard(*k, wg); err != nil {
+		sysctls = []proto.Sysctl{{Key: s.SysctlBridgeForwarding(), Value: "1"}, {Key: s.SysctlBridgeProxyARP(), Value: "1"},
+			{Key: s.SysctlWGForwarding(), Value: "1"}}
+		if want, err = Guard(*k, s, wg); err != nil {
 			return changes, err
 		}
 		addr6 = n.bridge6
@@ -350,7 +370,7 @@ func Sync(nt Net, sys Sysctls, k *proto.Containers, wg string, proxied []netip.A
 				return changes, err
 			}
 			if k.Mode == proto.ModeHost {
-				sysctls = append(sysctls, proto.Sysctl{Key: proto.SysctlBridgeProxyNDP, Value: "1"})
+				sysctls = append(sysctls, proto.Sysctl{Key: s.SysctlBridgeProxyNDP(), Value: "1"})
 			}
 			for _, a := range proxied {
 				if n.mesh6.Contains(a) && !n.subnet6.Contains(a) {
@@ -370,13 +390,13 @@ func Sync(nt Net, sys Sysctls, k *proto.Containers, wg string, proxied []netip.A
 			return changes, fmt.Errorf("containers: %w", err)
 		}
 	}
-	c, err := syncRules(nt, want)
+	c, err := syncRules(nt, s, want)
 	changes += c
 	if err != nil {
 		return changes, err
 	}
 	if n.subnet6.IsValid() {
-		c, err = syncDropped(nt, drop)
+		c, err = syncDropped(nt, n.mesh6, drop)
 		changes += c
 		if err != nil {
 			return changes, err
@@ -390,12 +410,15 @@ func Sync(nt Net, sys Sysctls, k *proto.Containers, wg string, proxied []netip.A
 	return changes, errUnrouted
 }
 
-// syncDropped makes the agent's main-table blackhole routes exactly want.
-func syncDropped(nt Net, want []netip.Prefix) (int, error) {
+// syncDropped makes the agent's main-table blackhole routes inside its
+// mesh's IPv6 prefix exactly want; another mesh's (amendment A49) are
+// outside it.
+func syncDropped(nt Net, mesh6 netip.Prefix, want []netip.Prefix) (int, error) {
 	have, err := nt.Dropped()
 	if err != nil {
 		return 0, fmt.Errorf("containers: %w", err)
 	}
+	have = slices.DeleteFunc(have, func(p netip.Prefix) bool { return !mesh6.Contains(p.Addr()) })
 	n := 0
 	for _, p := range want {
 		if !slices.Contains(have, p) {
@@ -457,15 +480,20 @@ func ensureAddr(nt Net, link string, a netip.Prefix) (int, error) {
 	return 1, nil
 }
 
-// syncRules makes the agent's rules exactly want: a family's blackhole
-// route before any rule that looks it up, and rules removed before the
-// route goes. IPv6's route is looked at only while it has rules, so a host
+// syncRules makes slot s's rules exactly want: a family's blackhole route
+// before any rule that looks it up, and rules removed before the route
+// goes. IPv6's route is looked at only while it has rules, so a host
 // without IPv6 policy routing is never asked about it.
-func syncRules(nt Net, want []Rule) (int, error) {
+func syncRules(nt Net, s proto.Slot, want []Rule) (int, error) {
 	have, err := nt.Rules()
 	if err != nil {
 		return 0, fmt.Errorf("containers: %w", err)
 	}
+	have = slices.DeleteFunc(have, func(r Rule) bool {
+		rs, _ := SlotOf(r.Priority)
+		return rs != s
+	})
+	table := s.ContainersTable()
 	of := func(rs []Rule, v6 bool) bool {
 		return slices.ContainsFunc(rs, func(r Rule) bool { return r.IPv6 == v6 })
 	}
@@ -474,14 +502,14 @@ func syncRules(nt Net, want []Rule) (int, error) {
 		if v6 && !of(have, true) && !of(want, true) {
 			continue
 		}
-		if hole[v6], err = nt.Blackhole(v6); err != nil {
+		if hole[v6], err = nt.Blackhole(table, v6); err != nil {
 			return 0, fmt.Errorf("containers: %w", err)
 		}
 	}
 	n := 0
 	for _, v6 := range []bool{false, true} {
 		if of(want, v6) && !hole[v6] {
-			if err := nt.SetBlackhole(v6, true); err != nil {
+			if err := nt.SetBlackhole(table, v6, true); err != nil {
 				return n, fmt.Errorf("containers: %w", err)
 			}
 			n++
@@ -505,7 +533,7 @@ func syncRules(nt Net, want []Rule) (int, error) {
 	}
 	for _, v6 := range []bool{false, true} {
 		if !of(want, v6) && hole[v6] {
-			if err := nt.SetBlackhole(v6, false); err != nil {
+			if err := nt.SetBlackhole(table, v6, false); err != nil {
 				return n, fmt.Errorf("containers: %w", err)
 			}
 			n++

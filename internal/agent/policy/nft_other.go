@@ -2,11 +2,15 @@
 
 package policy
 
-import "net/netip"
+import (
+	"net/netip"
+
+	"github.com/hafio/vpn-mesh-utility/internal/proto"
+)
 
 // NewKernel is a kernel that holds no table: servers, which enforce the
 // mesh firewall, run on Linux.
-func NewKernel() Kernel { return noKernel{} }
+func NewKernel(proto.Slot) Kernel { return noKernel{} }
 
 type noKernel struct{}
 

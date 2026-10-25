@@ -13,7 +13,7 @@ import (
 
 // Off Linux the kernel holds no table and refuses one.
 func TestNoKernelOffLinux(t *testing.T) {
-	k := policy.NewKernel()
+	k := policy.NewKernel(0)
 	if mark, err := k.Installed(); mark != "" || err != nil {
 		t.Fatalf("Installed = %q, %v", mark, err)
 	}

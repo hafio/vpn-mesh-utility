@@ -27,9 +27,17 @@ func TestBuildBatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b := build(rs, "0123456789abcdef")
-	if b.table.Name != TableName || b.table.Family != nftables.TableFamilyINet || len(b.chains) != len(rs.Chains) {
+	k := NewKernel(0).(nftKernel)
+	b := build(rs, "0123456789abcdef", k.table)
+	if b.table.Name != TableName || b.table.Family != nftables.TableFamilyINet || len(b.chains) != len(rs.Chains) || k.legacy == nil {
 		t.Fatalf("table %+v, %d chains", b.table, len(b.chains))
+	}
+	// Another slot's table (amendment A49), with no legacy table to replace.
+	if k3 := NewKernel(3).(nftKernel); k3.table.Name != "meshctl3" || k3.table.Family != nftables.TableFamilyINet || k3.legacy != nil {
+		t.Fatalf("slot 3's kernel %+v", k3)
+	}
+	if b3 := build(rs, "x", NewKernel(3).(nftKernel).table); b3.chains[0].Table.Name != "meshctl3" {
+		t.Fatalf("slot 3's chains are in %s", b3.chains[0].Table.Name)
 	}
 	for i, ch := range b.chains {
 		hooked := rs.Chains[i].Hook != ""
@@ -205,7 +213,7 @@ func TestKernelNeedsPrivilege(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("as root this would change the host's nftables (the e2e tests cover it)")
 	}
-	k := NewKernel()
+	k := NewKernel(0)
 	rs, err := Compile(*testfix.Policy(), Local{Self: netip.MustParseAddr(testfix.VPS1.MeshIP)}, time.Time{})
 	if err != nil {
 		t.Fatal(err)

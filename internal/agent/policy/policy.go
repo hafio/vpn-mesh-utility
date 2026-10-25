@@ -39,7 +39,9 @@ import (
 	"github.com/hafio/vpn-mesh-utility/internal/validate"
 )
 
-// TableName is the agent's table, in the inet family (both IPv4 and IPv6).
+// TableName is the agent's table, in the inet family (both IPv4 and IPv6):
+// slot 0's, which Text names; the agent of a mesh in another slot keeps
+// that slot's (proto.Slot.Table, amendment A49).
 const TableName = "meshctl"
 
 // The base chains' hooks.
@@ -478,6 +480,8 @@ type Kernel interface {
 type Enforcer struct {
 	K   Kernel
 	Log *slog.Logger
+	// Table names K's table in errors; empty is TableName.
+	Table string
 }
 
 // ErrNoKernel is the refusal of a platform without nftables.
@@ -488,16 +492,17 @@ var ErrNoKernel = errors.New("the mesh firewall needs Linux nftables, and server
 // replaced whole, and the mesh flows the old one let through are judged
 // again by the new one.
 func (e *Enforcer) Sync(rs *Ruleset) (int, error) {
+	table := cmp.Or(e.Table, TableName)
 	have, err := e.K.Installed()
 	if err != nil {
-		return 0, fmt.Errorf("mesh firewall: read the table %s: %w", TableName, err)
+		return 0, fmt.Errorf("mesh firewall: read the table %s: %w", table, err)
 	}
 	if rs == nil {
 		if have == "" {
 			return 0, nil
 		}
 		if err := e.K.Remove(); err != nil {
-			return 0, fmt.Errorf("mesh firewall: remove the table %s: %w", TableName, err)
+			return 0, fmt.Errorf("mesh firewall: remove the table %s: %w", table, err)
 		}
 		return 1, nil
 	}
@@ -506,7 +511,7 @@ func (e *Enforcer) Sync(rs *Ruleset) (int, error) {
 		return 0, nil
 	}
 	if err := e.K.Replace(rs, want); err != nil {
-		return 0, fmt.Errorf("mesh firewall: install the table %s (%d rules): %w", TableName, rs.Count(), err)
+		return 0, fmt.Errorf("mesh firewall: install the table %s (%d rules): %w", table, rs.Count(), err)
 	}
 	if have != "" {
 		log := e.Log

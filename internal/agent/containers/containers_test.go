@@ -23,7 +23,7 @@ var (
 // the relay rule on a hub that relays only.
 func TestGatewayRules(t *testing.T) {
 	k := *testfix.Containers(proto.ModeContainer)
-	got, err := containers.Gateway(k, "wg0", "eth1")
+	got, err := containers.Gateway(k, 0, "wg0", "eth1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +40,7 @@ func TestGatewayRules(t *testing.T) {
 		t.Fatalf("Gateway =\n%v\nwant\n%v", got, want)
 	}
 	k.Relay = true
-	got, _ = containers.Gateway(k, "wg0", "eth1")
+	got, _ = containers.Gateway(k, 0, "wg0", "eth1")
 	if relay := (containers.Rule{Priority: 1003, Iif: "wg0", Dst: mesh, Table: m}); len(got) != 7 || got[3] != relay {
 		t.Fatalf("a relaying hub's rules = %v", got)
 	}
@@ -57,7 +57,7 @@ func TestGatewayRules(t *testing.T) {
 // The host-mode guard: the subnet is reached from wg0, the bridge and the
 // host, and blackholed from anywhere else (the trial's G1-G5).
 func TestGuardRules(t *testing.T) {
-	got, err := containers.Guard(*testfix.Containers(proto.ModeHost), "wg0")
+	got, err := containers.Guard(*testfix.Containers(proto.ModeHost), 0, "wg0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestSyncContainerMode(t *testing.T) {
 	stale := containers.Rule{Priority: 1003, Iif: "wg0", Dst: mesh, Table: containers.MainTable}
 	n.Install(stale)
 	k := testfix.Containers(proto.ModeContainer)
-	c, err := containers.Sync(n, &agentfake.Sysctl{}, k, "wg0", nil)
+	c, err := containers.Sync(n, &agentfake.Sysctl{}, k, 0, "wg0", nil)
 	if err != nil || c != 1+1+6+1 {
 		t.Fatalf("Sync = %d, %v; calls %v", c, err, n.Calls)
 	}
@@ -100,18 +100,18 @@ func TestSyncContainerMode(t *testing.T) {
 	if rules, _ := n.Rules(); slices.Contains(rules, stale) || len(rules) != 6 {
 		t.Errorf("rules after Sync = %v", rules)
 	}
-	if c, err := containers.Sync(n, &agentfake.Sysctl{}, k, "wg0", nil); err != nil || c != 0 {
+	if c, err := containers.Sync(n, &agentfake.Sysctl{}, k, 0, "wg0", nil); err != nil || c != 0 {
 		t.Fatalf("second Sync = %d, %v", c, err)
 	}
 	// Taken away: rules first, then the route; the addresses stay.
 	n.Calls = nil
-	if c, err := containers.Sync(n, &agentfake.Sysctl{}, nil, "wg0", nil); err != nil || c != 7 {
+	if c, err := containers.Sync(n, &agentfake.Sysctl{}, nil, 0, "wg0", nil); err != nil || c != 7 {
 		t.Fatalf("Sync(nil) = %d, %v", c, err)
 	}
 	if last := n.Calls[len(n.Calls)-1]; last != "blackhole false" || n.HasBlackhole() {
 		t.Errorf("the route must go last: %v", n.Calls)
 	}
-	if c, err := containers.Sync(n, &agentfake.Sysctl{}, nil, "wg0", nil); err != nil || c != 0 {
+	if c, err := containers.Sync(n, &agentfake.Sysctl{}, nil, 0, "wg0", nil); err != nil || c != 0 {
 		t.Fatalf("Sync(nil) again = %d, %v", c, err)
 	}
 }
@@ -122,7 +122,7 @@ func TestSyncWithoutTheMeshNetwork(t *testing.T) {
 	n := agentfake.NewNet()
 	n.Attach("eth0", netip.MustParsePrefix("172.20.0.3/16"))
 	n.Attach("wg0", netip.MustParsePrefix("10.77.128.9/32")) // the tunnel is skipped
-	_, err := containers.Sync(n, &agentfake.Sysctl{}, testfix.Containers(proto.ModeContainer), "wg0", nil)
+	_, err := containers.Sync(n, &agentfake.Sysctl{}, testfix.Containers(proto.ModeContainer), 0, "wg0", nil)
 	if err == nil || !strings.Contains(err.Error(), "not on the meshctl-mesh network") || !strings.Contains(err.Error(), "docs/containers.md") {
 		t.Fatalf("Sync = %v", err)
 	}
@@ -136,7 +136,7 @@ func TestSyncWithoutTheMeshNetwork(t *testing.T) {
 func TestSyncHostMode(t *testing.T) {
 	n, sys := agentfake.NewNet(), &agentfake.Sysctl{}
 	k := testfix.Containers(proto.ModeHost)
-	c, err := containers.Sync(n, sys, k, "wg0", nil)
+	c, err := containers.Sync(n, sys, k, 0, "wg0", nil)
 	if err != nil || c != 1+1+3+1+4 {
 		t.Fatalf("Sync = %d, %v; calls %v", c, err, n.Calls)
 	}
@@ -148,8 +148,68 @@ func TestSyncHostMode(t *testing.T) {
 			t.Errorf("sysctl %s was not set: %v", key, sys.Values)
 		}
 	}
-	if c, err := containers.Sync(n, sys, k, "wg0", nil); err != nil || c != 0 {
+	if c, err := containers.Sync(n, sys, k, 0, "wg0", nil); err != nil || c != 0 {
 		t.Fatalf("second Sync = %d, %v", c, err)
+	}
+}
+
+// Two meshes' host-mode container networks on one host (amendment A49):
+// each slot has its own bridge, rules, blackhole table and sysctl keys,
+// and taking one away leaves the other.
+func TestSlotsKeepTheirOwn(t *testing.T) {
+	n, sys := agentfake.NewNet(), &agentfake.Sysctl{}
+	k := testfix.Containers(proto.ModeHost)
+	if _, err := containers.Sync(n, sys, k, 0, "wg0", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := containers.Sync(n, sys, k, 1, "wg1", nil); err != nil {
+		t.Fatalf("slot 1 = %v; calls %v", err, n.Calls)
+	}
+	if got := n.AddrsOf("meshctl1"); len(got) != 1 || !n.HasBlackholeIn(proto.Slot(1).ContainersTable(), false) {
+		t.Fatalf("slot 1's bridge %v, its blackhole %v", got, n.HasBlackholeIn(51823, false))
+	}
+	for _, key := range []string{"net.ipv4.conf.meshctl1.forwarding", "net.ipv4.conf.meshctl1.proxy_arp", "net.ipv4.conf.wg1.forwarding"} {
+		if sys.Values[key] != "1" {
+			t.Errorf("sysctl %s was not set: %v", key, sys.Values)
+		}
+	}
+	want, _ := containers.Guard(*k, 1, "wg1")
+	if want[0].Priority != 5210 || want[1].Iif != "meshctl1" || want[3].Table != 51823 {
+		t.Fatalf("slot 1's guard %v", want)
+	}
+	n.Calls = nil
+	if c, err := containers.Sync(n, sys, nil, 1, "wg1", nil); err != nil || c != len(want)+1 {
+		t.Fatalf("slot 1 off = %d, %v; calls %v", c, err, n.Calls)
+	}
+	if !n.HasBlackhole() || n.HasBlackholeIn(51823, false) {
+		t.Fatal("slot 1 off took the wrong blackhole")
+	}
+	if c, err := containers.Sync(n, sys, k, 0, "wg0", nil); err != nil || c != 0 {
+		t.Fatalf("slot 0 after slot 1 left = %d, %v", c, err)
+	}
+	gw, _ := containers.Gateway(*testfix.Containers(proto.ModeContainer), 2, "wg2", "eth1")
+	if gw[0].Priority != 1020 || gw[1].Iif != "wg2" || gw[1].Table != 51825 {
+		t.Fatalf("slot 2's gateway %v", gw)
+	}
+}
+
+// SlotOf knows every slot's gateway and guard rules, and no other
+// priority.
+func TestSlotOf(t *testing.T) {
+	for _, c := range []struct {
+		priority int
+		slot     proto.Slot
+		ok       bool
+	}{
+		{1000, 0, true}, {1006, 0, true}, {1007, 0, false}, {1010, 1, true}, {1636, 63, true}, {1640, 0, false},
+		{5200, 0, true}, {5204, 0, true}, {5836, 63, true}, {999, 0, false}, {32765, 0, false},
+	} {
+		if s, ok := containers.SlotOf(c.priority); s != c.slot || ok != c.ok {
+			t.Errorf("SlotOf(%d) = %d, %v; want %d, %v", c.priority, s, ok, c.slot, c.ok)
+		}
+		if containers.Owned(c.priority) != c.ok {
+			t.Errorf("Owned(%d) = %v", c.priority, !c.ok)
+		}
 	}
 }
 
@@ -174,7 +234,7 @@ func TestSyncFailures(t *testing.T) {
 		n := agentfake.NewNet()
 		n.Attach("eth1", netip.MustParsePrefix("10.77.128.128/16"))
 		n.Fail, n.FailOn = boom, c.failOn
-		_, err := containers.Sync(n, &agentfake.Sysctl{}, testfix.Containers(c.mode), "wg0", nil)
+		_, err := containers.Sync(n, &agentfake.Sysctl{}, testfix.Containers(c.mode), 0, "wg0", nil)
 		if err == nil || !strings.HasPrefix(err.Error(), "containers: ") || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: Sync = %v, want %q", c.failOn, err, c.want)
 		}
@@ -184,38 +244,38 @@ func TestSyncFailures(t *testing.T) {
 	n.Attach("eth1", netip.MustParsePrefix("10.77.128.128/16"))
 	n.Install(containers.Rule{Priority: 1003, Iif: "wg0", Dst: mesh, Table: containers.MainTable})
 	n.Fail, n.FailOn = boom, "DelRule"
-	if _, err := containers.Sync(n, &agentfake.Sysctl{}, testfix.Containers(proto.ModeContainer), "wg0", nil); err == nil ||
+	if _, err := containers.Sync(n, &agentfake.Sysctl{}, testfix.Containers(proto.ModeContainer), 0, "wg0", nil); err == nil ||
 		!strings.Contains(err.Error(), "operation not permitted") {
 		t.Errorf("a stale rule that will not go = %v", err)
 	}
 	n.FailOn = ""
 	n.Fail = nil
-	if _, err := containers.Sync(n, &agentfake.Sysctl{}, testfix.Containers(proto.ModeContainer), "wg0", nil); err != nil {
+	if _, err := containers.Sync(n, &agentfake.Sysctl{}, testfix.Containers(proto.ModeContainer), 0, "wg0", nil); err != nil {
 		t.Fatal(err)
 	}
 	n.Fail, n.FailOn = boom, "SetBlackhole"
-	if _, err := containers.Sync(n, &agentfake.Sysctl{}, nil, "wg0", nil); err == nil || !strings.Contains(err.Error(), "operation not permitted") {
+	if _, err := containers.Sync(n, &agentfake.Sysctl{}, nil, 0, "wg0", nil); err == nil || !strings.Contains(err.Error(), "operation not permitted") {
 		t.Errorf("a blackhole route that will not go = %v", err)
 	}
 	sysFail := &agentfake.Sysctl{Err: boom}
-	if _, err := containers.Sync(agentfake.NewNet(), sysFail, testfix.Containers(proto.ModeHost), "wg0", nil); err == nil ||
+	if _, err := containers.Sync(agentfake.NewNet(), sysFail, testfix.Containers(proto.ModeHost), 0, "wg0", nil); err == nil ||
 		!strings.Contains(err.Error(), "operation not permitted") {
 		t.Errorf("a failed sysctl = %v", err)
 	}
 	k := testfix.Containers(proto.ModeContainer)
 	k.Mode = "bridge"
-	if _, err := containers.Sync(agentfake.NewNet(), sysFail, k, "wg0", nil); err == nil || !strings.Contains(err.Error(), "unknown mode") {
+	if _, err := containers.Sync(agentfake.NewNet(), sysFail, k, 0, "wg0", nil); err == nil || !strings.Contains(err.Error(), "unknown mode") {
 		t.Errorf("an unknown mode = %v", err)
 	}
 	k = testfix.Containers(proto.ModeContainer)
 	k.Subnet = "10.77.128.0"
-	if _, err := containers.Sync(agentfake.NewNet(), sysFail, k, "wg0", nil); err == nil {
+	if _, err := containers.Sync(agentfake.NewNet(), sysFail, k, 0, "wg0", nil); err == nil {
 		t.Error("a malformed subnet was accepted")
 	}
-	if _, err := containers.Guard(*k, "wg0"); err == nil {
+	if _, err := containers.Guard(*k, 0, "wg0"); err == nil {
 		t.Error("Guard accepted a malformed subnet")
 	}
-	if _, err := containers.Gateway(*k, "wg0", "eth1"); err == nil {
+	if _, err := containers.Gateway(*k, 0, "wg0", "eth1"); err == nil {
 		t.Error("Gateway accepted a malformed subnet")
 	}
 }
@@ -235,7 +295,7 @@ var (
 // With the containers' IPv6 (M8) the gateway's rules repeat for IPv6,
 // with the node's /112 and the mesh's IPv6 prefix (the 8a trial's R0-R7).
 func TestGatewayRulesWithIPv6(t *testing.T) {
-	got, err := containers.Gateway(*testfix.Containers6(proto.ModeContainer), "wg0", "eth1")
+	got, err := containers.Gateway(*testfix.Containers6(proto.ModeContainer), 0, "wg0", "eth1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +320,7 @@ func TestGatewayRulesWithIPv6(t *testing.T) {
 // from the bridge goes to the mesh or is refused at once, so an app whose
 // IPv6 default route is the bridge falls back to IPv4 (the 8a trial's E6).
 func TestGuardRulesWithIPv6(t *testing.T) {
-	got, err := containers.Guard(*testfix.Containers6(proto.ModeHost), "wg0")
+	got, err := containers.Guard(*testfix.Containers6(proto.ModeHost), 0, "wg0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +354,7 @@ func TestSyncContainerModeWithIPv6(t *testing.T) {
 	n.Attach("eth1", netip.MustParsePrefix("10.77.128.128/16"))
 	n.Attach("wg0", netip.MustParsePrefix("10.77.2.1/32"))
 	k := testfix.Containers6(proto.ModeContainer)
-	c, err := containers.Sync(n, &agentfake.Sysctl{}, k, "wg0", proxied)
+	c, err := containers.Sync(n, &agentfake.Sysctl{}, k, 0, "wg0", proxied)
 	if err != nil || c != 2+2+12+2 {
 		t.Fatalf("Sync = %d, %v; calls %v", c, err, n.Calls)
 	}
@@ -312,17 +372,17 @@ func TestSyncContainerModeWithIPv6(t *testing.T) {
 	if got := n.ProxiesOf("eth1"); !slices.Equal(got, far) {
 		t.Errorf("proxy entries = %v, want %v", got, far)
 	}
-	if c, err := containers.Sync(n, &agentfake.Sysctl{}, k, "wg0", proxied); err != nil || c != 0 {
+	if c, err := containers.Sync(n, &agentfake.Sysctl{}, k, 0, "wg0", proxied); err != nil || c != 0 {
 		t.Fatalf("second Sync = %d, %v; calls %v", c, err, n.Calls)
 	}
-	if c, err := containers.Sync(n, &agentfake.Sysctl{}, k, "wg0", far[:1]); err != nil || c != 1 ||
+	if c, err := containers.Sync(n, &agentfake.Sysctl{}, k, 0, "wg0", far[:1]); err != nil || c != 1 ||
 		!slices.Equal(n.ProxiesOf("eth1"), far[:1]) {
 		t.Fatalf("Sync without %s = %d, %v; entries %v", far[1], c, err, n.ProxiesOf("eth1"))
 	}
 	// The containers' IPv6 taken off: its rules and route go, the address
 	// and the entries stay with the runtime's network.
 	n.Calls = nil
-	if c, err := containers.Sync(n, &agentfake.Sysctl{}, testfix.Containers(proto.ModeContainer), "wg0", proxied); err != nil || c != 7 {
+	if c, err := containers.Sync(n, &agentfake.Sysctl{}, testfix.Containers(proto.ModeContainer), 0, "wg0", proxied); err != nil || c != 7 {
 		t.Fatalf("Sync without IPv6 = %d, %v; calls %v", c, err, n.Calls)
 	}
 	if n.HasBlackhole6() || !n.HasBlackhole() || len(n.ProxiesOf("eth1")) != 1 {
@@ -335,7 +395,7 @@ func TestSyncContainerModeWithIPv6(t *testing.T) {
 func TestSyncHostModeWithIPv6(t *testing.T) {
 	n, sys := agentfake.NewNet(), &agentfake.Sysctl{}
 	k := testfix.Containers6(proto.ModeHost)
-	c, err := containers.Sync(n, sys, k, "wg0", proxied)
+	c, err := containers.Sync(n, sys, k, 0, "wg0", proxied)
 	if err != nil || c != 1+2+4+2+9+2 {
 		t.Fatalf("Sync = %d, %v; calls %v", c, err, n.Calls)
 	}
@@ -349,7 +409,7 @@ func TestSyncHostModeWithIPv6(t *testing.T) {
 	if got := n.ProxiesOf(proto.ContainerBridge); !slices.Equal(got, far) {
 		t.Errorf("proxy entries = %v, want %v", got, far)
 	}
-	if c, err := containers.Sync(n, sys, k, "wg0", proxied); err != nil || c != 0 {
+	if c, err := containers.Sync(n, sys, k, 0, "wg0", proxied); err != nil || c != 0 {
 		t.Fatalf("second Sync = %d, %v", c, err)
 	}
 }
@@ -371,7 +431,7 @@ func TestSyncWithoutIPv6PolicyRouting(t *testing.T) {
 		if err := n.AddProxy(link, far[0]); err != nil {
 			t.Fatal(err)
 		}
-		_, err := containers.Sync(n, &agentfake.Sysctl{}, testfix.Containers6(mode), "wg0", proxied)
+		_, err := containers.Sync(n, &agentfake.Sysctl{}, testfix.Containers6(mode), 0, "wg0", proxied)
 		if !errors.Is(err, containers.ErrIPv6Unrouted) || !strings.Contains(err.Error(), "--containers6=false") {
 			t.Fatalf("%s: Sync = %v", mode, err)
 		}
@@ -386,7 +446,7 @@ func TestSyncWithoutIPv6PolicyRouting(t *testing.T) {
 			t.Errorf("%s: dropped %v, want %s", mode, dropped, subnet6)
 		}
 		n.NoIPv6Rules = false
-		if _, err := containers.Sync(n, &agentfake.Sysctl{}, testfix.Containers6(mode), "wg0", proxied); err != nil {
+		if _, err := containers.Sync(n, &agentfake.Sysctl{}, testfix.Containers6(mode), 0, "wg0", proxied); err != nil {
 			t.Fatalf("%s: Sync with IPv6 policy routing = %v", mode, err)
 		}
 		if dropped, _ := n.Dropped(); len(dropped) != 0 || !n.HasBlackhole6() {
@@ -408,7 +468,7 @@ func TestSyncFailuresWithIPv6(t *testing.T) {
 		n.Attach("eth1", netip.MustParsePrefix("10.77.128.128/16"))
 		n.Attach("eth1", netip.MustParsePrefix("10.77.128.2/16")) // the IPv4 gateway is in place
 		n.Fail, n.FailOn = boom, c.failOn
-		_, err := containers.Sync(n, &agentfake.Sysctl{}, testfix.Containers6(proto.ModeContainer), "wg0", proxied)
+		_, err := containers.Sync(n, &agentfake.Sysctl{}, testfix.Containers6(proto.ModeContainer), 0, "wg0", proxied)
 		if err == nil || !strings.HasPrefix(err.Error(), "containers: ") || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: Sync = %v, want %q", c.failOn, err, c.want)
 		}
@@ -416,11 +476,11 @@ func TestSyncFailuresWithIPv6(t *testing.T) {
 	n := agentfake.NewNet()
 	n.Attach("eth1", netip.MustParsePrefix("10.77.128.128/16"))
 	k := testfix.Containers6(proto.ModeContainer)
-	if _, err := containers.Sync(n, &agentfake.Sysctl{}, k, "wg0", proxied); err != nil {
+	if _, err := containers.Sync(n, &agentfake.Sysctl{}, k, 0, "wg0", proxied); err != nil {
 		t.Fatal(err)
 	}
 	n.Fail, n.FailOn = boom, "DelProxy"
-	if _, err := containers.Sync(n, &agentfake.Sysctl{}, k, "wg0", nil); err == nil || !strings.Contains(err.Error(), "stop answering") {
+	if _, err := containers.Sync(n, &agentfake.Sysctl{}, k, 0, "wg0", nil); err == nil || !strings.Contains(err.Error(), "stop answering") {
 		t.Errorf("an entry that will not go = %v", err)
 	}
 	for _, c := range []struct{ failOn, want string }{{"Dropped", "operation not permitted"}, {"SetDropped", "drop fd10:77::8000:0/112"}} {
@@ -428,7 +488,7 @@ func TestSyncFailuresWithIPv6(t *testing.T) {
 		n.NoIPv6Rules = true
 		n.Attach("eth1", netip.MustParsePrefix("10.77.128.128/16"))
 		n.Fail, n.FailOn = boom, c.failOn
-		if _, err := containers.Sync(n, &agentfake.Sysctl{}, k, "wg0", proxied); err == nil || errors.Is(err, containers.ErrIPv6Unrouted) ||
+		if _, err := containers.Sync(n, &agentfake.Sysctl{}, k, 0, "wg0", proxied); err == nil || errors.Is(err, containers.ErrIPv6Unrouted) ||
 			!strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: Sync = %v, want %q", c.failOn, err, c.want)
 		}
@@ -439,11 +499,11 @@ func TestSyncFailuresWithIPv6(t *testing.T) {
 		t.Fatal(err)
 	}
 	n.Fail, n.FailOn = boom, "SetDropped"
-	if _, err := containers.Sync(n, &agentfake.Sysctl{}, k, "wg0", proxied); err == nil || !strings.Contains(err.Error(), "stop dropping") {
+	if _, err := containers.Sync(n, &agentfake.Sysctl{}, k, 0, "wg0", proxied); err == nil || !strings.Contains(err.Error(), "stop dropping") {
 		t.Errorf("a drop that will not go = %v", err)
 	}
 	k.Gateway6 = "fd10:77::8000:2/64"
-	if _, err := containers.Gateway(*k, "wg0", "eth1"); err == nil {
+	if _, err := containers.Gateway(*k, 0, "wg0", "eth1"); err == nil {
 		t.Error("Gateway accepted a malformed IPv6 gateway")
 	}
 }

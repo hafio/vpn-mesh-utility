@@ -21,6 +21,12 @@
 // nothing reconnects. Every rule and route here carries protocol 201, like
 // the agent's mesh routes, so Sync lists, and therefore removes, only its own
 // (amendment A27).
+//
+// The agent of a mesh in slot s (amendment A49) uses priorities 10*s lower
+// and table 51820+2s, on its own interface; the fwmark is every slot's, so
+// the other meshes' tunnels never go through an exit. One mesh at a time
+// carries a host's internet: Sync turns exit mode on only while no other
+// slot's rules are there, and says so (ErrExitTaken).
 package exitmode
 
 import (
@@ -41,12 +47,28 @@ const (
 
 func (f Family) String() string { return fmt.Sprintf("IPv%d", int(f)) }
 
-// Rule priorities: what wg-quick picks on a host with only the default
-// rules (main is 32766), so the suppress rule is looked at first.
+// Rule priorities of slot 0: what wg-quick picks on a host with only the
+// default rules (main is 32766), so the suppress rule is looked at first.
 const (
 	PrioritySuppress = 32764
 	PriorityTunnel   = 32765
 )
+
+// Priorities are slot s's two rule priorities, RuleShift below slot 0's.
+func Priorities(s proto.Slot) (suppress, tunnel int) {
+	return PrioritySuppress - s.RuleShift(), PriorityTunnel - s.RuleShift()
+}
+
+// SlotOf is the slot whose exit-mode rule sits at priority, if any slot's
+// does.
+func SlotOf(priority int) (proto.Slot, bool) {
+	d := PriorityTunnel - priority // 10s for a tunnel rule, 10s+1 for a suppress rule
+	s := proto.Slot(d / 10)
+	if d < 0 || d%10 > 1 || !s.Valid() {
+		return 0, false
+	}
+	return s, true
+}
 
 // MainTable is the kernel's main routing table.
 const MainTable = 254
@@ -74,27 +96,29 @@ func (r Rule) String() string {
 	return s
 }
 
-// Route is a default route in proto.RouteTable.
+// Route is a default route in a slot's table (proto.Slot.RouteTable).
 type Route struct {
 	Family Family
+	Table  int
 	// Link is the interface of a unicast route; "" is a blackhole.
 	Link string
 }
 
 func (r Route) String() string {
 	if r.Link == "" {
-		return fmt.Sprintf("%s blackhole default table %d", r.Family, proto.RouteTable)
+		return fmt.Sprintf("%s blackhole default table %d", r.Family, r.Table)
 	}
-	return fmt.Sprintf("%s default dev %s table %d", r.Family, r.Link, proto.RouteTable)
+	return fmt.Sprintf("%s default dev %s table %d", r.Family, r.Link, r.Table)
 }
 
-// Policy is the host's policy routing as the agent sees it: its own rules
-// and its own routes in proto.RouteTable.
+// Policy is the host's policy routing as the agents see it: every slot's
+// exit-mode rules (protocol 201 at a priority SlotOf knows) and the
+// protocol 201 default routes of a table.
 type Policy interface {
 	Rules() ([]Rule, error)
 	AddRule(r Rule) error
 	DelRule(r Rule) error
-	Routes() ([]Route, error)
+	Routes(table int) ([]Route, error)
 	// AddRoute replaces the table's default route of r's family: there is
 	// one per family.
 	AddRoute(r Route) error
@@ -124,9 +148,15 @@ const (
 var ErrIPv6Unguarded = errors.New("exit mode carries IPv4 only: this kernel has IPv6 but no IPv6 policy routing, so IPv6 traffic " +
 	"bypasses the exit; turn IPv6 off on this host (sysctl net.ipv6.conf.all.disable_ipv6=1) to keep it from leaking")
 
-// Desired is what exit mode through link needs; nothing when on is false.
-// ipv6 is a host with IPv6 policy routing, via6 an exit that carries IPv6.
-func Desired(link string, on, ipv6, via6 bool) ([]Rule, []Route) {
+// ErrExitTaken is exit mode asked for while the agent of another mesh on
+// the same host already sends the host's internet through its exit: this
+// mesh's exit stays off, and the apply reports it as degraded.
+var ErrExitTaken = errors.New("exit mode is off: the agent of another mesh on this host already sends its internet through that mesh's exit")
+
+// Desired is what slot s's exit mode through link needs; nothing when on is
+// false. ipv6 is a host with IPv6 policy routing, via6 an exit that
+// carries IPv6.
+func Desired(s proto.Slot, link string, on, ipv6, via6 bool) ([]Rule, []Route) {
 	if !on {
 		return nil, nil
 	}
@@ -134,35 +164,56 @@ func Desired(link string, on, ipv6, via6 bool) ([]Rule, []Route) {
 	if ipv6 {
 		families = append(families, IPv6)
 	}
+	suppress, tunnel := Priorities(s)
 	var rules []Rule
 	for _, f := range families {
 		rules = append(rules,
-			Rule{Family: f, Priority: PrioritySuppress, Table: MainTable, SuppressPrefixlen: 0},
-			Rule{Family: f, Priority: PriorityTunnel, Table: proto.RouteTable, SuppressPrefixlen: -1, NotMark: proto.FwMark})
+			Rule{Family: f, Priority: suppress, Table: MainTable, SuppressPrefixlen: 0},
+			Rule{Family: f, Priority: tunnel, Table: s.RouteTable(), SuppressPrefixlen: -1, NotMark: proto.FwMark})
 	}
-	routes := []Route{{Family: IPv4, Link: link}}
+	routes := []Route{{Family: IPv4, Table: s.RouteTable(), Link: link}}
 	switch {
 	case ipv6 && via6:
-		routes = append(routes, Route{Family: IPv6, Link: link})
+		routes = append(routes, Route{Family: IPv6, Table: s.RouteTable(), Link: link})
 	case ipv6:
-		routes = append(routes, Route{Family: IPv6})
+		routes = append(routes, Route{Family: IPv6, Table: s.RouteTable()})
 	}
 	return rules, routes
 }
 
-// Sync makes the agent's rules and table routes exactly what exit mode needs.
+// Sync makes slot s's rules and table routes exactly what exit mode needs.
 // Routes are added before rules, so the table is ready when traffic is sent
 // to it, and rules are removed before routes. It returns how many changes it
 // made, and ErrIPv6Unguarded once IPv4 is in place on a host whose IPv6 it
 // cannot hold back. via6 is an exit that carries IPv6 (M8).
-func Sync(p Policy, link string, on, via6 bool) (int, error) {
+//
+// Another slot's rules are never touched. While they are there, exit mode
+// stays off (and the error wraps ErrExitTaken, naming that slot's
+// interface): the first mesh to turn it on keeps it, and of two that did at
+// once the lower slot does.
+func Sync(p Policy, s proto.Slot, link string, on, via6 bool) (int, error) {
 	v6 := p.IPv6()
-	wantRules, wantRoutes := Desired(link, on, v6 == V6Policy, via6)
-	haveRules, err := p.Rules()
+	all, err := p.Rules()
 	if err != nil {
 		return 0, err
 	}
-	haveRoutes, err := p.Routes()
+	var haveRules []Rule
+	holder := proto.Slot(-1) // the lowest other slot with exit rules
+	for _, r := range all {
+		switch rs, _ := SlotOf(r.Priority); {
+		case rs == s:
+			haveRules = append(haveRules, r)
+		case holder < 0 || rs < holder:
+			holder = rs
+		}
+	}
+	var taken error
+	if on && holder >= 0 && (len(haveRules) == 0 || holder < s) {
+		on = false
+		taken = fmt.Errorf("%w (its interface %s); turn that exit off first (`meshctl exit off` for that mesh)", ErrExitTaken, holder.Interface())
+	}
+	wantRules, wantRoutes := Desired(s, link, on, v6 == V6Policy, via6)
+	haveRoutes, err := p.Routes(s.RouteTable())
 	if err != nil {
 		return 0, err
 	}
@@ -203,5 +254,5 @@ func Sync(p Policy, link string, on, via6 bool) (int, error) {
 	if on && v6 == V6Unrouted {
 		return n, ErrIPv6Unguarded
 	}
-	return n, nil
+	return n, taken
 }

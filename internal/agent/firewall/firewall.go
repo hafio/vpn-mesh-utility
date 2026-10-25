@@ -23,6 +23,12 @@
 // too, since NetworkManager may move an interface to another zone; the
 // recorded rules at runtime, so one removed by hand is added again; and the
 // policies.
+//
+// These are slot 0's names. The agent of a mesh in slot s (amendment A49)
+// owns the zone mesh<s> on its interface wg<s> and the policies
+// meshctl<s>-relay and meshctl<s>-exit; a config's rules name the mesh zone
+// "mesh" and land in the slot's. The public zone is every slot's: each
+// agent opens, and records, its own port there.
 package firewall
 
 import (
@@ -56,6 +62,9 @@ type Firewall struct {
 	Dir string
 	// Iface is the mesh interface the zone is bound to.
 	Iface string
+	// Slot is the agent's mesh's slot, which names the zone and the
+	// policies (amendment A49).
+	Slot proto.Slot
 	// ready is set once the zone is known to exist in this process, so the
 	// checks are not repeated on every apply.
 	ready bool
@@ -76,7 +85,7 @@ func (f *Firewall) Apply(ctx context.Context, fw *proto.Firewall) (n int, err er
 	if fw != nil {
 		// Every value that reaches an argv is checked before the first
 		// command runs; execrun checks the argv again.
-		if err := check(*fw); err != nil {
+		if err := check(*fw, f.Slot); err != nil {
 			return 0, err
 		}
 		want = normalize(fw.Rules)
@@ -133,7 +142,7 @@ func (f *Firewall) Apply(ctx context.Context, fw *proto.Firewall) (n int, err er
 		}
 	}
 	if fw != nil {
-		c, err := f.syncPolicies(ctx, wantedPolicies(*fw))
+		c, err := f.syncPolicies(ctx, wantedPolicies(*fw, f.Slot))
 		n += c
 		if err != nil {
 			return n, err
@@ -153,10 +162,11 @@ func (f *Firewall) present(ctx context.Context, rules []proto.FWRule) ([]proto.F
 	listed := map[string][]string{}
 	var out []proto.FWRule
 	for _, r := range rules {
-		have, ok := listed[r.Zone]
+		zone := f.placed(r).Zone
+		have, ok := listed[zone]
 		if !ok {
 			for _, list := range []string{"--list-ports", "--list-rich-rules"} {
-				o, err := f.Run.Run(ctx, []string{program, "--zone=" + r.Zone, list})
+				o, err := f.Run.Run(ctx, []string{program, "--zone=" + zone, list})
 				if err != nil {
 					return nil, fmt.Errorf("firewall: %w", err)
 				}
@@ -168,7 +178,7 @@ func (f *Firewall) present(ctx context.Context, rules []proto.FWRule) ([]proto.F
 					}
 				}
 			}
-			listed[r.Zone] = have
+			listed[zone] = have
 		}
 		switch {
 		case r.Source == "" && slices.Contains(have, fmt.Sprintf("%d/%s", r.Port, r.Proto)):
@@ -176,7 +186,7 @@ func (f *Firewall) present(ctx context.Context, rules []proto.FWRule) ([]proto.F
 		case r.Source != "":
 			// Exit status 1 with "no" means absent; any other failure is
 			// left to the add, which reports it.
-			if o, _ := f.Run.Run(ctx, RuleArgv(r, "query", false)); strings.TrimSpace(o) != "yes" {
+			if o, _ := f.Run.Run(ctx, RuleArgv(f.placed(r), "query", false)); strings.TrimSpace(o) != "yes" {
 				continue
 			}
 		default:
@@ -204,23 +214,25 @@ func (p policy) rich() []string {
 	return []string{fmt.Sprintf(`rule family="ipv6" source address="%s" masquerade`, p.masquerade6)}
 }
 
-var (
-	// relayPolicy lets a server forward between mesh peers (spoke to spoke
-	// through their relay, amendment A3).
-	relayPolicy = policy{name: "meshctl-relay", ingress: proto.ZoneMesh, egress: proto.ZoneMesh}
-	// exitPolicy lets an exit server forward mesh traffic to the internet,
-	// masqueraded behind its public address.
-	exitPolicy = policy{name: "meshctl-exit", ingress: proto.ZoneMesh, egress: proto.ZonePublic, masquerade: true}
-	policies   = []policy{relayPolicy, exitPolicy}
-)
+// relayPolicy lets a server forward between mesh peers (spoke to spoke
+// through their relay, amendment A3), within slot s's zone.
+func relayPolicy(s proto.Slot) policy {
+	return policy{name: s.FirewalldPolicy("relay"), ingress: s.Zone(), egress: s.Zone()}
+}
 
-func wantedPolicies(fw proto.Firewall) []policy {
+// exitPolicy lets an exit server forward mesh traffic to the internet,
+// masqueraded behind its public address.
+func exitPolicy(s proto.Slot) policy {
+	return policy{name: s.FirewalldPolicy("exit"), ingress: s.Zone(), egress: proto.ZonePublic, masquerade: true}
+}
+
+func wantedPolicies(fw proto.Firewall, s proto.Slot) []policy {
 	var out []policy
 	if fw.Relay {
-		out = append(out, relayPolicy)
+		out = append(out, relayPolicy(s))
 	}
 	if fw.ExitGateway {
-		exit := exitPolicy
+		exit := exitPolicy(s)
 		exit.masquerade6 = fw.Exit6
 		out = append(out, exit)
 	}
@@ -284,7 +296,7 @@ func (f *Firewall) syncPolicies(ctx context.Context, want []policy) (int, error)
 	}
 	have := strings.Fields(out)
 	n := 0
-	for _, p := range policies {
+	for _, p := range []policy{relayPolicy(f.Slot), exitPolicy(f.Slot)} {
 		var argv [][]string
 		i := slices.IndexFunc(want, func(w policy) bool { return w.name == p.name })
 		wanted, exists := i >= 0, slices.Contains(have, p.name)
@@ -328,12 +340,22 @@ func (f *Firewall) syncPolicies(ctx context.Context, want []policy) (int, error)
 
 // both applies one rule at runtime and permanently.
 func (f *Firewall) both(ctx context.Context, r proto.FWRule, op string) error {
+	r = f.placed(r)
 	for _, permanent := range []bool{false, true} {
 		if _, err := f.Run.Run(ctx, RuleArgv(r, op, permanent)); err != nil {
 			return fmt.Errorf("firewall: %s %s/%d in zone %s: %w", op, r.Proto, r.Port, r.Zone, err)
 		}
 	}
 	return nil
+}
+
+// placed is r in firewalld's zone: a mesh-zone rule goes to the slot's
+// mesh zone (amendment A49), a public one to the public zone.
+func (f *Firewall) placed(r proto.FWRule) proto.FWRule {
+	if r.Zone == proto.ZoneMesh {
+		r.Zone = f.Slot.Zone()
+	}
+	return r
 }
 
 // RuleArgv renders one rule. A rule without a source opens the port; one with
@@ -384,30 +406,30 @@ func (f *Firewall) ensureZone(ctx context.Context) (int, error) {
 	if !atLeast(out, 0, 9) {
 		return 0, fmt.Errorf("firewall: firewalld %s is older than 0.9, which meshctl needs; upgrade it", strings.TrimSpace(out))
 	}
-	n, reload := 0, false
+	n, reload, zone := 0, false, f.Slot.Zone()
 	out, err = f.Run.Run(ctx, []string{program, "--permanent", "--get-zones"})
 	if err != nil {
 		return 0, fmt.Errorf("firewall: %w", err)
 	}
-	if !slices.Contains(strings.Fields(out), proto.ZoneMesh) {
+	if !slices.Contains(strings.Fields(out), zone) {
 		for _, argv := range [][]string{
-			{program, "--permanent", "--new-zone=" + proto.ZoneMesh},
-			{program, "--permanent", "--zone=" + proto.ZoneMesh, "--set-target=DROP"},
+			{program, "--permanent", "--new-zone=" + zone},
+			{program, "--permanent", "--zone=" + zone, "--set-target=DROP"},
 		} {
 			if _, err := f.Run.Run(ctx, argv); err != nil {
-				return n, fmt.Errorf("firewall: create zone %s: %w", proto.ZoneMesh, err)
+				return n, fmt.Errorf("firewall: create zone %s: %w", zone, err)
 			}
 			n++
 		}
 		reload = true
 	}
-	out, err = f.Run.Run(ctx, []string{program, "--permanent", "--zone=" + proto.ZoneMesh, "--list-interfaces"})
+	out, err = f.Run.Run(ctx, []string{program, "--permanent", "--zone=" + zone, "--list-interfaces"})
 	if err != nil {
 		return n, fmt.Errorf("firewall: %w", err)
 	}
 	if !slices.Contains(strings.Fields(out), f.Iface) {
-		if _, err := f.Run.Run(ctx, []string{program, "--permanent", "--zone=" + proto.ZoneMesh, "--change-interface=" + f.Iface}); err != nil {
-			return n, fmt.Errorf("firewall: bind %s to zone %s: %w", f.Iface, proto.ZoneMesh, err)
+		if _, err := f.Run.Run(ctx, []string{program, "--permanent", "--zone=" + zone, "--change-interface=" + f.Iface}); err != nil {
+			return n, fmt.Errorf("firewall: bind %s to zone %s: %w", f.Iface, zone, err)
 		}
 		n++
 		reload = true
@@ -420,13 +442,13 @@ func (f *Firewall) ensureZone(ctx context.Context) (int, error) {
 	}
 	// At runtime too: NetworkManager may have moved the interface to
 	// another zone, which neither the permanent binding nor a reload undoes.
-	out, err = f.Run.Run(ctx, []string{program, "--zone=" + proto.ZoneMesh, "--list-interfaces"})
+	out, err = f.Run.Run(ctx, []string{program, "--zone=" + zone, "--list-interfaces"})
 	if err != nil {
 		return n, fmt.Errorf("firewall: %w", err)
 	}
 	if !slices.Contains(strings.Fields(out), f.Iface) {
-		if _, err := f.Run.Run(ctx, []string{program, "--zone=" + proto.ZoneMesh, "--change-interface=" + f.Iface}); err != nil {
-			return n, fmt.Errorf("firewall: bind %s to zone %s: %w", f.Iface, proto.ZoneMesh, err)
+		if _, err := f.Run.Run(ctx, []string{program, "--zone=" + zone, "--change-interface=" + f.Iface}); err != nil {
+			return n, fmt.Errorf("firewall: bind %s to zone %s: %w", f.Iface, zone, err)
 		}
 		n++
 	}
@@ -444,13 +466,13 @@ func (f *Firewall) ensureBridge(ctx context.Context, bridge string) (int, error)
 	if out, err := f.Run.Run(ctx, []string{program, "--get-zone-of-interface=" + bridge}); err == nil && strings.TrimSpace(out) != "" {
 		return 0, nil
 	}
-	n := 0
+	n, zone := 0, f.Slot.Zone()
 	for _, argv := range [][]string{
-		{program, "--zone=" + proto.ZoneMesh, "--add-interface=" + bridge},
-		{program, "--permanent", "--zone=" + proto.ZoneMesh, "--add-interface=" + bridge},
+		{program, "--zone=" + zone, "--add-interface=" + bridge},
+		{program, "--permanent", "--zone=" + zone, "--add-interface=" + bridge},
 	} {
 		if _, err := f.Run.Run(ctx, argv); err != nil {
-			return n, fmt.Errorf("firewall: put the containers' bridge %s in zone %s: %w", bridge, proto.ZoneMesh, err)
+			return n, fmt.Errorf("firewall: put the containers' bridge %s in zone %s: %w", bridge, zone, err)
 		}
 		n++
 	}
@@ -471,7 +493,7 @@ func atLeast(v string, major, minor int) bool {
 	return ma > major || (ma == major && mi >= minor)
 }
 
-func check(fw proto.Firewall) error {
+func check(fw proto.Firewall, s proto.Slot) error {
 	var errs []error
 	add := func(err error) {
 		if err != nil {
@@ -481,7 +503,7 @@ func check(fw proto.Firewall) error {
 	_, err := validate.Enum("firewall.backend", fw.Backend, proto.FirewallFirewalld)
 	add(err)
 	if fw.Bridge != "" {
-		_, err = validate.Enum("firewall.bridge", fw.Bridge, proto.ContainerBridge)
+		_, err = validate.Enum("firewall.bridge", fw.Bridge, s.Bridge())
 		add(err)
 	}
 	if fw.Exit6 != "" {

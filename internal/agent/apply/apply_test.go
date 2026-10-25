@@ -104,8 +104,8 @@ func TestDualStack(t *testing.T) {
 		t.Error("the IPv6 sysctl was not set on a host with IPv6")
 	}
 	// vps-2 has public IPv6, so the exit carries it.
-	six := exitmode.Route{Family: exitmode.IPv6, Link: "wg0"}
-	if table, _ := r.p.Routes(); !slices.Contains(table, six) {
+	six := exitmode.Route{Family: exitmode.IPv6, Table: proto.RouteTable, Link: "wg0"}
+	if table, _ := r.p.Routes(proto.RouteTable); !slices.Contains(table, six) {
 		t.Errorf("exit table %v: IPv6 goes through vps-2", table)
 	}
 	before := r.mutations()
@@ -151,7 +151,7 @@ func TestDualStack(t *testing.T) {
 	if _, ok := r.s.Values[proto.SysctlIPv6Forward]; ok || r.s.Values[proto.SysctlSrcValidMark] != "1" {
 		t.Errorf("sysctls without IPv6: %v", r.s.Values)
 	}
-	if table, _ := r.p.Routes(); slices.Contains(table, six) {
+	if table, _ := r.p.Routes(proto.RouteTable); slices.Contains(table, six) {
 		t.Errorf("exit table %v: no IPv6 through the exit without IPv6", table)
 	}
 	if cfg.Interface.Address6 == "" || !slices.Contains(cfg.Peers[0].AllowedIPs, testfix.VPS1.MeshIP6+"/128") || len(cfg.Sysctl) != 2 {
@@ -271,6 +271,36 @@ func TestDNSFollowsDNSOffAndExitMode(t *testing.T) {
 	r.e.SetDNSOff(false)
 	if res, err = r.e.Apply(context.Background(), cfg); err != nil || res.DNS != proto.DNSOn || res.Changes != 1 {
 		t.Fatalf("dns on = %+v, %v", res, err)
+	}
+}
+
+// Several meshes on one host (amendment A49): a config for another slot is
+// refused before the host is touched; while another mesh's agent carries
+// the host's internet, this exit is degraded -- the tunnel up, the
+// resolver not taking every lookup.
+func TestOtherMeshesOnTheHost(t *testing.T) {
+	r := newRig(t)
+	cfg := testfix.SpokeConfig("vps-2")
+	cfg.Node.Slot = 1
+	if _, err := r.e.Apply(context.Background(), cfg); err == nil || !strings.Contains(err.Error(), "slot 1") || r.mutations() != 0 {
+		t.Fatalf("another slot's config = %v, %d mutations", err, r.mutations())
+	}
+	rules, routes := exitmode.Desired(1, "wg1", true, true, false)
+	for _, x := range rules {
+		r.p.Install(x)
+	}
+	for _, x := range routes {
+		r.p.InstallRoute(x)
+	}
+	cfg = testfix.SpokeConfig("vps-2")
+	cfg.DNS = meshDNS()
+	res, err := r.e.Apply(context.Background(), cfg)
+	w, _ := r.dns.Last()
+	if err != nil || !slices.Equal(res.Degraded, []string{apply.StepExit}) || !strings.Contains(res.Errors[0], "wg1") || w.Exit {
+		t.Fatalf("Apply = %+v, %v; dns step asked %+v", res, err, w)
+	}
+	if d, ok := r.h.DeviceOf("wg0"); !ok || len(d.Peers) != len(cfg.Peers) {
+		t.Fatal("the tunnel is not up")
 	}
 }
 

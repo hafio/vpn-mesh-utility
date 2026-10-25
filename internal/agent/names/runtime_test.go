@@ -32,6 +32,12 @@ func (f *fakeRuntime) seen() []string {
 
 func serveRuntime(t *testing.T, h http.HandlerFunc) (*Runtime, *fakeRuntime) {
 	t.Helper()
+	return serveRuntimeOn(t, proto.MeshNetwork, h)
+}
+
+// serveRuntimeOn is serveRuntime for an agent whose mesh network is network.
+func serveRuntimeOn(t *testing.T, network string, h http.HandlerFunc) (*Runtime, *fakeRuntime) {
+	t.Helper()
 	path := filepath.Join(t.TempDir(), "rt.sock")
 	ln, err := net.Listen("unix", path)
 	if err != nil {
@@ -46,7 +52,7 @@ func serveRuntime(t *testing.T, h http.HandlerFunc) (*Runtime, *fakeRuntime) {
 	})}
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { _ = srv.Close() })
-	return New(path), f
+	return New(path, network), f
 }
 
 func inspectOf(id, ip string, aliases ...string) map[string]any {
@@ -102,6 +108,32 @@ func TestList(t *testing.T) {
 	}
 }
 
+// The agent of a mesh in slot 1 (amendment A49) reads the containers on
+// its own network, meshctl-mesh1; one on slot 0's is not its.
+func TestListAnotherSlotsNetwork(t *testing.T) {
+	rt, f := serveRuntimeOn(t, proto.Slot(1).Network(), func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/containers/json":
+			_ = json.NewEncoder(w).Encode([]map[string]string{{"Id": id1}, {"Id": id3}})
+		case "/containers/" + id1 + "/json":
+			_ = json.NewEncoder(w).Encode(inspectOf(id1, "10.77.128.129")) // on meshctl-mesh
+		case "/containers/" + id3 + "/json":
+			c := inspectOf(id3, "10.78.128.131")
+			c["NetworkSettings"] = map[string]any{"Networks": map[string]any{"meshctl-mesh1": map[string]any{"IPAddress": "10.78.128.131"}}}
+			_ = json.NewEncoder(w).Encode(c)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	got, err := rt.List(context.Background())
+	if err != nil || len(got) != 1 || got[0].ID != id3 || got[0].IP != netip.MustParseAddr("10.78.128.131") {
+		t.Fatalf("List = %+v, %v", got, err)
+	}
+	if reqs := f.seen(); len(reqs) == 0 || reqs[0] != `GET /containers/json?filters=%7B%22network%22%3A%5B%22meshctl-mesh1%22%5D%7D` {
+		t.Fatalf("requests %v", reqs)
+	}
+}
+
 // A refusal, an answer too large or not JSON, and a dead socket are errors
 // that say what was asked.
 func TestListFailures(t *testing.T) {
@@ -131,7 +163,7 @@ func TestListFailures(t *testing.T) {
 			}
 		})
 	}
-	dead := New(filepath.Join(t.TempDir(), "none.sock"))
+	dead := New(filepath.Join(t.TempDir(), "none.sock"), proto.MeshNetwork)
 	if _, err := dead.List(context.Background()); err == nil || !strings.Contains(err.Error(), "none.sock") {
 		t.Fatalf("a dead socket = %v", err)
 	}

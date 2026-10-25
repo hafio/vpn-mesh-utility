@@ -12,7 +12,6 @@ import (
 	"github.com/vishvananda/netlink"
 
 	"github.com/hafio/vpn-mesh-utility/internal/agent/routes"
-	"github.com/hafio/vpn-mesh-utility/internal/proto"
 )
 
 type netlinkPolicy struct{}
@@ -82,11 +81,12 @@ func (p netlinkPolicy) Rules() ([]Rule, error) {
 	return out, nil
 }
 
-// owned reports whether r is exit mode's: protocol 201 at one of its two
-// priorities. The container network's rules carry protocol 201 too
-// (internal/agent/containers), at priorities of their own.
+// owned reports whether r is exit mode's, of any slot: protocol 201 at a
+// priority SlotOf knows. The container network's rules carry protocol 201
+// too (internal/agent/containers), at priorities of their own.
 func owned(r netlink.Rule) bool {
-	return r.Protocol == routes.Protocol && (r.Priority == PrioritySuppress || r.Priority == PriorityTunnel)
+	_, ok := SlotOf(r.Priority)
+	return r.Protocol == routes.Protocol && ok
 }
 
 func toRule(r Rule) *netlink.Rule {
@@ -116,15 +116,15 @@ func (netlinkPolicy) DelRule(r Rule) error {
 	return nil
 }
 
-func (p netlinkPolicy) Routes() ([]Route, error) {
+func (p netlinkPolicy) Routes(table int) ([]Route, error) {
 	var out []Route
 	for _, f := range p.families() {
-		filter := &netlink.Route{Table: proto.RouteTable, Protocol: routes.Protocol}
+		filter := &netlink.Route{Table: table, Protocol: routes.Protocol}
 		rs, err := dump(func() ([]netlink.Route, error) {
 			return netlink.RouteListFiltered(family(f), filter, netlink.RT_FILTER_TABLE|netlink.RT_FILTER_PROTOCOL)
 		})
 		if err != nil {
-			return nil, fmt.Errorf("list %s routes in table %d: %w", f, proto.RouteTable, err)
+			return nil, fmt.Errorf("list %s routes in table %d: %w", f, table, err)
 		}
 		for _, r := range rs {
 			if r.Dst != nil {
@@ -132,11 +132,11 @@ func (p netlinkPolicy) Routes() ([]Route, error) {
 					continue // only default routes are the agent's here
 				}
 			}
-			x := Route{Family: f}
+			x := Route{Family: f, Table: table}
 			if r.Type != syscall.RTN_BLACKHOLE {
 				l, err := netlink.LinkByIndex(r.LinkIndex)
 				if err != nil {
-					return nil, fmt.Errorf("look up the interface of a route in table %d: %w", proto.RouteTable, err)
+					return nil, fmt.Errorf("look up the interface of a route in table %d: %w", table, err)
 				}
 				x.Link = l.Attrs().Name
 			}
@@ -147,7 +147,7 @@ func (p netlinkPolicy) Routes() ([]Route, error) {
 }
 
 func toRoute(r Route) (*netlink.Route, error) {
-	nr := &netlink.Route{Table: proto.RouteTable, Protocol: routes.Protocol, Family: family(r.Family)}
+	nr := &netlink.Route{Table: r.Table, Protocol: routes.Protocol, Family: family(r.Family)}
 	if r.Family == IPv6 {
 		nr.Dst = &net.IPNet{IP: net.IPv6zero, Mask: net.CIDRMask(0, 128)}
 	} else {

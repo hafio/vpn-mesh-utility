@@ -82,7 +82,7 @@ func (r *runner) openRuntime() {
 			return
 		}
 	}
-	r.d.Runtime = names.New(sock)
+	r.d.Runtime = names.New(sock, r.enr.Slot.Network())
 	r.log.Info("reading the containers' names from the container runtime", "socket", sock)
 }
 

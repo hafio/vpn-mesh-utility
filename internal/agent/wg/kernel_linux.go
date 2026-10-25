@@ -42,6 +42,11 @@ func DetectBackend() string {
 	la.Name = "meshctl-probe"
 	probe := &netlink.Wireguard{LinkAttrs: la}
 	if err := netlink.LinkAdd(probe); err != nil {
+		// The agent of another mesh may be probing at the same moment
+		// (amendment A49): its probe link loads the module.
+		if _, err := os.Stat("/sys/module/wireguard"); err == nil {
+			return BackendKernel
+		}
 		return BackendUserspace
 	}
 	_ = netlink.LinkDel(probe) // a leftover probe link is harmless and removed on the next probe

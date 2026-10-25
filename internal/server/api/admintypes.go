@@ -78,7 +78,8 @@ type NodeAddRequest struct {
 	// role's block (spec S4).
 	IP       string `json:"ip,omitempty"`
 	Endpoint string `json:"endpoint,omitempty"`
-	// ListenPort is a server's WireGuard port; 0 means 51820.
+	// ListenPort is a server's WireGuard port; 0 means the mesh's default,
+	// 51820 plus its slot (amendment A49).
 	ListenPort int    `json:"listen_port,omitempty"`
 	Hub        string `json:"hub,omitempty"`
 	CanExit    bool   `json:"can_exit,omitempty"`

@@ -28,6 +28,9 @@ func (c *NodeConfig) Validate() error {
 	add(err)
 	_, err = validate.Enum("node.role", string(c.Node.Role), string(RoleServer), string(RoleSpoke), string(RolePhone))
 	add(err)
+	if !c.Node.Slot.Valid() {
+		add(fmt.Errorf("node.slot: %d is not a slot (0..%d)", c.Node.Slot, MaxSlot))
+	}
 
 	add(c.Interface.validate())
 
@@ -102,7 +105,7 @@ func (c *NodeConfig) Validate() error {
 	}
 	for i, s := range c.Sysctl {
 		field := fmt.Sprintf("sysctl[%d]", i)
-		_, err := validate.Enum(field+".key", s.Key, SysctlKeys()...)
+		_, err := validate.Enum(field+".key", s.Key, SysctlKeys(c.Node.Slot)...)
 		add(err)
 		_, err = validate.Enum(field+".value", s.Value, "0", "1")
 		add(err)

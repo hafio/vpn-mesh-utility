@@ -76,6 +76,22 @@ func TestApplyContainerKeys(t *testing.T) {
 	}
 }
 
+// The agent of a mesh in slot 2 (amendment A49) writes its own
+// interfaces' keys and no other slot's.
+func TestApplySlotKeys(t *testing.T) {
+	w := fakeProc(t, map[string]string{"net/ipv4/conf/wg2/forwarding": "0", "net/ipv4/conf/wg0/forwarding": "0"})
+	w.Slot = 2
+	if n, err := w.Apply([]proto.Sysctl{{Key: proto.Slot(2).SysctlWGForwarding(), Value: "1"}}); err != nil || n != 1 {
+		t.Fatalf("slot 2's key = %d, %v", n, err)
+	}
+	if _, err := w.Apply([]proto.Sysctl{{Key: proto.SysctlWGForwarding, Value: "1"}}); err == nil {
+		t.Fatal("slot 2's agent wrote slot 0's key")
+	}
+	if b, _ := os.ReadFile(filepath.Join(w.Root, "net", "ipv4", "conf", "wg0", "forwarding")); string(b) != "0\n" {
+		t.Fatalf("wg0's forwarding = %q", b)
+	}
+}
+
 // A parameter the agent may not write -- /proc/sys is read-only in a
 // container -- fails with what sets it there: the container's sysctls.
 func TestApplyReportsAReadOnlyParameter(t *testing.T) {

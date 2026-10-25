@@ -53,11 +53,11 @@ meshctl agent run [flags]
 | `--data` | `/var/lib/meshctl` | agent data directory |
 | `--endpoint-retry` | `45s` | how long a spoke waits for a first handshake on a server's endpoint before it dials the server's other-family one |
 | `--log-level` | `info` | debug, info, warn or error |
-| `--no-firewall` | `false` | leave the host firewall alone (you open udp/51820 and the Swarm ports yourself) |
+| `--no-firewall` | `false` | leave the host firewall alone (you open the WireGuard port and the Swarm ports yourself) |
 | `--runtime-socket` | `auto` | the container runtime's API socket the containers' names are read from (GET only): auto (Docker's, then Podman's), off, or a path |
 | `--socket` |  | local API socket (default: /run/meshctl/agent.sock for the standard data dir, else &lt;data&gt;/agent.sock; \\.\pipe\meshctl-agent on Windows) |
 | `--status-every` | `30s` | how often the agent reports to the server; the server's --hub-down-after must be longer on a server |
-| `--ui-listen` | `127.0.0.1:7443` | the local UI's loopback address, or off; meshctl ui prints a sign-in link |
+| `--ui-listen` | `auto` | the local UI's loopback address, auto (127.0.0.1:7443, plus the mesh's slot) or off; meshctl ui prints a sign-in link |
 | `--wg-backend` | `auto` | WireGuard backend: auto (kernel when the module is there), kernel or userspace (wireguard-go on /dev/net/tun) |
 
 ## meshctl agent uninstall
@@ -349,7 +349,7 @@ meshctl node add <name> [flags]
 | `--ip6` |  | fixed IPv6 mesh address (default: the lowest free one in the role's block, when the mesh has an IPv6 prefix) |
 | `--json` | `false` | print the server's answer as JSON |
 | `--keepalive` | `0` | spokes and phones: PersistentKeepalive seconds (default 25) |
-| `--listen-port` | `0` | servers: WireGuard UDP port (default 51820) |
+| `--listen-port` | `0` | servers: WireGuard UDP port (default 51820, plus the mesh's slot) |
 | `--mesh` |  | the mesh to work on; needed when the control plane has more than one (meshctl mesh list) |
 | `--mode` | `host` | host (WireGuard on the host) or container (in the agent's container: only its containers are on the mesh) |
 | `--mtu` | `0` | interface MTU (default: the mesh default, 1420) |
@@ -506,7 +506,7 @@ meshctl start [flags]
 | `MESHCTL_ENDPOINT6` | node |  | server nodes only: the public [IPv6]:port to join with, when auto-detection would be wrong |
 | `MESHCTL_WG_BACKEND` | node | `auto` | `meshctl agent run --wg-backend`: WireGuard backend: auto (kernel when the module is there), kernel or userspace (wireguard-go on /dev/net/tun) |
 | `MESHCTL_RUNTIME_SOCKET` | node | `auto` | `meshctl agent run --runtime-socket`: the container runtime's API socket the containers' names are read from (GET only): auto (Docker's, then Podman's), off, or a path |
-| `MESHCTL_UI_LISTEN` | node | `127.0.0.1:7443` | `meshctl agent run --ui-listen`: the local UI's loopback address, or off; meshctl ui prints a sign-in link |
+| `MESHCTL_UI_LISTEN` | node | `auto` | `meshctl agent run --ui-listen`: the local UI's loopback address, auto (127.0.0.1:7443, plus the mesh's slot) or off; meshctl ui prints a sign-in link |
 
 ## meshctl status
 

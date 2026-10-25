@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/hafio/vpn-mesh-utility/internal/agent/localapi"
@@ -24,7 +25,11 @@ func setupUI(fs *flag.FlagSet, e *env) action {
 		fmt.Fprintln(e.stdout, tok.URL)
 		left := time.Unix(tok.ExpiresAt, 0).Sub(e.now()).Round(time.Second)
 		fmt.Fprintf(e.stderr, "Open this link in a browser on this machine within %s; it works once.\n", left)
-		fmt.Fprintln(e.stderr, "From another machine: ssh -L 7443:127.0.0.1:7443 to this node, then open the link there.")
+		port := "7443"
+		if u, err := url.Parse(tok.URL); err == nil && u.Port() != "" {
+			port = u.Port() // the mesh's slot's (amendment A49), or --ui-listen's
+		}
+		fmt.Fprintf(e.stderr, "From another machine: ssh -L %s:127.0.0.1:%s to this node, then open the link there.\n", port, port)
 		return nil
 	}
 }

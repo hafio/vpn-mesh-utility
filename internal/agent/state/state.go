@@ -82,6 +82,11 @@ type Enrollment struct {
 	Role     proto.Role `json:"role"`
 	MeshIP   string     `json:"mesh_ip"`
 	JoinedAt int64      `json:"joined_at"`
+	// Mesh, MeshUUID and Slot are the node's mesh (amendment A49); the
+	// slot names what the agent makes on the host.
+	Mesh     string     `json:"mesh,omitempty"`
+	MeshUUID string     `json:"mesh_uuid,omitempty"`
+	Slot     proto.Slot `json:"slot,omitempty"`
 }
 
 // Enrollment reads state.json; ErrNotJoined when there is none.
@@ -97,7 +102,7 @@ func (d *Dir) Enrollment() (Enrollment, error) {
 	if err := json.Unmarshal(b, &e); err != nil {
 		return Enrollment{}, fmt.Errorf("read enrollment %s: %w (re-join to rewrite it)", d.file(EnrollmentFile), err)
 	}
-	if _, err := validate.ServerURL("server", e.Server); err != nil || e.NodeID <= 0 {
+	if _, err := validate.ServerURL("server", e.Server); err != nil || e.NodeID <= 0 || !e.Slot.Valid() {
 		return Enrollment{}, fmt.Errorf("enrollment %s is damaged; re-join to rewrite it", d.file(EnrollmentFile))
 	}
 	return e, nil

@@ -56,8 +56,14 @@ import (
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
 )
 
-// Interface is the mesh interface on Linux (spec S7.1).
+// Interface is the first mesh's interface (spec S7.1); the agent of a
+// mesh in another slot uses its slot's (proto.Slot.Interface).
 const Interface = "wg0"
+
+// UIAuto is the local UI's default address (`agent run --ui-listen
+// auto`): 127.0.0.1 on the mesh's slot's port (proto.Slot.UIPort), so the
+// agents of several meshes on one host each have one (amendment A49).
+const UIAuto = "auto"
 
 // Timing defaults (spec S6.3, amendment A16).
 const (
@@ -90,8 +96,8 @@ type Deps struct {
 	DataDir string
 	// Socket is the local API socket.
 	Socket string
-	// UIListen is the local UI's loopback address (localui.ParseAddr);
-	// empty runs no UI.
+	// UIListen is the local UI's loopback address (localui.ParseAddr), or
+	// UIAuto; empty runs no UI.
 	UIListen string
 	Version  string
 	// NoFirewall leaves the host firewall alone (the operator manages it).
@@ -260,6 +266,10 @@ func Run(ctx context.Context, d Deps) error {
 	if err != nil {
 		return err
 	}
+	// Everything the agent makes on the host is named after its mesh's
+	// slot (amendment A49).
+	slot, iface := enr.Slot, enr.Slot.Interface()
+	d.UIListen = uiListen(d.UIListen, slot)
 	host, backend := d.Host, d.Backend
 	if host == nil {
 		if host, backend, err = wg.Open(d.Backend, d.Log); err != nil {
@@ -276,13 +286,15 @@ func Run(ctx context.Context, d Deps) error {
 		d.Exit = exitmode.NewPolicy()
 	}
 	if d.Sysctl == nil {
-		d.Sysctl = sysctl.New()
+		w := sysctl.New()
+		w.Slot = slot
+		d.Sysctl = w
 	}
 	if d.MeshFirewall == nil && enr.Role == proto.RoleServer {
-		d.MeshFirewall = &policy.Enforcer{K: policy.NewKernel(), Log: d.Log}
+		d.MeshFirewall = &policy.Enforcer{K: policy.NewKernel(slot), Log: d.Log, Table: slot.Table()}
 	}
 	if d.Firewall == nil && !d.NoFirewall && enr.Role == proto.RoleServer {
-		d.Firewall = &firewall.Firewall{Run: execrun.Exec{}, Dir: dir.Path, Iface: Interface}
+		d.Firewall = &firewall.Firewall{Run: execrun.Exec{}, Dir: dir.Path, Iface: iface, Slot: slot}
 	}
 	if d.DNS == nil {
 		d.DNS = dns.New(dns.NewRegistrar(), d.Log)
@@ -304,7 +316,7 @@ func Run(ctx context.Context, d Deps) error {
 		syncKick: make(chan struct{}, 1), statusKick: make(chan struct{}, 1), proxyKick: make(chan struct{}, 1),
 		meshKick: make(chan struct{}, 1), namesKick: make(chan struct{}, 1), scheduleKick: make(chan struct{}, 1),
 		engine: apply.New(apply.Deps{Host: host, Routes: d.Routes, Exit: d.Exit, Sysctl: d.Sysctl, MeshFirewall: d.MeshFirewall,
-			Firewall: d.Firewall, DNS: d.DNS, Containers: d.Containers, Iface: Interface, Key: wg.Key(keys.WG), Log: d.Log, Now: d.Now,
+			Firewall: d.Firewall, DNS: d.DNS, Containers: d.Containers, Slot: slot, Iface: iface, Key: wg.Key(keys.WG), Log: d.Log, Now: d.Now,
 			EndpointRetry: d.EndpointRetry}),
 	}
 	r.engine.SetDNSOff(local.DNSOff)
@@ -378,6 +390,15 @@ func Run(ctx context.Context, d Deps) error {
 	<-ctx.Done()
 	loops.Wait()
 	return nil
+}
+
+// uiListen is where the local UI listens for listen: UIAuto is 127.0.0.1 on
+// the slot's port.
+func uiListen(listen string, s proto.Slot) string {
+	if listen == UIAuto {
+		return fmt.Sprintf("127.0.0.1:%d", s.UIPort())
+	}
+	return listen
 }
 
 // startUI starts the local UI (amendment A7) and returns what mints its

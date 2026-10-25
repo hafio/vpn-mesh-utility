@@ -357,6 +357,11 @@ func TestEnforcer(t *testing.T) {
 			t.Errorf("%s: Sync = %v, want %q", name, err, c.want)
 		}
 	}
+	// Another slot's table is named as such (amendment A49).
+	k.ReadErr = errors.New("permission denied")
+	if _, err := (&policy.Enforcer{K: k, Table: "meshctl2"}).Sync(a); err == nil || !strings.Contains(err.Error(), "read the table meshctl2") {
+		t.Errorf("slot 2's Sync = %v", err)
+	}
 	if !strings.Contains(policy.ErrNoKernel.Error(), "Linux nftables") {
 		t.Error("ErrNoKernel does not say what is missing")
 	}

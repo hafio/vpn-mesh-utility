@@ -14,10 +14,10 @@ type otherPolicy struct{}
 // NewPolicy returns the platform's policy routing.
 func NewPolicy() Policy { return otherPolicy{} }
 
-func (otherPolicy) Rules() ([]Rule, error)   { return nil, nil }
-func (otherPolicy) AddRule(Rule) error       { return errPlatform }
-func (otherPolicy) DelRule(Rule) error       { return errPlatform }
-func (otherPolicy) Routes() ([]Route, error) { return nil, nil }
-func (otherPolicy) AddRoute(Route) error     { return errPlatform }
-func (otherPolicy) DelRoute(Route) error     { return errPlatform }
-func (otherPolicy) IPv6() V6Support          { return V6None }
+func (otherPolicy) Rules() ([]Rule, error)      { return nil, nil }
+func (otherPolicy) AddRule(Rule) error          { return errPlatform }
+func (otherPolicy) DelRule(Rule) error          { return errPlatform }
+func (otherPolicy) Routes(int) ([]Route, error) { return nil, nil }
+func (otherPolicy) AddRoute(Route) error        { return errPlatform }
+func (otherPolicy) DelRoute(Route) error        { return errPlatform }
+func (otherPolicy) IPv6() V6Support             { return V6None }

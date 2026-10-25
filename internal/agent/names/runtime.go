@@ -16,8 +16,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-
-	"github.com/hafio/vpn-mesh-utility/internal/proto"
 )
 
 // Sockets are where the agent looks for a runtime, in order: Docker's,
@@ -51,12 +49,14 @@ type Source interface {
 // Runtime is a container runtime's Docker-compatible API on a unix socket.
 type Runtime struct {
 	socket  string
+	network string
 	calls   *http.Client
 	streams *http.Client
 }
 
-// New returns the runtime answering on socket.
-func New(socket string) *Runtime {
+// New returns the runtime answering on socket, whose containers on network
+// (the agent's mesh's, proto.Slot.Network) are the mesh's.
+func New(socket, network string) *Runtime {
 	tr := &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			var d net.Dialer
@@ -65,7 +65,7 @@ func New(socket string) *Runtime {
 		MaxIdleConns:    2,
 		IdleConnTimeout: time.Minute,
 	}
-	return &Runtime{socket: socket, calls: &http.Client{Transport: tr, Timeout: callTimeout}, streams: &http.Client{Transport: tr}}
+	return &Runtime{socket: socket, network: network, calls: &http.Client{Transport: tr, Timeout: callTimeout}, streams: &http.Client{Transport: tr}}
 }
 
 // Detect returns the first of paths that is a socket, "" when none is.
@@ -167,7 +167,7 @@ type inspected struct {
 // List returns the running containers on the mesh network.
 func (r *Runtime) List(ctx context.Context) ([]Container, error) {
 	var ls []listed
-	if err := r.getJSON(ctx, "/containers/json", meshFilter("network", proto.MeshNetwork), maxList, &ls); err != nil {
+	if err := r.getJSON(ctx, "/containers/json", meshFilter("network", r.network), maxList, &ls); err != nil {
 		return nil, err
 	}
 	if len(ls) > maxContainers {
@@ -187,7 +187,7 @@ func (r *Runtime) List(ctx context.Context) ([]Container, error) {
 		if err != nil {
 			return nil, err
 		}
-		n, ok := in.NetworkSettings.Networks[proto.MeshNetwork]
+		n, ok := in.NetworkSettings.Networks[r.network]
 		ip, _ := netip.ParseAddr(n.IPAddress)
 		ip6, _ := netip.ParseAddr(n.GlobalIPv6Address) // M8; "" without IPv6
 		if !ok || (!ip.IsValid() && !ip6.IsValid()) || in.ID != l.ID {

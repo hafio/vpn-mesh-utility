@@ -43,7 +43,9 @@ only when given a new token. meshctl writes no container deployment: [docs/conta
 has compose, Podman and Kubernetes samples. One control plane holds several meshes (M9, in
 progress): `meshctl mesh add|list|show|set|rm`, each with its own network, DNS zone, IPv6 prefix,
 firewall and history, none sharing an address or a domain with another, `--mesh` on every
-admin command, and each mesh's web UI pages under `/m/<mesh>/` with a Meshes page. The live tests and the v1.0.0 release follow.
+admin command, each mesh's web UI pages under `/m/<mesh>/` with a Meshes page, admins and
+users granted meshes, and a host in two meshes running one agent per mesh, each on its slot's
+interface, port, tables and firewall names. The live tests and the v1.0.0 release follow.
 
 ## Quick start
 

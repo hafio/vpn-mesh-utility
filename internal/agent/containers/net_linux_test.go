@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/hafio/vpn-mesh-utility/internal/agent/routes"
+	"github.com/hafio/vpn-mesh-utility/internal/proto"
 )
 
 func TestKernelShapes(t *testing.T) {
@@ -21,7 +22,7 @@ func TestKernelShapes(t *testing.T) {
 	if r := toRule(Rule{Priority: 1005, Src: netip.MustParsePrefix("10.77.128.0/24"), Table: MainTable}); r.Src.String() != "10.77.128.0/24" || r.Dst != nil {
 		t.Fatalf("rule %+v", r)
 	}
-	if h := blackhole(false); h.Type != syscall.RTN_BLACKHOLE || h.Table != BlackholeTable || h.Dst.String() != "0.0.0.0/0" ||
+	if h := blackhole(BlackholeTable, false); h.Type != syscall.RTN_BLACKHOLE || h.Table != BlackholeTable || h.Dst.String() != "0.0.0.0/0" ||
 		int(h.Protocol) != routes.Protocol || h.Family != syscall.AF_INET {
 		t.Fatalf("blackhole %+v", h)
 	}
@@ -34,7 +35,8 @@ func TestKernelShapes(t *testing.T) {
 	if r := toRule(Rule{Priority: 5204, IPv6: true, Iif: "meshctl0", Unreachable: true}); r.Type != syscall.RTN_UNREACHABLE || r.Table != 0 {
 		t.Fatalf("unreachable rule %+v", r)
 	}
-	if h := blackhole(true); h.Dst.String() != "::/0" || h.Family != syscall.AF_INET6 || h.Type != syscall.RTN_BLACKHOLE {
+	if h := blackhole(proto.Slot(2).ContainersTable(), true); h.Dst.String() != "::/0" || h.Family != syscall.AF_INET6 ||
+		h.Type != syscall.RTN_BLACKHOLE || h.Table != 51825 {
 		t.Fatalf("IPv6 blackhole %+v", h)
 	}
 	if p := proxy(7, netip.MustParseAddr("fd10:77::2:1")); p.LinkIndex != 7 || p.Family != syscall.AF_INET6 ||
@@ -59,7 +61,7 @@ func TestKernelNetWithoutPrivilege(t *testing.T) {
 		t.Skipf("no netlink here: %v", err)
 	}
 	for _, v6 := range []bool{false, true} {
-		if _, err := n.Blackhole(v6); err != nil {
+		if _, err := n.Blackhole(BlackholeTable, v6); err != nil {
 			t.Fatalf("Blackhole(%v) = %v", v6, err)
 		}
 	}
@@ -106,10 +108,10 @@ func TestKernelNetWithoutPrivilege(t *testing.T) {
 		"add a rule":                n.AddRule(r),
 		"remove a rule":             n.DelRule(r),
 		"add an IPv6 rule":          n.AddRule(Rule{Priority: PriorityGuard + 4, IPv6: true, Iif: "lo", Unreachable: true}),
-		"add the blackhole":         n.SetBlackhole(false, true),
-		"remove the blackhole":      n.SetBlackhole(false, false),
-		"add the IPv6 blackhole":    n.SetBlackhole(true, true),
-		"remove the IPv6 blackhole": n.SetBlackhole(true, false),
+		"add the blackhole":         n.SetBlackhole(BlackholeTable, false, true),
+		"remove the blackhole":      n.SetBlackhole(BlackholeTable, false, false),
+		"add the IPv6 blackhole":    n.SetBlackhole(BlackholeTable, true, true),
+		"remove the IPv6 blackhole": n.SetBlackhole(BlackholeTable, true, false),
 		"add an address":            n.AddAddr("lo", netip.MustParsePrefix("127.0.0.9/8")),
 		"add an IPv6 address":       n.AddAddr("lo", netip.MustParsePrefix("fd10:77::9/128")),
 		"add a proxy entry":         n.AddProxy("lo", netip.MustParseAddr("fd10:77::1")),

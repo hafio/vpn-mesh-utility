@@ -60,6 +60,8 @@ import (
 
 // Input is the desired state of the mesh.
 type Input struct {
+	// Slot is the mesh's slot (amendment A49), which every config carries.
+	Slot     proto.Slot
 	MeshCIDR netip.Prefix
 	// MeshCIDR6 is the mesh's IPv6 prefix (M8); invalid without one.
 	MeshCIDR6 netip.Prefix
@@ -477,7 +479,7 @@ func (p *plan) relays(id int64, f fam) bool {
 func (p *plan) server(n Node) proto.NodeConfig {
 	port := n.ListenPort
 	c := proto.NodeConfig{
-		Node:      proto.Self{ID: n.ID, Name: n.Name, Role: n.Role},
+		Node:      proto.Self{ID: n.ID, Name: n.Name, Role: n.Role, Slot: p.in.Slot},
 		Interface: proto.Interface{Address: n.address(), Address6: n.address6(), ListenPort: &port, MTU: n.MTU},
 		Peers:     []proto.Peer{},
 	}
@@ -535,7 +537,7 @@ func (p *plan) server(n Node) proto.NodeConfig {
 	}
 	// The containers' bridge forwards to and from wg0 like a relay.
 	if n.Containers.IsValid() {
-		fw.Bridge, fw.Relay = proto.ContainerBridge, true
+		fw.Bridge, fw.Relay = p.in.Slot.Bridge(), true
 	}
 	// The policy decides what crosses the mesh zone: the zone lets the
 	// whole mesh through to it, and the policy's table drops what it does
@@ -629,7 +631,7 @@ func (p *plan) sysctl(n Node, forward, forward6, exitMode bool) []proto.Sysctl {
 		on[proto.SysctlSrcValidMark] = true
 	}
 	var out []proto.Sysctl
-	for _, k := range proto.SysctlKeys() {
+	for _, k := range proto.SysctlKeys(p.in.Slot) {
 		if on[k] {
 			out = append(out, proto.Sysctl{Key: k, Value: "1"})
 		}
@@ -687,7 +689,7 @@ func (p *plan) dns(n Node, exitOn bool) *proto.DNS {
 
 func (p *plan) spoke(n Node) proto.NodeConfig {
 	c := proto.NodeConfig{
-		Node:      proto.Self{ID: n.ID, Name: n.Name, Role: n.Role},
+		Node:      proto.Self{ID: n.ID, Name: n.Name, Role: n.Role, Slot: p.in.Slot},
 		Interface: proto.Interface{Address: n.address(), Address6: n.address6(), MTU: n.MTU, FwMark: proto.FwMark},
 		Peers:     []proto.Peer{},
 	}
@@ -753,7 +755,7 @@ func (p *plan) spoke(n Node) proto.NodeConfig {
 // this at QR time by adding 0.0.0.0/0 to the chosen exit's peer.
 func (p *plan) phone(n Node) proto.NodeConfig {
 	c := proto.NodeConfig{
-		Node:      proto.Self{ID: n.ID, Name: n.Name, Role: n.Role},
+		Node:      proto.Self{ID: n.ID, Name: n.Name, Role: n.Role, Slot: p.in.Slot},
 		Interface: proto.Interface{Address: n.address(), Address6: n.address6(), MTU: n.MTU},
 		Peers:     []proto.Peer{},
 	}

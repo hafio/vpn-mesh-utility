@@ -279,7 +279,7 @@ func containerNetwork(in planner.Input, n store.Node) *ContainerNetwork {
 		return nil
 	}
 	out := &ContainerNetwork{
-		Name: proto.MeshNetwork, BridgeName: proto.ContainerBridge, Mode: k.Mode, Subnet: k.Subnet, Network: k.Network,
+		Name: in.Slot.Network(), BridgeName: in.Slot.Bridge(), Mode: k.Mode, Subnet: k.Subnet, Network: k.Network,
 		Range: k.Range, Bridge: k.Bridge, Gateway: k.Gateway, Zone: in.ZoneName(), Resolvers: planner.ServerIPs(in),
 		Subnet6: k.Subnet6, Network6: k.Network6, Range6: k.Range6, Bridge6: k.Bridge6, Gateway6: k.Gateway6,
 	}
@@ -389,6 +389,9 @@ func (s *Nodes) Add(ctx context.Context, by Actor, req NodeAddRequest) (NodeChan
 		in, nodes, err := LoadInput(tx)
 		if err != nil {
 			return err
+		}
+		if req.ListenPort == 0 {
+			n.ListenPort = in.Slot.ListenPort() // amendment A49: each mesh its own port
 		}
 		used := usedAddrs(nodes, 0)
 		block := planner.RangeFor(proto.Role(n.Role), req.AlwaysOn)

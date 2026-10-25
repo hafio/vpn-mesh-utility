@@ -15,7 +15,7 @@ import (
 )
 
 func TestKernelShapes(t *testing.T) {
-	rules, rts := Desired("wg0", true, true, false)
+	rules, rts := Desired(0, "wg0", true, true, false)
 	tunnel := toRule(rules[1])
 	if tunnel.Protocol != routes.Protocol || !tunnel.Invert || tunnel.Mark != proto.FwMark || tunnel.Table != proto.RouteTable ||
 		tunnel.Priority != PriorityTunnel || tunnel.SuppressPrefixlen != -1 {
@@ -36,10 +36,19 @@ func TestKernelShapes(t *testing.T) {
 	if _, err := toRoute(Route{Family: IPv4, Link: "mce-none0"}); err == nil || !strings.Contains(err.Error(), "mce-none0") {
 		t.Fatalf("a route on a missing interface = %v", err)
 	}
+	// Another slot's (amendment A49): its priorities and table, the same mark.
+	rules, rts = Desired(2, "wg2", true, false, false)
+	if tunnel := toRule(rules[1]); tunnel.Priority != PriorityTunnel-20 || tunnel.Table != proto.RouteTable+4 || tunnel.Mark != proto.FwMark {
+		t.Fatalf("slot 2's tunnel rule %+v", tunnel)
+	}
+	if r, err := toRoute(Route{Family: IPv6, Table: rts[0].Table}); err != nil || r.Table != proto.RouteTable+4 {
+		t.Fatalf("slot 2's route %+v, %v", r, err)
+	}
 }
 
-// Exit mode lists only its own rules: the container network's carry
-// protocol 201 too, at other priorities, and must survive exit off.
+// Exit mode lists every slot's exit rules and no other: the container
+// network's carry protocol 201 too, at other priorities, and must survive
+// exit off.
 func TestOwnsOnlyItsPriorities(t *testing.T) {
 	for _, c := range []struct {
 		priority, protocol int
@@ -47,6 +56,11 @@ func TestOwnsOnlyItsPriorities(t *testing.T) {
 	}{
 		{PrioritySuppress, routes.Protocol, true},
 		{PriorityTunnel, routes.Protocol, true},
+		{PriorityTunnel - 10, routes.Protocol, true},
+		{PrioritySuppress - 630, routes.Protocol, true},
+		{PriorityTunnel - 2, routes.Protocol, false},
+		{PriorityTunnel - 640, routes.Protocol, false},
+		{32766, routes.Protocol, false},
 		{1006, routes.Protocol, false},
 		{5203, routes.Protocol, false},
 		{PriorityTunnel, 4, false},
@@ -70,10 +84,10 @@ func TestKernelPolicyWithoutPrivilege(t *testing.T) {
 	if _, err := p.Rules(); err != nil {
 		t.Skipf("no netlink here: %v", err)
 	}
-	if _, err := p.Routes(); err != nil {
+	if _, err := p.Routes(proto.RouteTable); err != nil {
 		t.Fatalf("Routes = %v", err)
 	}
-	want, routesWanted := Desired("lo", true, p.IPv6() == V6Policy, false)
+	want, routesWanted := Desired(0, "lo", true, p.IPv6() == V6Policy, false)
 	for _, err := range []error{p.AddRule(want[1]), p.DelRule(want[1]), p.AddRoute(routesWanted[0]), p.DelRoute(routesWanted[0])} {
 		if err == nil || (!strings.Contains(err.Error(), "table 51820") && !strings.Contains(err.Error(), "lookup 51820")) {
 			t.Errorf("an unprivileged change = %v", err)

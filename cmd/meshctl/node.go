@@ -76,7 +76,7 @@ func setupNodeAdd(fs *flag.FlagSet, e *env) action {
 	role := fs.String("role", "", "server, spoke or phone (required)")
 	ip := fs.String("ip", "", "fixed mesh IP (default: the lowest free one in the role's block)")
 	endpoint := fs.String("endpoint", "", "servers: public IPv4:port (default: what the agent detects at join)")
-	listenPort := fs.Int("listen-port", 0, "servers: WireGuard UDP port (default 51820)")
+	listenPort := fs.Int("listen-port", 0, "servers: WireGuard UDP port (default 51820, plus the mesh's slot)")
 	hub := fs.String("hub", "", "spokes and phones: the server that relays for it (default: the default hub)")
 	canExit := fs.Bool("can-exit", false, "servers: may be chosen as an internet exit")
 	alwaysOn := fs.Bool("always-on", false, "spokes: allocate from the always-on block (NAS)")

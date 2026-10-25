@@ -111,7 +111,11 @@ type Deps struct {
 	// Containers is the host of the node's container network (amendment
 	// A37); nil refuses a config that has one, as degraded.
 	Containers containers.Net
-	// Iface is the mesh interface ("wg0").
+	// Slot is the agent's mesh's slot (amendment A49): a config for
+	// another is refused, and the host's rules, tables and names are the
+	// slot's.
+	Slot proto.Slot
+	// Iface is the mesh interface, the slot's ("wg0" for slot 0).
 	Iface string
 	// Key is the node's WireGuard private key.
 	Key wg.Key
@@ -211,6 +215,10 @@ func (e *Engine) Apply(ctx context.Context, cfg proto.NodeConfig) (Result, error
 	if err := cfg.Validate(); err != nil {
 		return fail(StepValidate, err)
 	}
+	if cfg.Node.Slot != e.d.Slot {
+		return fail(StepValidate, fmt.Errorf("the config is for a mesh in slot %d, but this agent joined one in slot %d; "+
+			"join the node again (`meshctl agent join`)", cfg.Node.Slot, e.d.Slot))
+	}
 	hash, err := cfg.Hash()
 	if err != nil {
 		return fail(StepValidate, err)
@@ -308,7 +316,7 @@ func (e *Engine) Apply(ctx context.Context, cfg proto.NodeConfig) (Result, error
 	})
 	switch router, ok := e.d.Host.(wg.ExitRouter); {
 	case e.d.Exit != nil:
-		n, err := exitmode.Sync(e.d.Exit, e.d.Iface, exitOn, via6)
+		n, err := exitmode.Sync(e.d.Exit, e.d.Slot, e.d.Iface, exitOn, via6)
 		res.Changes += n
 		switch {
 		case errors.Is(err, exitmode.ErrIPv6Unguarded):
@@ -316,6 +324,13 @@ func (e *Engine) Apply(ctx context.Context, cfg proto.NodeConfig) (Result, error
 			res.Degraded = append(res.Degraded, StepExit)
 			res.Errors = append(res.Errors, err.Error())
 			e.d.Log.Warn("exit mode carries IPv4 only", "err", err)
+		case errors.Is(err, exitmode.ErrExitTaken):
+			// Another mesh's agent carries the host's internet (amendment
+			// A49): the tunnel is up, this exit is not.
+			exitOn = false
+			res.Degraded = append(res.Degraded, StepExit)
+			res.Errors = append(res.Errors, err.Error())
+			e.d.Log.Warn("exit mode is off", "err", err)
 		case err != nil:
 			return fail(StepExit, err)
 		}
@@ -382,7 +397,7 @@ func (e *Engine) Apply(ctx context.Context, cfg proto.NodeConfig) (Result, error
 	var also netip.Addr
 	switch {
 	case e.d.Containers != nil:
-		n, err := containers.Sync(e.d.Containers, e.d.Sysctl, cfg.Containers, e.d.Iface, proxied(cfg, addrs, e.names6))
+		n, err := containers.Sync(e.d.Containers, e.d.Sysctl, cfg.Containers, e.d.Slot, e.d.Iface, proxied(cfg, addrs, e.names6))
 		res.Changes += n
 		if err != nil {
 			res.Degraded = append(res.Degraded, StepContainers)

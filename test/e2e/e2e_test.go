@@ -294,7 +294,11 @@ func (l *lab) startServer() {
 // startAgent runs a node's agent: the NAS on the userspace backend,
 // everyone else on the kernel's; a fake container runtime where the test
 // gave one.
-func (l *lab) startAgent(space string) {
+func (l *lab) startAgent(space string) { l.startAgentAt(space, space) }
+
+// startAgentAt runs, in space, the agent of the data dir data -- another
+// mesh's on a host that is in two has a data dir of its own.
+func (l *lab) startAgentAt(space, data string) {
 	backend := "kernel"
 	if space == nas.ns {
 		backend = "userspace"
@@ -303,9 +307,9 @@ func (l *lab) startAgent(space string) {
 	if s, ok := l.runtimes[space]; ok {
 		sock = s
 	}
-	args := []string{"agent", "run", "--data", l.data(space), "--socket", filepath.Join(l.data(space), "agent.sock"), "--no-firewall",
+	args := []string{"agent", "run", "--data", l.data(data), "--socket", filepath.Join(l.data(data), "agent.sock"), "--no-firewall",
 		"--wg-backend", backend, "--log-level", "debug", "--runtime-socket", sock}
-	l.start("agent-"+space, space, []string{"SSL_CERT_FILE=" + l.ca}, l.bin, append(args, l.agentArgs...)...)
+	l.start("agent-"+data, space, []string{"SSL_CERT_FILE=" + l.ca}, l.bin, append(args, l.agentArgs...)...)
 }
 
 // uapiGet asks a userspace device for its state over WireGuard's UAPI

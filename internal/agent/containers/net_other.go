@@ -21,8 +21,8 @@ func (otherNet) Rules() ([]Rule, error)                           { return nil, 
 func (otherNet) AddRule(Rule) error                               { return errPlatform }
 func (otherNet) DelRule(Rule) error                               { return errPlatform }
 func (otherNet) IPv6Rules() (bool, error)                         { return false, errPlatform }
-func (otherNet) Blackhole(bool) (bool, error)                     { return false, nil }
-func (otherNet) SetBlackhole(bool, bool) error                    { return errPlatform }
+func (otherNet) Blackhole(int, bool) (bool, error)                { return false, nil }
+func (otherNet) SetBlackhole(int, bool, bool) error               { return errPlatform }
 func (otherNet) LinkHolding(netip.Prefix, string) (string, error) { return "", errPlatform }
 func (otherNet) Addrs(string) ([]netip.Prefix, error)             { return nil, errPlatform }
 func (otherNet) AddAddr(string, netip.Prefix) error               { return errPlatform }

@@ -410,6 +410,51 @@ func TestForwardingPolicies(t *testing.T) {
 	}
 }
 
+// The agent of a mesh in slot 2 (amendment A49) owns zone mesh2 on wg2 and
+// the policies meshctl2-relay and meshctl2-exit: its mesh-zone rules land
+// in mesh2, its port in the public zone, and slot 0's zone and policies are
+// never touched.
+func TestAnotherSlotsZoneAndPolicies(t *testing.T) {
+	r := freshHost()
+	appliedHost(r) // slot 0's zone, interface and rules
+	r.answers["firewall-cmd --permanent --get-policies"] = "allow-host-ipv6 meshctl-exit meshctl-relay\n"
+	r.answers["firewall-cmd --zone=mesh2 --list-interfaces"] = "wg2\n"
+	f := &Firewall{Run: r, Dir: t.TempDir(), Iface: "wg2", Slot: 2}
+	cfg := testfix.ServerConfig()
+	cfg.Firewall.Relay = true
+	if _, err := f.Apply(context.Background(), cfg.Firewall); err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	for _, m := range r.mutations() {
+		lines = append(lines, strings.Join(m[1:], " "))
+		for _, a := range m {
+			if a == "--zone=mesh" || strings.Contains(a, "meshctl-relay") || strings.Contains(a, "meshctl-exit") {
+				t.Errorf("slot 2 touched slot 0's: %q", m)
+			}
+		}
+	}
+	got := strings.Join(lines, "\n")
+	for _, want := range []string{
+		"--permanent --new-zone=mesh2",
+		"--permanent --zone=mesh2 --change-interface=wg2",
+		"--permanent --zone=mesh2 --add-rich-rule=" + serverRich,
+		"--permanent --zone=public --add-port=51820/udp",
+		"--permanent --new-policy=meshctl2-relay",
+		"--permanent --policy=meshctl2-relay --add-ingress-zone=mesh2",
+		"--permanent --policy=meshctl2-relay --add-egress-zone=mesh2",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("no %q among:\n%s", want, got)
+		}
+	}
+	bridged := testfix.ServerConfig().Firewall
+	bridged.Bridge = proto.ContainerBridge // slot 0's, not slot 2's
+	if _, err := f.Apply(context.Background(), bridged); err == nil || !strings.Contains(err.Error(), "meshctl2") {
+		t.Errorf("slot 0's bridge for slot 2 = %v", err)
+	}
+}
+
 // An exit with IPv6 (M8) masquerades the mesh's IPv6 prefix by a rich rule
 // in its policy: firewalld's policy masquerade is IPv4 only.
 func TestExitPolicyMasqueradesIPv6(t *testing.T) {

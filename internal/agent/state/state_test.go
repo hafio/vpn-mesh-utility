@@ -97,11 +97,21 @@ func TestEnrollmentRoundTrip(t *testing.T) {
 	if err != nil || got != e {
 		t.Fatalf("Enrollment = %+v, %v", got, err)
 	}
-	if err := os.WriteFile(filepath.Join(d.Path, EnrollmentFile), []byte(`{"server":"ftp://x","node_id":4}`), 0o600); err != nil {
+	// The node's mesh and its slot (amendment A49).
+	e.Mesh, e.MeshUUID, e.Slot = "lab", "8c2b6f3e-0d1a-4c55-9e7a-1f2d3c4b5a69", 3
+	if err := d.SaveEnrollment(e); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.Enrollment(); err == nil || !strings.Contains(err.Error(), "re-join") {
-		t.Fatalf("damaged enrollment = %v", err)
+	if got, err := d.Enrollment(); err != nil || got != e {
+		t.Fatalf("Enrollment in slot 3 = %+v, %v", got, err)
+	}
+	for _, bad := range []string{`{"server":"ftp://x","node_id":4}`, `{"server":"https://mesh.example.com","node_id":4,"slot":64}`} {
+		if err := os.WriteFile(filepath.Join(d.Path, EnrollmentFile), []byte(bad), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := d.Enrollment(); err == nil || !strings.Contains(err.Error(), "re-join") {
+			t.Fatalf("damaged enrollment %s = %v", bad, err)
+		}
 	}
 }
 

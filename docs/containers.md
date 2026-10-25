@@ -48,7 +48,7 @@ node's page in the web UI list them under "containers on the mesh". The samples 
 | what the runtime hands out | ip range | `10.77.128.128/25` (`fd10:77::8000:8000/113`) |
 | the runtime's side of the bridge | gateway | `10.77.128.1` (`fd10:77::8000:1`) |
 | the agent, in container mode | agent | `10.77.128.2` (`fd10:77::8000:2`) |
-| the network and the bridge | network | `meshctl-mesh`, `meshctl0` |
+| the network and the bridge | network | `meshctl-mesh`, `meshctl0` (a mesh in slot s: `meshctl-mesh<s>`, `meshctl<s>`) |
 
 ## The control plane
 

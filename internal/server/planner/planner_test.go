@@ -444,6 +444,37 @@ func TestContainersTalkToEveryNode(t *testing.T) {
 // resolver forwards for it, and the container network itself; a
 // container-mode node has no firewall section, no exit and no custom rules,
 // a host-mode server's firewall forwards to its bridge.
+// A mesh in slot 3 (amendment A49): every config carries the slot, and a
+// host-mode server's container bridge is the slot's; nothing else changes.
+func TestSlotInEveryConfig(t *testing.T) {
+	in := topology("containers")
+	base := mustCompute(t, in)
+	in.Slot = 3
+	out := mustCompute(t, in)
+	hash := func(c proto.NodeConfig) string {
+		h, err := c.Hash()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+	for id, c := range out {
+		if c.Node.Slot != 3 {
+			t.Errorf("%s's config has slot %d", c.Node.Name, c.Node.Slot)
+		}
+		want := base[id]
+		want.Node.Slot = 3
+		if want.Firewall != nil && want.Firewall.Bridge != "" {
+			fw := *want.Firewall
+			fw.Bridge = "meshctl3"
+			want.Firewall = &fw
+		}
+		if hash(c) != hash(want) {
+			t.Errorf("%s's slot 3 config differs from slot 0's in more than the slot and the bridge", c.Node.Name)
+		}
+	}
+}
+
 func TestContainerNetworks(t *testing.T) {
 	in := topology("containers")
 	out := mustCompute(t, in)

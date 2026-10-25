@@ -329,8 +329,9 @@ A7, A32). Loopback TCP is open to every local user and, through DNS rebinding, t
 - **The session** is a cookie of 32 random bytes (sha256 kept), `HttpOnly`, `SameSite=Strict`,
   path `/`, not `Secure` (the UI is plain HTTP on loopback); an idle hour or 12 hours end it, at
   most 8 live in memory, and an agent restart ends them all.
-- **Every request** must name the UI's own host (`127.0.0.1:7443` or `localhost:7443`), or it gets
-  421 and reaches nothing -- a rebinding page cannot even spend a link.
+- **Every request** must name the UI's own host (`127.0.0.1:7443` or `localhost:7443`; the
+  agent of a mesh in slot s listens on 7443+s), or it gets 421 and reaches nothing -- a rebinding
+  page cannot even spend a link.
 - **Every change** is a POST whose Origin is the UI's and whose form carries the session's CSRF
   token (compared in constant time), at most 16 KiB; values are validated before they leave the
   page, and exit, keepalive and MTU go to the server through the same signed relay as `meshctl
@@ -389,3 +390,15 @@ The agent marks `wg0` with the link alias `meshctl` and refuses to configure an 
 it, so a host's existing wg-quick setup is never taken over. Its routes carry protocol 201; it
 lists and removes only those (amendment A18). The exit-mode policy rules and the routes in table
 51820 carry protocol 201 too (amendment A27), so a host's own policy routing is never touched.
+
+## Several meshes on one host
+
+The agents of two meshes on one host (amendment A49) name everything after their mesh's slot --
+interface, tables, rule priorities, firewalld zone and policies, nftables table, bridge, ports --
+and each lists, changes and removes only its own, so neither can undo the other's isolation. The
+host is a member of both and reachable from both; its tunnels carry nothing from one mesh into the
+other: a packet a node of mesh A routes through the host towards mesh B leaves the host on B's
+tunnel with A's source address, which no peer of B accepts (WireGuard's allowed IPs; e2e
+`TestTwoMeshes`). The overlap checks keep two meshes' addresses and DNS domains apart, so neither
+mesh's routes nor its resolver registration capture the other's. One mesh at a time carries the
+host's internet (exit mode).

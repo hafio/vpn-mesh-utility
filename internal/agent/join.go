@@ -113,6 +113,11 @@ func Join(ctx context.Context, o JoinOptions) (proto.JoinResponse, error) {
 		return proto.JoinResponse{}, fmt.Errorf("join %s: %w", server, err)
 	}
 
+	slot := proto.Slot(resp.Slot)
+	if !slot.Valid() {
+		return resp, fmt.Errorf("join %s: the control plane answered mesh slot %d, outside 0..%d; upgrade this agent", server, resp.Slot, proto.MaxSlot)
+	}
+
 	prev, err := dir.Enrollment()
 	if err == nil && (prev.Server != server || prev.NodeID != resp.NodeID) {
 		// Another mesh or another node: the cached config is not ours.
@@ -121,10 +126,13 @@ func Join(ctx context.Context, o JoinOptions) (proto.JoinResponse, error) {
 		}
 	}
 	if err := dir.SaveEnrollment(state.Enrollment{Server: server, NodeID: resp.NodeID, Name: resp.Name, Role: resp.Role,
-		MeshIP: resp.MeshIP, JoinedAt: o.Now().Unix()}); err != nil {
+		MeshIP: resp.MeshIP, JoinedAt: o.Now().Unix(), Mesh: resp.Mesh, MeshUUID: resp.MeshUUID, Slot: slot}); err != nil {
 		return resp, err
 	}
 	fmt.Fprintf(o.Out, "joined %s as %s (%s, mesh %s, node id %d)\n", server, resp.Name, resp.Role, meshAddresses(resp), resp.NodeID)
+	if resp.Mesh != "" {
+		fmt.Fprintf(o.Out, "mesh %s, slot %d: interface %s, local UI port %d\n", resp.Mesh, slot, slot.Interface(), slot.UIPort())
+	}
 
 	if o.NoService || o.Service == nil {
 		fmt.Fprintf(o.Out, "start the agent with: meshctl agent run --data %s\n", o.DataDir)

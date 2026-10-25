@@ -25,6 +25,9 @@ type Writer struct {
 	// NoProc is a host without /proc/sys (Windows), where exit mode routes
 	// by table, so src_valid_mark has nothing to do, and no node relays.
 	NoProc bool
+	// Slot is the agent's mesh's slot, whose interfaces' keys are allowed
+	// (amendment A49).
+	Slot proto.Slot
 }
 
 // Apply sets each parameter whose current value differs and returns how many
@@ -33,7 +36,7 @@ type Writer struct {
 func (w *Writer) Apply(params []proto.Sysctl) (int, error) {
 	n := 0
 	for _, p := range params {
-		if _, err := validate.Enum("sysctl key", p.Key, proto.SysctlKeys()...); err != nil {
+		if _, err := validate.Enum("sysctl key", p.Key, proto.SysctlKeys(w.Slot)...); err != nil {
 			return n, err
 		}
 		if _, err := validate.Enum("sysctl value", p.Value, "0", "1"); err != nil {

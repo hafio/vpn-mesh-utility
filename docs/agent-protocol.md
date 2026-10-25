@@ -124,7 +124,9 @@ endpoint. Spokes ignore all of these.
 
 The answer: `{"node_id", "name", "role", "mesh_ip", "config_version", "server_time"}`,
 `mesh_ip6` when the node has one, and the mesh it joined: `mesh` (its name), `mesh_uuid` and
-`slot` (amendment A49; 0 is left out).
+`slot` (amendment A49; 0 is left out). The agent records them in `state.json` (a slot outside
+0..63 is refused, nothing recorded) and names everything it makes on the host after the slot
+(below).
 
 ## Config and events
 
@@ -296,6 +298,17 @@ planner then relays each pair of spokes that used the hub through the other spok
 default hub, else the lowest-id server that is up. A phone keeps its hub.
 
 ## Apply (agent)
+
+**Slots** (amendment A49). A config carries its mesh's slot as `node.slot` (left out for slot 0,
+so the first mesh's configs hash as before), and an agent refuses one for a slot other than the
+one it joined (step 1). Every name below is slot 0's; the agent of slot s uses `wg<s>`, exit
+mode's rules 10*s lower and table 51820+2s, the container network's rules 10*s higher and table
+51821+2s, the bridge `meshctl<s>` and runtime network `meshctl-mesh<s>`, the firewalld zone
+`mesh<s>` and policies `meshctl<s>-relay|exit` (a config's rules name the zone `mesh`), the table
+`inet meshctl<s>` and its interfaces' sysctl keys -- and lists, changes and removes only its
+own (`internal/proto/slot.go`). The fwmark is every slot's. Exit mode stays off while another
+slot's exit rules are on the host (degraded `exit`, naming that slot's interface); of two that
+added theirs at once, the lower slot keeps them.
 
 The agent applies a config in fixed steps, each comparing desired with observed state:
 

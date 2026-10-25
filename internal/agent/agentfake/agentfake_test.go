@@ -236,7 +236,7 @@ func TestDNS(t *testing.T) {
 func TestPolicyHasKernelSemantics(t *testing.T) {
 	p := &Policy{}
 	rule := exitmode.Rule{Family: exitmode.IPv4, Priority: exitmode.PrioritySuppress, Table: exitmode.MainTable}
-	route := exitmode.Route{Family: exitmode.IPv4, Link: "wg0"}
+	route := exitmode.Route{Family: exitmode.IPv4, Table: proto.RouteTable, Link: "wg0"}
 	for _, step := range []error{p.AddRoute(route), p.AddRule(rule), p.DelRule(rule)} {
 		if step != nil {
 			t.Fatal(step)
@@ -259,9 +259,12 @@ func TestPolicyHasKernelSemantics(t *testing.T) {
 	p.Install(rule)
 	p.InstallRoute(route)
 	rules, err1 := p.Rules()
-	routes, err2 := p.Routes()
+	routes, err2 := p.Routes(proto.RouteTable)
 	if err1 != nil || err2 != nil || !slices.Equal(rules, []exitmode.Rule{rule}) || !slices.Equal(routes, []exitmode.Route{route}) {
 		t.Fatalf("after Install: %v %v (%v %v)", rules, routes, err1, err2)
+	}
+	if other, err := p.Routes(proto.Slot(1).RouteTable()); err != nil || len(other) != 0 {
+		t.Fatalf("another slot's table = %v, %v", other, err)
 	}
 	if p.IPv6() != exitmode.V6Policy || (&Policy{NoIPv6: true}).IPv6() != exitmode.V6None ||
 		(&Policy{V6Unrouted: true}).IPv6() != exitmode.V6Unrouted {
@@ -279,7 +282,7 @@ func TestPolicyHasKernelSemantics(t *testing.T) {
 		t.Fatalf("AddRoute with Fail = %v", err)
 	}
 	p.FailOn = "Routes"
-	if _, err := p.Routes(); !errors.Is(err, boom) {
+	if _, err := p.Routes(proto.RouteTable); !errors.Is(err, boom) {
 		t.Fatalf("Routes with FailOn = %v", err)
 	}
 	if err := p.DelRule(rule); err != nil {
@@ -310,13 +313,13 @@ func TestNetHasKernelSemantics(t *testing.T) {
 	if rules, err := n.Rules(); err != nil || !slices.Equal(rules, []containers.Rule{r}) {
 		t.Fatalf("Rules = %v, %v", rules, err)
 	}
-	if err := n.SetBlackhole(false, true); err != nil || !n.HasBlackhole() || n.HasBlackhole6() {
+	if err := n.SetBlackhole(containers.BlackholeTable, false, true); err != nil || !n.HasBlackhole() || n.HasBlackhole6() {
 		t.Fatalf("SetBlackhole = %v", err)
 	}
-	if on, err := n.Blackhole(false); err != nil || !on {
+	if on, err := n.Blackhole(containers.BlackholeTable, false); err != nil || !on {
 		t.Fatalf("Blackhole = %v, %v", on, err)
 	}
-	if on, err := n.Blackhole(true); err != nil || on {
+	if on, err := n.Blackhole(containers.BlackholeTable, true); err != nil || on {
 		t.Fatalf("Blackhole(IPv6) = %v, %v", on, err)
 	}
 	// A kernel without IPv6 policy routing refuses IPv6 rules.
@@ -377,7 +380,7 @@ func TestNetHasKernelSemantics(t *testing.T) {
 	if err := n.DelProxy("eth1", far); err == nil || !strings.Contains(err.Error(), "no such entry") {
 		t.Fatalf("removing a missing proxy entry = %v", err)
 	}
-	if err := n.SetBlackhole(true, true); err != nil || !n.HasBlackhole6() {
+	if err := n.SetBlackhole(containers.BlackholeTable, true, true); err != nil || !n.HasBlackhole6() {
 		t.Fatalf("SetBlackhole(IPv6) = %v", err)
 	}
 	sub6 := netip.MustParsePrefix("fd10:77::8000:0/112")
@@ -407,7 +410,7 @@ func TestNetHasKernelSemantics(t *testing.T) {
 	for name, err := range map[string]error{
 		"AddRule":      n.AddRule(r),
 		"DelRule":      n.DelRule(r),
-		"SetBlackhole": n.SetBlackhole(false, false),
+		"SetBlackhole": n.SetBlackhole(containers.BlackholeTable, false, false),
 		"AddAddr":      n.AddAddr("eth1", netip.MustParsePrefix("10.77.128.3/16")),
 		"AddProxy":     n.AddProxy("eth1", far),
 		"DelProxy":     n.DelProxy("eth1", far),
@@ -436,7 +439,7 @@ func TestNetHasKernelSemantics(t *testing.T) {
 		case "Dropped":
 			_, err = n.Dropped()
 		case "Blackhole":
-			_, err = n.Blackhole(false)
+			_, err = n.Blackhole(containers.BlackholeTable, false)
 		case "LinkHolding":
 			_, err = n.LinkHolding(sub, "")
 		case "Addrs":

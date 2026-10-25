@@ -116,21 +116,21 @@ func (netlinkNet) DelRule(r Rule) error {
 	return nil
 }
 
-func blackhole(ipv6 bool) *netlink.Route {
+func blackhole(table int, ipv6 bool) *netlink.Route {
 	dst := &net.IPNet{IP: net.IPv4zero.To4(), Mask: net.CIDRMask(0, 32)}
 	if ipv6 {
 		dst = &net.IPNet{IP: net.IPv6zero, Mask: net.CIDRMask(0, 128)}
 	}
-	return &netlink.Route{Table: BlackholeTable, Protocol: routes.Protocol, Family: family(ipv6), Type: syscall.RTN_BLACKHOLE, Dst: dst}
+	return &netlink.Route{Table: table, Protocol: routes.Protocol, Family: family(ipv6), Type: syscall.RTN_BLACKHOLE, Dst: dst}
 }
 
-func (netlinkNet) Blackhole(ipv6 bool) (bool, error) {
-	filter := &netlink.Route{Table: BlackholeTable, Protocol: routes.Protocol}
+func (netlinkNet) Blackhole(table int, ipv6 bool) (bool, error) {
+	filter := &netlink.Route{Table: table, Protocol: routes.Protocol}
 	rs, err := dump(func() ([]netlink.Route, error) {
 		return netlink.RouteListFiltered(family(ipv6), filter, netlink.RT_FILTER_TABLE|netlink.RT_FILTER_PROTOCOL)
 	})
 	if err != nil {
-		return false, fmt.Errorf("list routes in table %d: %w", BlackholeTable, err)
+		return false, fmt.Errorf("list routes in table %d: %w", table, err)
 	}
 	for _, r := range rs {
 		if r.Type == syscall.RTN_BLACKHOLE {
@@ -140,19 +140,19 @@ func (netlinkNet) Blackhole(ipv6 bool) (bool, error) {
 	return false, nil
 }
 
-func (netlinkNet) SetBlackhole(ipv6, on bool) error {
+func (netlinkNet) SetBlackhole(table int, ipv6, on bool) error {
 	what := "IPv4"
 	if ipv6 {
 		what = "IPv6"
 	}
 	if on {
-		if err := netlink.RouteReplace(blackhole(ipv6)); err != nil {
-			return fmt.Errorf("add the %s blackhole default to table %d: %w", what, BlackholeTable, err)
+		if err := netlink.RouteReplace(blackhole(table, ipv6)); err != nil {
+			return fmt.Errorf("add the %s blackhole default to table %d: %w", what, table, err)
 		}
 		return nil
 	}
-	if err := netlink.RouteDel(blackhole(ipv6)); err != nil {
-		return fmt.Errorf("remove the %s blackhole default from table %d: %w", what, BlackholeTable, err)
+	if err := netlink.RouteDel(blackhole(table, ipv6)); err != nil {
+		return fmt.Errorf("remove the %s blackhole default from table %d: %w", what, table, err)
 	}
 	return nil
 }

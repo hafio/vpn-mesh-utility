@@ -106,7 +106,7 @@ func TestMeshesAreApartOnTheAgentAPI(t *testing.T) {
 
 	w, eb = serve(h.pub, signed(http.MethodGet, proto.PathConfig, nil, f, testfix.Epoch.Add(time.Second)))
 	var cfg proto.NodeConfig
-	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &cfg) != nil || len(cfg.Peers) != 0 || cfg.Version != 1 {
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &cfg) != nil || len(cfg.Peers) != 0 || cfg.Version != 1 || cfg.Node.Slot != 1 {
 		t.Fatalf("the lab's config: %d %+v %+v", w.Code, eb, cfg)
 	}
 	w, eb = serve(h.pub, signed(http.MethodGet, proto.PathMesh, nil, f, testfix.Epoch.Add(2*time.Second)))
@@ -141,6 +141,19 @@ func TestMeshesAreApartOnTheAgentAPI(t *testing.T) {
 	}
 	if n := h.audits(t, "node.join"); n != 0 {
 		t.Errorf("the first mesh shows %d of the lab's joins", n)
+	}
+
+	// The slot's names (amendment A49): the server's default port, and a
+	// container network's runtime network and bridge.
+	if d, err := labNodes.Show(context.Background(), "vps-1"); err != nil || d.Node.ListenPort != 51821 {
+		t.Fatalf("the lab's vps-1: %+v, %v", d.Node, err)
+	}
+	if _, err := labNodes.Add(context.Background(), cli(), NodeAddRequest{Name: "box", Role: "spoke", Containers: true}); err != nil {
+		t.Fatal(err)
+	}
+	if d, err := labNodes.Show(context.Background(), "box"); err != nil || d.Containers == nil ||
+		d.Containers.Name != "meshctl-mesh1" || d.Containers.BridgeName != "meshctl1" {
+		t.Fatalf("the lab's box: %+v, %v", d.Containers, err)
 	}
 }
 

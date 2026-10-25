@@ -93,10 +93,11 @@ func setupAgentUninstall(fs *flag.FlagSet, e *env) action {
 
 func setupAgentRun(fs *flag.FlagSet, e *env) action {
 	data, sock := socketFlags(fs, e)
-	noFirewall := fs.Bool("no-firewall", false, "leave the host firewall alone (you open udp/51820 and the Swarm ports yourself)")
+	noFirewall := fs.Bool("no-firewall", false, "leave the host firewall alone (you open the WireGuard port and the Swarm ports yourself)")
 	backend := fs.String("wg-backend", wg.BackendAuto, "WireGuard backend: auto (kernel when the module is there), kernel or userspace (wireguard-go on /dev/net/tun)")
 	level := fs.String("log-level", "info", "debug, info, warn or error")
-	ui := fs.String("ui-listen", "127.0.0.1:7443", "the local UI's loopback address, or off; meshctl ui prints a sign-in link")
+	ui := fs.String("ui-listen", agent.UIAuto,
+		"the local UI's loopback address, auto (127.0.0.1:7443, plus the mesh's slot) or off; meshctl ui prints a sign-in link")
 	runtime := fs.String("runtime-socket", agent.RuntimeAuto,
 		"the container runtime's API socket the containers' names are read from (GET only): auto (Docker's, then Podman's), off, or a path")
 	statusEvery := fs.Duration("status-every", 30*time.Second,
@@ -120,7 +121,7 @@ func setupAgentRun(fs *flag.FlagSet, e *env) action {
 		}
 		uiListen := ""
 		if *ui != "off" {
-			if _, err := localui.ParseAddr(*ui); err != nil {
+			if _, err := localui.ParseAddr(*ui); err != nil && *ui != agent.UIAuto {
 				return usagef("%v", err)
 			}
 			uiListen = *ui

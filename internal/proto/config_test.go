@@ -332,3 +332,19 @@ func TestValidateReportsEveryProblem(t *testing.T) {
 		t.Fatalf("Validate must report all problems, got %v", err)
 	}
 }
+
+// A config names a slot in range (amendment A49); one of slot 0 hashes as
+// before (no slot field), any other does not.
+func TestConfigSlot(t *testing.T) {
+	c := testfix.ServerConfig()
+	h0, _ := c.Hash()
+	c.Node.Slot = proto.MaxSlot + 1
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "node.slot") {
+		t.Fatalf("a config for slot 64 = %v", err)
+	}
+	c.Node.Slot = 1
+	h1, _ := c.Hash()
+	if err := c.Validate(); err != nil || h0 == h1 {
+		t.Fatalf("slot 1: %v, hashes %s %s", err, h0, h1)
+	}
+}

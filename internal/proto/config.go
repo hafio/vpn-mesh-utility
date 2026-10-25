@@ -71,6 +71,10 @@ type Self struct {
 	ID   int64  `json:"id"`
 	Name string `json:"name"`
 	Role Role   `json:"role"`
+	// Slot is the node's mesh's slot (amendment A49), which names what the
+	// agent makes on the host. Omitted for slot 0, so a config of the first
+	// mesh hashes as before.
+	Slot Slot `json:"slot,omitempty"`
 }
 
 // Interface is the local WireGuard interface.
@@ -147,7 +151,8 @@ const (
 	ModeContainer = "container"
 )
 
-// The runtime network containers attach to, and its bridge on the host.
+// The runtime network containers attach to, and its bridge on the host:
+// slot 0's (Slot.Network and Slot.Bridge name every slot's).
 const (
 	MeshNetwork     = "meshctl-mesh"
 	ContainerBridge = "meshctl0"
@@ -205,7 +210,8 @@ type Firewall struct {
 	Exit6 string `json:"exit6,omitempty"`
 }
 
-// Firewall zones.
+// Firewall zones. ZoneMesh is the logical name a config uses; the agent
+// puts it in its slot's zone (Slot.Zone).
 const (
 	ZonePublic = "public"
 	ZoneMesh   = "mesh"
@@ -264,10 +270,12 @@ const (
 	SysctlBridgeProxyNDP = "net.ipv6.conf." + ContainerBridge + ".proxy_ndp"
 )
 
-// SysctlKeys is every key the server may ask for, for the allowlists.
-func SysctlKeys() []string {
-	return []string{SysctlIPForward, SysctlSrcValidMark, SysctlProxyARP, SysctlBridgeForwarding, SysctlBridgeProxyARP,
-		SysctlWGForwarding, SysctlIPv6Forward, SysctlProxyNDP, SysctlBridgeProxyNDP}
+// SysctlKeys is every key the server may ask for, or the agent of slot s
+// set, for the allowlists: the host-wide ones and the slot's per-interface
+// ones.
+func SysctlKeys(s Slot) []string {
+	return []string{SysctlIPForward, SysctlSrcValidMark, SysctlProxyARP, s.SysctlBridgeForwarding(), s.SysctlBridgeProxyARP(),
+		s.SysctlWGForwarding(), SysctlIPv6Forward, SysctlProxyNDP, s.SysctlBridgeProxyNDP()}
 }
 
 // Address families of a node (M8): which mesh addresses it has and which

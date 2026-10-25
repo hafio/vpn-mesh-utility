@@ -372,6 +372,29 @@ or extra domains equal, sit inside or hold another's, since agents of two meshes
 host. On the web UI each mesh's pages are under `/m/<mesh>/`; its Meshes page lists, adds,
 renames and removes them.
 
+A host in two meshes runs one agent per mesh, each with its own data dir (`agent join --data
+/var/lib/meshctl/lab ...`, then `agent run --data /var/lib/meshctl/lab`). Every name an agent
+makes on the host comes from its mesh's slot (`mesh show` prints it), so the agents never meet:
+
+| Slot | 0 (`default`) | s (e.g. 1) |
+| --- | --- | --- |
+| WireGuard interface | `wg0` | `wg<s>` (`wg1`) |
+| a server's default port | 51820/udp | 51820+s (51821) |
+| local UI (`--ui-listen auto`) | 127.0.0.1:7443 | 7443+s (7444) |
+| exit mode | rules 32764/32765, table 51820 | 10*s lower (32754/32755), table 51820+2s (51822) |
+| container network | rules 1000../5200.., table 51821, bridge `meshctl0`, runtime network `meshctl-mesh` | 10*s higher (1010../5210..), table 51821+2s, `meshctl<s>`, `meshctl-mesh<s>` |
+| firewalld | zone `mesh`, policies `meshctl-relay`, `meshctl-exit` | `mesh<s>`, `meshctl<s>-relay`, `meshctl<s>-exit` |
+| mesh firewall | `table inet meshctl` | `table inet meshctl<s>` |
+
+The public zone is shared: each server agent opens its own port there. A node keeps the port it
+was added with, so a mesh imported from an export keeps its 51820; on a host already holding it,
+`node set --mesh <mesh> <name> --listen-port 51821`. One mesh at a time carries a host's internet:
+`meshctl exit` on a second mesh leaves its exit off, reported as degraded `exit` with the interface
+that holds it, until the first turns its exit off. Every mesh's tunnel bypasses that exit (they
+share the fwmark). A host in two meshes is reachable from both, but its tunnels carry no traffic
+from one mesh into the other: the other mesh's peers drop any packet whose source is not the
+sender's own (WireGuard's allowed IPs).
+
 **Relay failover** (amendment A40). Two spokes with different hubs talk through one of them (the
 lower-id spoke's hub). When that hub goes down, the server moves the pair to the other spoke's hub,
 else the default hub, else the lowest-id server that is up, as a new config version audited
@@ -566,8 +589,9 @@ From another machine, forward the port first and open the link there:
 ssh -L 7443:127.0.0.1:7443 vps-1     # then, on vps-1: meshctl ui
 ```
 
-`agent run --ui-listen 127.0.0.1:7444` moves it (loopback addresses only) and `--ui-listen off`
-turns it off. An exit, keepalive or MTU change asks the server, exactly like `meshctl exit`;
+The agent of a mesh in slot s (amendment A49) listens on 7443+s instead (`--ui-listen auto`, the
+default); `meshctl ui` prints the port to forward. `agent run --ui-listen 127.0.0.1:7450` moves
+it (loopback addresses only) and `--ui-listen off` turns it off. An exit, keepalive or MTU change asks the server, exactly like `meshctl exit`;
 split DNS stays on the node.
 
 ## 9. Users and recovery
