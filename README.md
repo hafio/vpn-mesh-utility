@@ -40,7 +40,10 @@ carried on IPv4. Containers run from their environment: the image's `meshctl sta
 control plane with `MESHCTL_MODE=control` and a node's agent otherwise, and a node's container
 joins on its first start with `MESHCTL_TOKEN` (exported, in a `.env` file, or a file) and again
 only when given a new token. meshctl writes no container deployment: [docs/containers.md](docs/containers.md)
-has compose, Podman and Kubernetes samples. The live tests and the v1.0.0 release follow.
+has compose, Podman and Kubernetes samples. One control plane holds several meshes (M9, in
+progress): `meshctl mesh add|list|show|set|rm`, each with its own network, DNS zone, IPv6 prefix,
+firewall and history, none sharing an address or a domain with another, and `--mesh` on every
+admin command. The live tests and the v1.0.0 release follow.
 
 ## Quick start
 

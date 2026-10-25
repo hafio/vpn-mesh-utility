@@ -220,18 +220,18 @@ func (s *Nodes) DefaultIPv6(ctx context.Context) (v IPv6View, changed bool, err 
 	return v, err == nil, err
 }
 
-func (a *api) adminIPv6(w http.ResponseWriter, r *http.Request) {
-	out, err := a.nodes.IPv6(r.Context())
+func (a *api) adminIPv6(s *Nodes, w http.ResponseWriter, r *http.Request) {
+	out, err := s.IPv6(r.Context())
 	a.reply(w, r, out, err)
 }
 
-func (a *api) adminSetIPv6(w http.ResponseWriter, r *http.Request) {
+func (a *api) adminSetIPv6(s *Nodes, w http.ResponseWriter, r *http.Request) {
 	var req IPv6Request
 	if err := a.readJSON(w, r, &req); err != nil {
 		a.fail(w, r, err)
 		return
 	}
-	out, err := a.nodes.SetIPv6(r.Context(), cli(), req)
+	out, err := s.SetIPv6(r.Context(), cli(), req)
 	a.reply(w, r, out, err)
 }
 

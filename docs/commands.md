@@ -120,7 +120,7 @@ meshctl exit [<server>|off] [flags]
 
 ## meshctl export
 
-Write the mesh's desired state as YAML (reads the database directly).
+Write a mesh's desired state as YAML (reads the database directly).
 
 ```
 meshctl export [flags]
@@ -129,6 +129,7 @@ meshctl export [flags]
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--data` | `/data` | the server's data directory |
+| `--mesh` |  | the mesh to export; needed when the control plane has more than one |
 | `--out` |  | write to this file (mode 0600) instead of stdout |
 
 ## meshctl firewall apply
@@ -143,6 +144,7 @@ meshctl firewall apply <file> [flags]
 | --- | --- | --- |
 | `--data` | `/data` | the server's data directory (holds admin.sock) |
 | `--json` | `false` | print the server's answer as JSON |
+| `--mesh` |  | the mesh to work on; needed when the control plane has more than one (meshctl mesh list) |
 
 ## meshctl firewall check
 
@@ -157,6 +159,7 @@ meshctl firewall check <from> <to> <service> [flags]
 | `--at` |  | judge the flow at this time, in RFC 3339 form such as 2026-10-23T09:30:00+08:00 (default now) |
 | `--data` | `/data` | the server's data directory (holds admin.sock) |
 | `--json` | `false` | print the server's answer as JSON |
+| `--mesh` |  | the mesh to work on; needed when the control plane has more than one (meshctl mesh list) |
 
 ## meshctl firewall show
 
@@ -170,6 +173,7 @@ meshctl firewall show [flags]
 | --- | --- | --- |
 | `--data` | `/data` | the server's data directory (holds admin.sock) |
 | `--json` | `false` | print the server's answer as JSON |
+| `--mesh` |  | the mesh to work on; needed when the control plane has more than one (meshctl mesh list) |
 | `--yaml` | `false` | print the document as YAML, to edit and give to `firewall apply` |
 
 ## meshctl healthcheck agent
@@ -207,7 +211,7 @@ meshctl healthcheck start [flags]
 
 ## meshctl import
 
-Replace the desired state with an export (only while the control plane is stopped).
+Replace a mesh's desired state with an export (only while the control plane is stopped).
 
 ```
 meshctl import <file> [flags]
@@ -216,6 +220,7 @@ meshctl import <file> [flags]
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--data` | `/data` | the server's data directory (the server must be stopped) |
+| `--mesh` |  | the mesh to replace, created when it does not exist; needed when the control plane has more than one |
 
 ## meshctl ipv6
 
@@ -229,6 +234,7 @@ meshctl ipv6 [<prefix>|auto|off] [flags]
 | --- | --- | --- |
 | `--data` | `/data` | the server's data directory (holds admin.sock) |
 | `--json` | `false` | print the server's answer as JSON |
+| `--mesh` |  | the mesh to work on; needed when the control plane has more than one (meshctl mesh list) |
 
 ## meshctl logs
 
@@ -243,6 +249,81 @@ meshctl logs [flags]
 | `--data` | `/var/lib/meshctl` | agent data directory |
 | `-f` | `false` | keep printing new lines until interrupted |
 | `--socket` |  | local API socket (default: /run/meshctl/agent.sock for the standard data dir, else &lt;data&gt;/agent.sock; \\.\pipe\meshctl-agent on Windows) |
+
+## meshctl mesh add
+
+Add a mesh with its own network, DNS zone and IPv6 prefix.
+
+```
+meshctl mesh add <name> [flags]
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--data` | `/data` | the server's data directory (holds admin.sock) |
+| `--dns-zone` |  | the mesh's DNS zone (default: the mesh's name) |
+| `--ipv6` | `auto` | the mesh's IPv6 prefix: a /48 to /64, auto (a random unique local /64) or off |
+| `--json` | `false` | print the server's answer as JSON |
+| `--mesh-cidr` |  | the mesh's IPv4 network, a /16 to /22 (default: the first free 10.x.0.0/16) |
+
+## meshctl mesh list
+
+List the control plane's meshes.
+
+```
+meshctl mesh list [flags]
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--data` | `/data` | the server's data directory (holds admin.sock) |
+| `--json` | `false` | print the server's answer as JSON |
+
+## meshctl mesh rm
+
+Remove a mesh without nodes, with its settings, history and policies.
+
+```
+meshctl mesh rm <name> [flags]
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--data` | `/data` | the server's data directory (holds admin.sock) |
+| `--json` | `false` | print the server's answer as JSON |
+
+## meshctl mesh set
+
+Rename a mesh or change its settings.
+
+```
+meshctl mesh set <name> [flags]
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--data` | `/data` | the server's data directory (holds admin.sock) |
+| `--default-hub` |  | the server spokes and phones without a hub relay through ("" for none) |
+| `--default-mtu` | `0` | the MTU of nodes that set none |
+| `--dns-extra-domains` |  | extra DNS domains every node resolves through the mesh, comma separated ("" for none) |
+| `--dns-zone` |  | the mesh's DNS zone |
+| `--json` | `false` | print the server's answer as JSON |
+| `--mesh-cidr` |  | the mesh's IPv4 network, a /16 to /22; only while the mesh has no nodes |
+| `--name` |  | a new name for the mesh (its uuid and slot stay) |
+| `--upstream-dns` |  | the resolvers the mesh's resolvers forward to, one to four IPv4 or IPv6 addresses, comma separated |
+
+## meshctl mesh show
+
+Show a mesh and its settings.
+
+```
+meshctl mesh show <name> [flags]
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--data` | `/data` | the server's data directory (holds admin.sock) |
+| `--json` | `false` | print the server's answer as JSON |
 
 ## meshctl node add
 
@@ -269,6 +350,7 @@ meshctl node add <name> [flags]
 | `--json` | `false` | print the server's answer as JSON |
 | `--keepalive` | `0` | spokes and phones: PersistentKeepalive seconds (default 25) |
 | `--listen-port` | `0` | servers: WireGuard UDP port (default 51820) |
+| `--mesh` |  | the mesh to work on; needed when the control plane has more than one (meshctl mesh list) |
 | `--mode` | `host` | host (WireGuard on the host) or container (in the agent's container: only its containers are on the mesh) |
 | `--mtu` | `0` | interface MTU (default: the mesh default, 1420) |
 | `--role` |  | server, spoke or phone (required) |
@@ -285,6 +367,7 @@ meshctl node disable <name> [flags]
 | --- | --- | --- |
 | `--data` | `/data` | the server's data directory (holds admin.sock) |
 | `--json` | `false` | print the server's answer as JSON |
+| `--mesh` |  | the mesh to work on; needed when the control plane has more than one (meshctl mesh list) |
 
 ## meshctl node enable
 
@@ -298,6 +381,7 @@ meshctl node enable <name> [flags]
 | --- | --- | --- |
 | `--data` | `/data` | the server's data directory (holds admin.sock) |
 | `--json` | `false` | print the server's answer as JSON |
+| `--mesh` |  | the mesh to work on; needed when the control plane has more than one (meshctl mesh list) |
 
 ## meshctl node list
 
@@ -311,6 +395,7 @@ meshctl node list [flags]
 | --- | --- | --- |
 | `--data` | `/data` | the server's data directory (holds admin.sock) |
 | `--json` | `false` | print the server's answer as JSON |
+| `--mesh` |  | the mesh to work on; needed when the control plane has more than one (meshctl mesh list) |
 
 ## meshctl node phone
 
@@ -325,6 +410,7 @@ meshctl node phone <name> [flags]
 | `--data` | `/data` | the server's data directory (holds admin.sock) |
 | `--exit` |  | send all of the phone's traffic through this exit server (default: only mesh traffic uses the tunnel) |
 | `--json` | `false` | print the server's answer as JSON |
+| `--mesh` |  | the mesh to work on; needed when the control plane has more than one (meshctl mesh list) |
 
 ## meshctl node rm
 
@@ -338,6 +424,7 @@ meshctl node rm <name> [flags]
 | --- | --- | --- |
 | `--data` | `/data` | the server's data directory (holds admin.sock) |
 | `--json` | `false` | print the server's answer as JSON |
+| `--mesh` |  | the mesh to work on; needed when the control plane has more than one (meshctl mesh list) |
 
 ## meshctl node set
 
@@ -362,6 +449,7 @@ meshctl node set <name> [flags]
 | `--json` | `false` | print the server's answer as JSON |
 | `--keepalive` | `0` | PersistentKeepalive seconds (0 turns it off) |
 | `--listen-port` | `0` | servers: WireGuard UDP port |
+| `--mesh` |  | the mesh to work on; needed when the control plane has more than one (meshctl mesh list) |
 | `--mesh-ip` |  | move the node to another mesh IP in the mesh (its peers, DNS name and agent follow) |
 | `--mesh-ip6` |  | move the node to another IPv6 mesh address in the mesh's IPv6 prefix |
 | `--mtu` | `0` | interface MTU |
@@ -378,6 +466,7 @@ meshctl node show <name> [flags]
 | --- | --- | --- |
 | `--data` | `/data` | the server's data directory (holds admin.sock) |
 | `--json` | `false` | print the server's answer as JSON |
+| `--mesh` |  | the mesh to work on; needed when the control plane has more than one (meshctl mesh list) |
 
 ## meshctl node token
 
@@ -391,6 +480,7 @@ meshctl node token <name> [flags]
 | --- | --- | --- |
 | `--data` | `/data` | the server's data directory (holds admin.sock) |
 | `--json` | `false` | print the server's answer as JSON |
+| `--mesh` |  | the mesh to work on; needed when the control plane has more than one (meshctl mesh list) |
 
 ## meshctl start
 

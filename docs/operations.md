@@ -354,6 +354,23 @@ addresses is changed by going off first. When a node's agent reports that its ho
 one of its families, the mesh leaves that family out for it (a warning on its page and in `node
 show`, which says what the host can use) until the agent reports it works again.
 
+**Several meshes** (amendment A49). One control plane holds up to 64 meshes; the first is
+`default`. Each has its own nodes, settings, DNS zone, firewall, history and nightly exports, and
+an agent belongs to one (a host in two meshes runs two agents).
+
+| Task | Command |
+| --- | --- |
+| see the meshes | `mesh list`, `mesh show lab` |
+| add one | `mesh add lab` -- the first free 10.x.0.0/16 from 10.77.0.0/16 up, zone `lab`, a random unique local /64; or `--mesh-cidr 10.90.0.0/20 --dns-zone lab.example --ipv6 off` |
+| work in it | `--mesh lab` on every `node`, `firewall` and `ipv6` command, and on `export` and `import`: `node add --mesh lab nas --role spoke` |
+| rename it, change its settings | `mesh set lab --name office`, `mesh set lab --dns-zone office --default-mtu 1380 --upstream-dns 9.9.9.9` |
+| remove it | `node rm --mesh lab <name>` for each node, then `mesh rm lab` |
+
+With more than one mesh, a command without `--mesh` says which there are. Meshes share no network
+and no DNS domain: a mesh's IPv4 network and IPv6 prefix may not overlap another's, nor its zone
+or extra domains equal, sit inside or hold another's, since agents of two meshes may run on one
+host. The web UI works on the only mesh for now.
+
 **Relay failover** (amendment A40). Two spokes with different hubs talk through one of them (the
 lower-id spoke's hub). When that hub goes down, the server moves the pair to the other spoke's hub,
 else the default hub, else the lowest-id server that is up, as a new config version audited
@@ -573,6 +590,8 @@ newest 14 of each mesh. For an export on demand:
 docker exec <container> /app/meshctl export > mesh.yaml
 ```
 
+(`--mesh lab` for one of several meshes.)
+
 An export is the desired state as YAML -- nodes with their public keys, settings, custom DNS
 records and the mesh firewall; never tokens, private keys or users. An export made before the
 mesh firewall imports its custom firewall rules as policies. It reads the database directly
@@ -589,7 +608,10 @@ docker compose start meshctl
 ```
 
 `import` refuses to run while the server holds the data dir, and checks every value of the file
-before it changes anything. Users are not in an export: for a full restore, including users and
+before it changes anything. `import --mesh lab` replaces that mesh, and creates it first when the
+control plane has none of that name (with the file's network and zone; it goes again when the
+import fails). Node ids belong to the whole control plane: an export whose node ids another mesh
+holds is refused. Users are not in an export: for a full restore, including users and
 `secret.key` (which seals their TOTP secrets), keep a copy of the `meshctl-data` volume as well
 (`docker run --rm -v meshctl-data:/data -v $PWD:/b alpine tar czf /b/meshctl-data.tgz -C /data .`,
 with the server stopped).

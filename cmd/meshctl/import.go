@@ -13,9 +13,15 @@ import (
 
 func setupImport(fs *flag.FlagSet, e *env) action {
 	data := fs.String("data", "/data", "the server's data directory (the server must be stopped)")
+	mesh := fs.String("mesh", "", "the mesh to replace, created when it does not exist; needed when the control plane has more than one")
 	return func(ctx context.Context, args []string) error {
 		if err := wantArgs(args, 1, "<file>"); err != nil {
 			return err
+		}
+		if *mesh != "" {
+			if _, err := validate.Name("--mesh", *mesh); err != nil {
+				return usagef("%v", err)
+			}
 		}
 		file, err := validate.FilePath("file", args[0])
 		if err != nil {
@@ -30,7 +36,7 @@ func setupImport(fs *flag.FlagSet, e *env) action {
 		if err != nil {
 			return err
 		}
-		res, err := server.Import(ctx, server.ImportConfig{DataDir: *data, Doc: doc, Now: e.now})
+		res, err := server.Import(ctx, server.ImportConfig{DataDir: *data, Mesh: *mesh, Doc: doc, Now: e.now})
 		if err != nil {
 			return err
 		}

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -723,101 +722,37 @@ func (u *ui) renderSettings(w http.ResponseWriter, r *http.Request, s auth.Sessi
 	u.show(w, r, s, status, "settings", "settings", "Settings", p)
 }
 
-// saveSettings validates every field, then applies them through the
-// reconciler: a new default hub changes spokes' configs. The mesh CIDR can
-// change only while the mesh has no nodes.
+// saveSettings hands the form to the mesh's settings (api.SetSettings),
+// which checks every field and applies them through the reconciler: a new
+// default hub changes spokes' configs. The mesh CIDR can change only while
+// the mesh has no nodes; a zone left out stays, and so do the extra domains
+// (an empty field clears them).
 func (u *ui) saveSettings(w http.ResponseWriter, r *http.Request, s auth.Session) {
 	mtu, err := atoi("default_mtu", r.PostFormValue("default_mtu"))
-	if err == nil {
-		_, err = validate.IntRange("default_mtu", mtu, proto.MinMTU, proto.MaxMTU)
-	}
-	var upstream []string
-	for _, f := range strings.Split(r.PostFormValue("upstream_dns"), ",") {
-		if f = strings.TrimSpace(f); f == "" {
-			continue
-		}
-		if _, verr := validate.IP("upstream_dns", f); verr != nil && err == nil {
-			err = verr
-		}
-		upstream = append(upstream, f)
-	}
-	if err == nil && (len(upstream) == 0 || len(upstream) > 4) {
-		err = &validate.Error{Field: "upstream_dns", Reason: "give one to four IPv4 or IPv6 addresses, comma separated"}
-	}
-	hub, cidr := r.PostFormValue("default_hub"), strings.TrimSpace(r.PostFormValue("mesh_cidr"))
-	// The zone stays as it is when the form leaves it out, and so do the
-	// extra domains; an empty field clears them. How they sit with the zone
-	// the reconciler checks, which knows the zone in effect.
-	zone := strings.TrimSpace(r.PostFormValue("dns_zone"))
-	if zone != "" && err == nil {
-		_, err = validate.Zone("dns_zone", zone)
-	}
-	_, setDomains := r.PostForm["dns_extra_domains"]
-	var domains []string
-	if setDomains && err == nil {
-		fields := strings.FieldsFunc(r.PostFormValue("dns_extra_domains"), func(c rune) bool { return c == ',' || unicode.IsSpace(c) })
-		if domains, err = validate.Domains("dns_extra_domains", "", fields); err == nil {
-			err = api.CheckServerDomains(u.ServerURL, domains)
-		}
-	}
 	if err != nil {
 		status, msg := message(err)
 		u.renderSettings(w, r, s, status, page{Error: msg})
 		return
 	}
-	res, err := u.Nodes.Apply(r.Context(), api.Change{Actor: actor(s).Name, UserID: s.UserID, Action: "settings.set"},
-		func(tx *store.MeshTx, c *api.Change) error {
-			values := map[string]string{store.SettingDefaultMTU: strconv.Itoa(mtu), store.SettingUpstreamDNS: strings.Join(upstream, ",")}
-			if zone != "" {
-				values[store.SettingDNSZone] = zone
-			}
-			if setDomains {
-				values[store.SettingDNSExtraDomains] = strings.Join(domains, ",")
-			}
-			values[store.SettingDefaultHub] = ""
-			if hub != "" {
-				n, err := tx.NodeByName(hub)
-				if err != nil || n.Role != string(proto.RoleServer) {
-					return &validate.Error{Field: "default_hub", Value: hub, Reason: "must be a server of this mesh"}
-				}
-				values[store.SettingDefaultHub] = strconv.FormatInt(n.ID, 10)
-			}
-			if cidr != "" {
-				cur, err := tx.Setting(store.SettingMeshCIDR)
-				if err != nil {
-					return err
-				}
-				if cidr != cur {
-					p, err := validate.Prefix4("mesh_cidr", cidr)
-					if err != nil {
-						return err
-					}
-					if err := planner.CheckMeshCIDR(p); err != nil {
-						return &validate.Error{Field: "mesh_cidr", Value: cidr, Reason: err.Error()}
-					}
-					nodes, err := tx.Nodes()
-					if err != nil {
-						return err
-					}
-					if len(nodes) > 0 {
-						return &validate.Error{Field: "mesh_cidr", Reason: "can only change while the mesh has no nodes"}
-					}
-					values[store.SettingMeshCIDR] = p.String()
-				}
-			}
-			keys := make([]string, 0, len(values))
-			for k := range values {
-				keys = append(keys, k)
-			}
-			slices.Sort(keys)
-			for _, k := range keys {
-				if err := tx.SetSetting(k, values[k]); err != nil {
-					return err
-				}
-			}
-			c.Detail = values
-			return nil
-		})
+	var upstream []string
+	for _, f := range strings.Split(r.PostFormValue("upstream_dns"), ",") {
+		if f = strings.TrimSpace(f); f != "" {
+			upstream = append(upstream, f)
+		}
+	}
+	hub := r.PostFormValue("default_hub")
+	req := api.SettingsRequest{DefaultMTU: &mtu, Upstream: &upstream, DefaultHub: &hub}
+	if cidr := strings.TrimSpace(r.PostFormValue("mesh_cidr")); cidr != "" {
+		req.MeshCIDR = &cidr
+	}
+	if zone := strings.TrimSpace(r.PostFormValue("dns_zone")); zone != "" {
+		req.Zone = &zone
+	}
+	if _, ok := r.PostForm["dns_extra_domains"]; ok {
+		fields := strings.FieldsFunc(r.PostFormValue("dns_extra_domains"), func(c rune) bool { return c == ',' || unicode.IsSpace(c) })
+		req.Domains = &fields
+	}
+	res, err := u.Nodes.SetSettings(r.Context(), actor(s), req)
 	if err != nil {
 		status, msg := message(err)
 		u.renderSettings(w, r, s, status, page{Error: msg})

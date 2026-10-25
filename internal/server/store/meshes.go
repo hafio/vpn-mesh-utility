@@ -118,6 +118,16 @@ func (t *Tx) InsertMesh(m *Mesh) error {
 	return nil
 }
 
+// RenameMesh gives a mesh another name (validated by the caller); its uuid
+// and slot stay. A taken name is ErrConflict.
+func (t *Tx) RenameMesh(id int64, name string) error {
+	res, err := t.exec(`UPDATE meshes SET name = ? WHERE id = ?`, name, id)
+	if err != nil {
+		return fmt.Errorf("rename mesh %d to %q: %w", id, name, err)
+	}
+	return mustAffect(res, fmt.Sprintf("mesh %d", id))
+}
+
 // DeleteMesh removes a mesh that has no nodes, with its settings, records,
 // versions, segmentation and audit entries. One with nodes is ErrConflict.
 func (t *Tx) DeleteMesh(id int64) error {

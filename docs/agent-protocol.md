@@ -22,10 +22,18 @@ Public listener (`--listen`, behind the reverse proxy):
 | `GET /install.sh` | none | the Linux installer, with the binaries' SHA-256 baked in |
 | `GET /dl/{file}` | none | `meshctl-linux-amd64`, `meshctl-linux-arm64`, `meshctl-windows-amd64.exe`, `SHA256SUMS` |
 
-Admin socket (`<data>/admin.sock`, mode 0600, so only the server's own user reaches it):
+Admin socket (`<data>/admin.sock`, mode 0600, so only the server's own user reaches it). Every
+route but the meshes' own works on one mesh (amendment A49): the one `?mesh=<name>` names, else the
+only mesh; with several and none named the answer is 400 and lists them, an unknown name is 404, a
+name that is not a mesh name is 400 before the database (`--mesh` on the CLI).
 
 | Route | Purpose |
 | --- | --- |
+| `GET /admin/v1/meshes` | every mesh: name, uuid, slot, node count, networks, zone, extra domains, upstream resolvers, default MTU and hub (`meshctl mesh list`) |
+| `POST /admin/v1/meshes` | add a mesh: `{"name", "mesh_cidr", "dns_zone", "ipv6"}`, all but the name optional -- the first free 10.x.0.0/16 from 10.77.0.0/16 up, the name as the zone, `auto` (a random unique local /64; `off` for none); the lowest free slot, the first mesh's upstream resolvers and MTU, the allow-all policy; audited `mesh.add` in the new mesh (`meshctl mesh add`) |
+| `GET /admin/v1/meshes/{name}` | one mesh (`meshctl mesh show`) |
+| `PATCH /admin/v1/meshes/{name}` | rename it (`name`; its uuid and slot stay) and change its settings -- `mesh_cidr` (only while it has no nodes), `dns_zone`, `dns_extra_domains`, `upstream_dns`, `default_mtu`, `default_hub` -- as one change through the reconciler, audited `mesh.set` (`meshctl mesh set`; the web UI's Settings page changes the same settings) |
+| `DELETE /admin/v1/meshes/{name}` | remove a mesh without nodes, with its settings, records, versions, policies and audit entries; audited `mesh.rm` as the control plane's (`meshctl mesh rm`) |
 | `GET /admin/v1/nodes` | list nodes and the mesh plan's warnings |
 | `POST /admin/v1/nodes` | add a node (`ip_family`, `ip6`, `endpoint6` and `containers6` are the IPv6 side, amendment A46); the answer carries its first join token, shown once (a phone gets none) |
 | `GET /admin/v1/nodes/{name}` | one node, its container network's values (`containers`: the names, subnet, range, bridge, agent address, resolvers and published port a runtime creates it with, amendment A48), its computed config and its last peer report |
@@ -114,8 +122,9 @@ IPv4 on the agent's interfaces) with the node's listen port, else the endpoint s
 source address (amendment A46); an IPv4-only server keeps none, an IPv6-only one no IPv4
 endpoint. Spokes ignore all of these.
 
-The answer: `{"node_id", "name", "role", "mesh_ip", "config_version", "server_time"}`, and
-`mesh_ip6` when the node has one.
+The answer: `{"node_id", "name", "role", "mesh_ip", "config_version", "server_time"}`,
+`mesh_ip6` when the node has one, and the mesh it joined: `mesh` (its name), `mesh_uuid` and
+`slot` (amendment A49; 0 is left out).
 
 ## Config and events
 

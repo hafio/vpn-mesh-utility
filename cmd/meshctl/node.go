@@ -37,9 +37,17 @@ func nodeCommands() []command {
 	}
 }
 
-// adminFlags registers --data and --json and returns the admin client
-// constructor.
+// adminFlags registers --data, --json and --mesh and returns the admin
+// client constructor, for the mesh --mesh names (amendment A49).
 func adminFlags(fs *flag.FlagSet) (func() *api.AdminClient, *bool) {
+	client, asJSON := socketFlagsOnly(fs)
+	mesh := fs.String("mesh", "", "the mesh to work on; needed when the control plane has more than one (meshctl mesh list)")
+	return func() *api.AdminClient { return client().In(*mesh) }, asJSON
+}
+
+// socketFlagsOnly registers --data and --json and returns the admin client
+// constructor.
+func socketFlagsOnly(fs *flag.FlagSet) (func() *api.AdminClient, *bool) {
 	data := fs.String("data", "/data", "the server's data directory (holds admin.sock)")
 	asJSON := fs.Bool("json", false, "print the server's answer as JSON")
 	return func() *api.AdminClient { return api.NewAdminClient(filepath.Join(*data, server.AdminSocket)) }, asJSON
@@ -438,7 +446,7 @@ func setupNodeSet(fs *flag.FlagSet, e *env) action {
 			case "containers6":
 				req.Containers6 = containers6
 			default:
-				set-- // --data, --json
+				set-- // --data, --json, --mesh
 			}
 		})
 		if set == 0 {

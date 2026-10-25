@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
@@ -18,6 +19,8 @@ import (
 type AdminClient struct {
 	socket string
 	http   *http.Client
+	// mesh is the mesh every request names (?mesh=); "" is the sole mesh.
+	mesh string
 }
 
 // NewAdminClient returns a client for the server listening on socket.
@@ -29,6 +32,14 @@ func NewAdminClient(socket string) *AdminClient {
 		},
 	}
 	return &AdminClient{socket: socket, http: &http.Client{Transport: tr, Timeout: 30 * time.Second}}
+}
+
+// In is the client for one mesh, by name (amendment A49); "" is the sole
+// mesh.
+func (c *AdminClient) In(mesh string) *AdminClient {
+	d := *c
+	d.mesh = mesh
+	return &d
 }
 
 // AdminError is a refusal from the server, with its machine-readable code.
@@ -48,6 +59,13 @@ func (c *AdminClient) do(ctx context.Context, method, path string, in, out any) 
 			return fmt.Errorf("encode request: %w", err)
 		}
 		body = bytes.NewReader(b)
+	}
+	if c.mesh != "" {
+		sep := "?"
+		if strings.Contains(path, "?") {
+			sep = "&"
+		}
+		path += sep + "mesh=" + url.QueryEscape(c.mesh)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, "http://meshctl"+path, body)
 	if err != nil {

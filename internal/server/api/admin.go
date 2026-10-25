@@ -46,8 +46,10 @@ type Nodes struct {
 	serverURL string
 	// now is the clock the policies' schedules are judged on.
 	now func() time.Time
-	// mesh is the mesh the service works on; 0 is the sole mesh.
-	mesh int64
+	// mesh is the mesh the service works on; 0 is meshName's, and with no
+	// name the sole mesh.
+	mesh     int64
+	meshName string
 }
 
 // NewNodes wires the service from the API's dependencies. It works on the
@@ -63,7 +65,7 @@ func NewNodes(d Deps) *Nodes {
 // In is the service for one mesh.
 func (s *Nodes) In(mesh int64) *Nodes {
 	c := *s
-	c.mesh = mesh
+	c.mesh, c.meshName = mesh, ""
 	return &c
 }
 
@@ -89,12 +91,13 @@ func SoleMesh(tx *store.Tx) (store.Mesh, error) {
 		"this control plane has %d meshes (%s): name one with --mesh", len(meshes), strings.Join(names, ", "))
 }
 
-// meshID is the service's mesh: its own, else the sole mesh.
+// meshID is the service's mesh: its own, else the one it names, else the
+// sole mesh.
 func (s *Nodes) meshID(tx *store.Tx) (int64, error) {
 	if s.mesh != 0 {
 		return s.mesh, nil
 	}
-	m, err := SoleMesh(tx)
+	m, err := PickMesh(tx, s.meshName)
 	return m.ID, err
 }
 
@@ -109,7 +112,8 @@ func (s *Nodes) tx(ctx context.Context, fn func(*store.MeshTx) error) error {
 	})
 }
 
-// resolve is the service's mesh, reading the sole mesh when it names none.
+// resolve is the service's mesh, reading it when the service has only its
+// name or none.
 func (s *Nodes) resolve(ctx context.Context) (int64, error) {
 	if s.mesh != 0 {
 		return s.mesh, nil
@@ -158,22 +162,46 @@ func ErrorMessage(err error) (int, string) {
 }
 
 func (a *api) adminRoutes() []route {
-	const one = AdminNodes + "/{name}"
+	const one, mesh = AdminNodes + "/{name}", AdminMeshes + "/{name}"
+	in := a.withMesh
 	return []route{
-		{Route{http.MethodGet, AdminNodes, "socket"}, a.adminList},
-		{Route{http.MethodPost, AdminNodes, "socket"}, a.adminAdd},
-		{Route{http.MethodGet, one, "socket"}, a.adminShow},
-		{Route{http.MethodPatch, one, "socket"}, a.adminSet},
-		{Route{http.MethodDelete, one, "socket"}, a.adminRemove},
-		{Route{http.MethodPost, one + "/disable", "socket"}, a.adminDisable},
-		{Route{http.MethodPost, one + "/enable", "socket"}, a.adminEnable},
-		{Route{http.MethodPost, one + "/token", "socket"}, a.adminToken},
-		{Route{http.MethodPost, one + "/phone", "socket"}, a.adminPhone},
-		{Route{http.MethodGet, AdminSegmentation, "socket"}, a.adminSegment},
-		{Route{http.MethodPut, AdminSegmentation, "socket"}, a.adminSetSegment},
-		{Route{http.MethodGet, AdminSegmentation + "/check", "socket"}, a.adminReach},
-		{Route{http.MethodGet, AdminIPv6, "socket"}, a.adminIPv6},
-		{Route{http.MethodPut, AdminIPv6, "socket"}, a.adminSetIPv6},
+		{Route{http.MethodGet, AdminMeshes, "socket"}, a.adminMeshes},
+		{Route{http.MethodPost, AdminMeshes, "socket"}, a.adminAddMesh},
+		{Route{http.MethodGet, mesh, "socket"}, a.adminShowMesh},
+		{Route{http.MethodPatch, mesh, "socket"}, a.adminSetMesh},
+		{Route{http.MethodDelete, mesh, "socket"}, a.adminRemoveMesh},
+		{Route{http.MethodGet, AdminNodes, "socket"}, in(a.adminList)},
+		{Route{http.MethodPost, AdminNodes, "socket"}, in(a.adminAdd)},
+		{Route{http.MethodGet, one, "socket"}, in(a.adminShow)},
+		{Route{http.MethodPatch, one, "socket"}, in(a.adminSet)},
+		{Route{http.MethodDelete, one, "socket"}, in(a.adminRemove)},
+		{Route{http.MethodPost, one + "/disable", "socket"}, in(a.adminDisable)},
+		{Route{http.MethodPost, one + "/enable", "socket"}, in(a.adminEnable)},
+		{Route{http.MethodPost, one + "/token", "socket"}, in(a.adminToken)},
+		{Route{http.MethodPost, one + "/phone", "socket"}, in(a.adminPhone)},
+		{Route{http.MethodGet, AdminSegmentation, "socket"}, in(a.adminSegment)},
+		{Route{http.MethodPut, AdminSegmentation, "socket"}, in(a.adminSetSegment)},
+		{Route{http.MethodGet, AdminSegmentation + "/check", "socket"}, in(a.adminReach)},
+		{Route{http.MethodGet, AdminIPv6, "socket"}, in(a.adminIPv6)},
+		{Route{http.MethodPut, AdminIPv6, "socket"}, in(a.adminSetIPv6)},
+	}
+}
+
+// withMesh hands h the service of the mesh the request names (?mesh=),
+// else of the sole mesh (amendment A49). A name that is not a mesh name is
+// refused before the database.
+func (a *api) withMesh(h func(*Nodes, http.ResponseWriter, *http.Request)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := r.URL.Query().Get("mesh")
+		if name == "" {
+			h(a.nodes, w, r)
+			return
+		}
+		if _, err := validate.Name("mesh", name); err != nil {
+			a.fail(w, r, invalid(err))
+			return
+		}
+		h(a.nodes.Named(name), w, r)
 	}
 }
 
@@ -186,53 +214,53 @@ func (a *api) reply(w http.ResponseWriter, r *http.Request, v any, err error) {
 	writeJSON(w, http.StatusOK, v)
 }
 
-func (a *api) adminList(w http.ResponseWriter, r *http.Request) {
-	out, err := a.nodes.List(r.Context())
+func (a *api) adminList(s *Nodes, w http.ResponseWriter, r *http.Request) {
+	out, err := s.List(r.Context())
 	a.reply(w, r, out, err)
 }
 
-func (a *api) adminShow(w http.ResponseWriter, r *http.Request) {
-	out, err := a.nodes.Show(r.Context(), r.PathValue("name"))
+func (a *api) adminShow(s *Nodes, w http.ResponseWriter, r *http.Request) {
+	out, err := s.Show(r.Context(), r.PathValue("name"))
 	a.reply(w, r, out, err)
 }
 
-func (a *api) adminAdd(w http.ResponseWriter, r *http.Request) {
+func (a *api) adminAdd(s *Nodes, w http.ResponseWriter, r *http.Request) {
 	var req NodeAddRequest
 	if err := a.readJSON(w, r, &req); err != nil {
 		a.fail(w, r, err)
 		return
 	}
-	out, err := a.nodes.Add(r.Context(), cli(), req)
+	out, err := s.Add(r.Context(), cli(), req)
 	a.reply(w, r, out, err)
 }
 
-func (a *api) adminSet(w http.ResponseWriter, r *http.Request) {
+func (a *api) adminSet(s *Nodes, w http.ResponseWriter, r *http.Request) {
 	var req NodeSetRequest
 	if err := a.readJSON(w, r, &req); err != nil {
 		a.fail(w, r, err)
 		return
 	}
-	out, err := a.nodes.Set(r.Context(), cli(), r.PathValue("name"), req)
+	out, err := s.Set(r.Context(), cli(), r.PathValue("name"), req)
 	a.reply(w, r, out, err)
 }
 
-func (a *api) adminDisable(w http.ResponseWriter, r *http.Request) {
-	out, err := a.nodes.SetDisabled(r.Context(), cli(), r.PathValue("name"), true)
+func (a *api) adminDisable(s *Nodes, w http.ResponseWriter, r *http.Request) {
+	out, err := s.SetDisabled(r.Context(), cli(), r.PathValue("name"), true)
 	a.reply(w, r, out, err)
 }
 
-func (a *api) adminEnable(w http.ResponseWriter, r *http.Request) {
-	out, err := a.nodes.SetDisabled(r.Context(), cli(), r.PathValue("name"), false)
+func (a *api) adminEnable(s *Nodes, w http.ResponseWriter, r *http.Request) {
+	out, err := s.SetDisabled(r.Context(), cli(), r.PathValue("name"), false)
 	a.reply(w, r, out, err)
 }
 
-func (a *api) adminRemove(w http.ResponseWriter, r *http.Request) {
-	out, err := a.nodes.Remove(r.Context(), cli(), r.PathValue("name"))
+func (a *api) adminRemove(s *Nodes, w http.ResponseWriter, r *http.Request) {
+	out, err := s.Remove(r.Context(), cli(), r.PathValue("name"))
 	a.reply(w, r, out, err)
 }
 
-func (a *api) adminToken(w http.ResponseWriter, r *http.Request) {
-	out, err := a.nodes.Token(r.Context(), cli(), r.PathValue("name"))
+func (a *api) adminToken(s *Nodes, w http.ResponseWriter, r *http.Request) {
+	out, err := s.Token(r.Context(), cli(), r.PathValue("name"))
 	a.reply(w, r, out, err)
 }
 

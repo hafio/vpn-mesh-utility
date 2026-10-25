@@ -62,6 +62,22 @@ func TestMeshes(t *testing.T) {
 			t.Errorf("InsertMesh(%+v) = %v, want a conflict", m, err)
 		}
 	}
+	// A rename keeps the uuid and the slot; a taken name is a conflict.
+	tx(t, s, func(t2 *MeshTx) error {
+		if err := t2.RenameMesh(lab.ID, "home"); err != nil {
+			return err
+		}
+		if m, err := t2.MeshByID(lab.ID); err != nil || m.Name != "home" || m.UUID != lab.UUID || m.Slot != lab.Slot {
+			t.Errorf("the renamed mesh = %+v, %v", m, err)
+		}
+		if err := t2.RenameMesh(lab.ID, "default"); !errors.Is(err, ErrConflict) {
+			t.Errorf("a rename to a taken name = %v", err)
+		}
+		if err := t2.RenameMesh(99, "x"); !errors.Is(err, ErrNotFound) {
+			t.Errorf("a rename of no mesh = %v", err)
+		}
+		return nil
+	})
 }
 
 // Two meshes hold the same names and addresses without seeing each

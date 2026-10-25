@@ -153,10 +153,16 @@ func (a *api) join(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	var n store.Node
+	var (
+		n store.Node
+		m store.Mesh
+	)
 	if err := a.DB.Tx(r.Context(), func(tx *store.Tx) error {
 		var err error
-		n, err = tx.NodeByID(id)
+		if n, err = tx.NodeByID(id); err != nil {
+			return err
+		}
+		m, err = tx.MeshByID(n.MeshID)
 		return err
 	}); err != nil {
 		a.fail(w, r, err)
@@ -165,6 +171,7 @@ func (a *api) join(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, proto.JoinResponse{
 		NodeID: n.ID, Name: n.Name, Role: proto.Role(n.Role), MeshIP: n.MeshIP,
 		ConfigVersion: n.ConfigVersion, ServerTime: a.Now().Unix(), MeshIP6: n.MeshIP6,
+		Mesh: m.Name, MeshUUID: m.UUID, Slot: m.Slot,
 	})
 }
 

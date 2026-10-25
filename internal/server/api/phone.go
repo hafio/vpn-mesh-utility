@@ -19,13 +19,13 @@ import (
 // so each profile replaces the one before it. What the server knows of a
 // phone afterwards is what its servers report: the handshakes they see.
 
-func (a *api) adminPhone(w http.ResponseWriter, r *http.Request) {
+func (a *api) adminPhone(s *Nodes, w http.ResponseWriter, r *http.Request) {
 	var req PhoneRequest
 	if err := a.readJSON(w, r, &req); err != nil {
 		a.fail(w, r, err)
 		return
 	}
-	out, err := a.nodes.Phone(r.Context(), cli(), r.PathValue("name"), req)
+	out, err := s.Phone(r.Context(), cli(), r.PathValue("name"), req)
 	a.reply(w, r, out, err)
 }
 

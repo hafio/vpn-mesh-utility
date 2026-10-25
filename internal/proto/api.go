@@ -167,6 +167,11 @@ type JoinResponse struct {
 	ServerTime    int64  `json:"server_time"`
 	// MeshIP6 is the node's IPv6 mesh address, when it has one (M8).
 	MeshIP6 string `json:"mesh_ip6,omitempty"`
+	// Mesh, MeshUUID and Slot are the mesh the node joined (amendment
+	// A49); the slot picks the names its agent uses on the host.
+	Mesh     string `json:"mesh,omitempty"`
+	MeshUUID string `json:"mesh_uuid,omitempty"`
+	Slot     int    `json:"slot,omitempty"`
 }
 
 // StatusReport is the agent heartbeat (spec S6.3): every 30 s and right after

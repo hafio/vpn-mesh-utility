@@ -80,8 +80,9 @@ func NewReconciler(db DB, hub *Hub, log *slog.Logger) *Reconciler {
 
 // Apply runs mutate (nil recomputes only) in c's mesh and reconciles that
 // mesh. mutate may fill in c's Target, Detail and Summary once it knows
-// them. A mutation error or a plan with errors rolls everything back, so a
-// half-valid plan never lands.
+// them. A mutation error, a mesh that would share a network or a DNS domain
+// with another (amendment A49) or a plan with errors rolls everything back,
+// so a half-valid plan never lands.
 func (r *Reconciler) Apply(ctx context.Context, c Change, mutate func(*store.MeshTx, *Change) error) (Result, error) {
 	if c.Mesh == 0 {
 		return Result{}, fmt.Errorf("reconcile: change %q names no mesh", c.Action)
@@ -97,6 +98,9 @@ func (r *Reconciler) Apply(ctx context.Context, c Change, mutate func(*store.Mes
 			if err := mutate(tx, &c); err != nil {
 				return err
 			}
+		}
+		if err := checkApart(tx); err != nil {
+			return err
 		}
 		in, nodes, err := LoadInput(tx)
 		if err != nil {

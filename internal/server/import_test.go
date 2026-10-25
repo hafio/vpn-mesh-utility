@@ -137,3 +137,65 @@ func TestLockIsExclusive(t *testing.T) {
 		t.Fatal("Lock in a missing dir succeeded")
 	}
 }
+
+// import --mesh (amendment A49): a mesh the control plane lacks is made for
+// the import with the document's network and zone; an import that fails
+// takes it away again, and one whose network another mesh has is refused
+// while the mesh is being made.
+func TestImportIntoANamedMesh(t *testing.T) {
+	linuxOnly(t)
+	data, ctx := t.TempDir(), context.Background()
+	if _, err := Import(ctx, ImportConfig{DataDir: data, Doc: document()}); err != nil {
+		t.Fatal(err)
+	}
+	lab := document()
+	lab.Settings = map[string]string{store.SettingMeshCIDR: "10.78.0.0/16", store.SettingDNSZone: "lab"}
+	lab.Firewall = nil
+	for i := range lab.Nodes {
+		lab.Nodes[i].MeshIP = strings.Replace(lab.Nodes[i].MeshIP, "10.77.", "10.78.", 1)
+	}
+	// The first mesh's node ids and keys: the lab is made, refused, gone.
+	if _, err := Import(ctx, ImportConfig{DataDir: data, Mesh: "lab", Doc: lab}); err == nil {
+		t.Fatal("an import onto the first mesh's node ids went through")
+	}
+	twin := lab
+	twin.Settings = map[string]string{store.SettingMeshCIDR: testfix.MeshCIDR, store.SettingDNSZone: "twin"}
+	if _, err := Import(ctx, ImportConfig{DataDir: data, Mesh: "twin", Doc: twin}); err == nil ||
+		!strings.Contains(err.Error(), "create mesh twin for the import") || !strings.Contains(err.Error(), "overlaps mesh default's") {
+		t.Fatalf("an import onto the first mesh's network = %v", err)
+	}
+	for i := range lab.Nodes {
+		key := byte(20 + i)
+		lab.Nodes[i].ID += 10
+		lab.Nodes[i].WGPublicKey, lab.Nodes[i].IdentityPublicKey = testfix.WGKey(key), testfix.IdentityKeyB64(key)
+	}
+	res, err := Import(ctx, ImportConfig{DataDir: data, Mesh: "lab", Doc: lab})
+	if err != nil || res.Version != 1 || len(res.Changed) != 3 {
+		t.Fatalf("Import into the lab = %+v, %v", res, err)
+	}
+	st, err := store.Open(ctx, filepath.Join(data, DBFile), store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.Tx(ctx, func(tx *store.Tx) error {
+		meshes, err := tx.Meshes()
+		if err != nil {
+			return err
+		}
+		if len(meshes) != 2 || meshes[0].Name != "default" || meshes[1].Name != "lab" {
+			t.Errorf("meshes = %+v", meshes)
+			return nil
+		}
+		nodes, err := tx.In(meshes[1].ID).Nodes()
+		if err != nil {
+			return err
+		}
+		if len(nodes) != 3 || nodes[0].ID != testfix.VPS1.ID+10 || nodes[0].MeshIP != "10.78.0.1" {
+			t.Errorf("the lab's nodes = %+v", nodes)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

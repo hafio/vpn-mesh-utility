@@ -18,9 +18,15 @@ import (
 func setupExport(fs *flag.FlagSet, e *env) action {
 	data := fs.String("data", "/data", "the server's data directory")
 	out := fs.String("out", "", "write to this file (mode 0600) instead of stdout")
+	mesh := fs.String("mesh", "", "the mesh to export; needed when the control plane has more than one")
 	return func(ctx context.Context, args []string) error {
 		if err := wantArgs(args, 0, ""); err != nil {
 			return err
+		}
+		if *mesh != "" {
+			if _, err := validate.Name("--mesh", *mesh); err != nil {
+				return usagef("%v", err)
+			}
 		}
 		if *out != "" {
 			if _, err := validate.FilePath("--out", *out); err != nil {
@@ -36,7 +42,7 @@ func setupExport(fs *flag.FlagSet, e *env) action {
 		defer st.Close()
 		var snap store.Snapshot
 		if err := st.Tx(ctx, func(tx *store.Tx) error {
-			m, err := api.SoleMesh(tx)
+			m, err := api.PickMesh(tx, *mesh)
 			if err != nil {
 				return err
 			}

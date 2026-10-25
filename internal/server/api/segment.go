@@ -526,24 +526,24 @@ func (s *Nodes) Matrix(ctx context.Context) (Matrix, error) {
 	return out, err
 }
 
-func (a *api) adminSegment(w http.ResponseWriter, r *http.Request) {
-	out, err := a.nodes.Segment(r.Context())
+func (a *api) adminSegment(s *Nodes, w http.ResponseWriter, r *http.Request) {
+	out, err := s.Segment(r.Context())
 	a.reply(w, r, out, err)
 }
 
-func (a *api) adminSetSegment(w http.ResponseWriter, r *http.Request) {
+func (a *api) adminSetSegment(s *Nodes, w http.ResponseWriter, r *http.Request) {
 	var doc store.Segmentation
 	if err := a.readJSON(w, r, &doc); err != nil {
 		a.fail(w, r, err)
 		return
 	}
-	out, err := a.nodes.SetSegment(r.Context(), cli(), doc)
+	out, err := s.SetSegment(r.Context(), cli(), doc)
 	a.reply(w, r, out, err)
 }
 
-func (a *api) adminReach(w http.ResponseWriter, r *http.Request) {
+func (a *api) adminReach(s *Nodes, w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	out, err := a.nodes.Reach(r.Context(), ReachRequest{From: q.Get("from"), To: q.Get("to"), Service: q.Get("service"), At: q.Get("at")})
+	out, err := s.Reach(r.Context(), ReachRequest{From: q.Get("from"), To: q.Get("to"), Service: q.Get("service"), At: q.Get("at")})
 	a.reply(w, r, out, err)
 }
 

@@ -3,7 +3,11 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -95,7 +99,7 @@ func TestMeshesAreApartOnTheAgentAPI(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &joined); err != nil {
 		t.Fatal(err)
 	}
-	if joined.NodeID == testfix.VPS1.ID || joined.ConfigVersion != 1 {
+	if joined.NodeID == testfix.VPS1.ID || joined.ConfigVersion != 1 || joined.Mesh != "lab" || joined.MeshUUID != lab.UUID || joined.Slot != 1 {
 		t.Fatalf("the lab's join = %+v", joined)
 	}
 	f.ID = joined.NodeID
@@ -179,5 +183,258 @@ func TestNodesServiceInAMesh(t *testing.T) {
 	_, err = h.nodes().Apply(ctx, Change{Actor: "test"}, setMTU)
 	refused(t, err, http.StatusBadRequest, "--mesh")
 	err = h.nodes().Tx(ctx, func(*store.MeshTx) error { return nil })
+	refused(t, err, http.StatusBadRequest, "--mesh")
+}
+
+// Meshes are added with their defaults or the values given, listed, shown,
+// renamed and changed, and removed once they have no nodes (amendment A49).
+func TestMeshAdmin(t *testing.T) {
+	h := newHarness(t)
+	h.seedServers(t)
+	ctx := context.Background()
+	s := h.nodes()
+
+	// The next free /16, the name as the zone, a unique local /64, the next
+	// slot and the first mesh's other settings.
+	lab, err := s.AddMesh(ctx, cli(), MeshAddRequest{Name: "lab"})
+	m := lab.Mesh
+	if err != nil || m.Slot != 1 || m.MeshCIDR != "10.78.0.0/16" || m.Zone != "lab" || !strings.HasPrefix(m.MeshCIDR6, "fd") ||
+		m.DefaultMTU != 1420 || strings.Join(m.Upstream, ",") != "1.1.1.1,9.9.9.9" || m.Nodes != 0 || m.UUID == "" || lab.Version != 0 {
+		t.Fatalf("AddMesh(lab) = %+v, %v", lab, err)
+	}
+	home, err := s.AddMesh(ctx, cli(), MeshAddRequest{Name: "home", MeshCIDR: "10.90.0.0/20", Zone: "home.arpa", IPv6: IPv6Off})
+	if m := home.Mesh; err != nil || m.Slot != 2 || m.MeshCIDR != "10.90.0.0/20" || m.Zone != "home.arpa" || m.MeshCIDR6 != "" {
+		t.Fatalf("AddMesh(home) = %+v, %v", home, err)
+	}
+	if seg, err := s.Named("home").Segment(ctx); err != nil || len(seg.Config.Policies) != 1 || seg.Config.Policies[0].Name != "allow-all" {
+		t.Fatalf("a new mesh's firewall = %+v, %v", seg.Config, err)
+	}
+	if v6, err := s.Named("home").IPv6(ctx); err != nil || v6.Prefix != "" {
+		t.Fatalf("IPv6 off = %+v, %v", v6, err)
+	}
+	var audit []store.AuditEntry
+	if err := h.st.Tx(ctx, func(tx *store.Tx) error {
+		lab, err := tx.MeshByName("lab")
+		if err != nil {
+			return err
+		}
+		audit, err = tx.In(lab.ID).AuditLog(10, 0)
+		return err
+	}); err != nil || len(audit) == 0 || audit[0].Action != "mesh.add" || audit[0].Target != "lab" {
+		t.Fatalf("the lab's audit = %+v, %v", audit, err)
+	}
+
+	// Refused before the database, or as a conflict with nothing written.
+	h.db.n.Store(0)
+	for _, c := range []struct {
+		req  MeshAddRequest
+		want string
+	}{
+		{MeshAddRequest{Name: "Lab!"}, "name"},
+		{MeshAddRequest{Name: "local"}, "dns_zone"},
+		{MeshAddRequest{Name: "big", MeshCIDR: "10.0.0.0/8"}, "mesh_cidr"},
+		{MeshAddRequest{Name: "wide", IPv6: "fd00::/32"}, "/48"},
+		{MeshAddRequest{Name: "v6", IPv6: "10.0.0.0/16"}, "ipv6"},
+	} {
+		_, err := s.AddMesh(ctx, cli(), c.req)
+		refused(t, err, http.StatusBadRequest, c.want)
+	}
+	if n := h.db.n.Load(); n != 0 {
+		t.Fatalf("a refused mesh ran %d transactions", n)
+	}
+	for _, c := range []struct {
+		req  MeshAddRequest
+		want string
+	}{
+		{MeshAddRequest{Name: "lab"}, `mesh "lab" exists already`},
+		{MeshAddRequest{Name: "half", MeshCIDR: "10.77.128.0/17"}, "IPv4 network 10.77.128.0/17 overlaps mesh default's 10.77.0.0/16"},
+		{MeshAddRequest{Name: "twin", Zone: "mesh"}, "DNS domain mesh is mesh default's mesh"},
+		{MeshAddRequest{Name: "inner", Zone: "x.lab"}, "DNS domain x.lab is mesh lab's lab"},
+		{MeshAddRequest{Name: "same6", IPv6: m.MeshCIDR6}, "IPv6 prefix"},
+	} {
+		_, err := s.AddMesh(ctx, cli(), c.req)
+		refused(t, err, http.StatusConflict, c.want)
+	}
+	if l, err := s.Meshes(ctx); err != nil || len(l.Meshes) != 3 || l.Meshes[0].Name != "default" || l.Meshes[0].Nodes != 3 ||
+		l.Meshes[1].Name != "lab" || l.Meshes[2].Name != "home" {
+		t.Fatalf("Meshes = %+v, %v", l, err)
+	}
+
+	// A rename keeps the uuid and the slot; settings go through the
+	// reconciler, so a new zone is a config version for the servers.
+	up, err := s.SetMesh(ctx, cli(), "home", MeshSetRequest{Name: ptr("house"), SettingsRequest: SettingsRequest{Zone: ptr("house")}})
+	if err != nil || up.Mesh.Name != "house" || up.Mesh.Slot != 2 || up.Mesh.UUID != home.Mesh.UUID || up.Mesh.Zone != "house" {
+		t.Fatalf("SetMesh(home) = %+v, %v", up, err)
+	}
+	if _, err := s.ShowMesh(ctx, "home"); err == nil {
+		t.Fatal("the old name still shows")
+	}
+	before := h.latestVersion(t)
+	up, err = s.SetMesh(ctx, cli(), "default", MeshSetRequest{SettingsRequest: SettingsRequest{Zone: ptr("corp"), DefaultHub: ptr("vps-2")}})
+	if err != nil || up.Version != before+1 || up.Mesh.Zone != "corp" || up.Mesh.DefaultHub != "vps-2" {
+		t.Fatalf("SetMesh(default) = %+v, %v", up, err)
+	}
+	for _, c := range []struct {
+		name, mesh string
+		req        MeshSetRequest
+		status     int
+		want       string
+	}{
+		{"nothing", "lab", MeshSetRequest{}, http.StatusBadRequest, "nothing to change"},
+		{"bad mesh", "Lab!", MeshSetRequest{Name: ptr("x")}, http.StatusBadRequest, "mesh"},
+		{"bad name", "lab", MeshSetRequest{Name: ptr("X")}, http.StatusBadRequest, "name"},
+		{"no mesh", "none", MeshSetRequest{Name: ptr("x")}, http.StatusNotFound, `no mesh "none"`},
+		{"taken name", "lab", MeshSetRequest{Name: ptr("house")}, http.StatusConflict, `mesh "house" exists already`},
+		{"taken zone", "lab", MeshSetRequest{SettingsRequest: SettingsRequest{Zone: ptr("corp")}}, http.StatusConflict, "mesh default's corp"},
+		{"domain in a zone", "lab", MeshSetRequest{SettingsRequest: SettingsRequest{Domains: &[]string{"a.house"}}}, http.StatusConflict,
+			"DNS domain a.house is mesh house's house"},
+		{"cidr with nodes", "default", MeshSetRequest{SettingsRequest: SettingsRequest{MeshCIDR: ptr("10.79.0.0/16")}}, http.StatusBadRequest,
+			"no nodes"},
+		{"overlapping cidr", "lab", MeshSetRequest{SettingsRequest: SettingsRequest{MeshCIDR: ptr("10.90.0.0/16")}}, http.StatusConflict,
+			"overlaps mesh house's 10.90.0.0/20"},
+		{"bad mtu", "lab", MeshSetRequest{SettingsRequest: SettingsRequest{DefaultMTU: ptr(100)}}, http.StatusBadRequest, "default_mtu"},
+		{"no upstream", "lab", MeshSetRequest{SettingsRequest: SettingsRequest{Upstream: &[]string{}}}, http.StatusBadRequest, "one to four"},
+		{"bad upstream", "lab", MeshSetRequest{SettingsRequest: SettingsRequest{Upstream: &[]string{"dns.example"}}}, http.StatusBadRequest,
+			"upstream_dns"},
+		{"bad zone", "lab", MeshSetRequest{SettingsRequest: SettingsRequest{Zone: ptr("a..b")}}, http.StatusBadRequest, "dns_zone"},
+		{"server's domain", "lab", MeshSetRequest{SettingsRequest: SettingsRequest{Domains: &[]string{"example.com"}}}, http.StatusBadRequest,
+			"server's address"},
+		{"bad hub", "lab", MeshSetRequest{SettingsRequest: SettingsRequest{DefaultHub: ptr("Hub!")}}, http.StatusBadRequest, "default_hub"},
+		{"hub of another mesh", "lab", MeshSetRequest{SettingsRequest: SettingsRequest{DefaultHub: ptr("vps-1")}}, http.StatusBadRequest,
+			"server of this mesh"},
+	} {
+		_, err := s.SetMesh(ctx, cli(), c.mesh, c.req)
+		if got, text := ErrorMessage(err); err == nil || got != c.status || !strings.Contains(text, c.want) {
+			t.Errorf("%s: %v (%d), want %d mentioning %q", c.name, err, got, c.status, c.want)
+		}
+	}
+
+	// A mesh with nodes stays; without them it goes, as the control
+	// plane's audit entry.
+	if _, err := s.Named("lab").Add(ctx, cli(), NodeAddRequest{Name: "nas", Role: "spoke"}); err != nil {
+		t.Fatal(err)
+	}
+	refused(t, s.RemoveMesh(ctx, cli(), "lab"), http.StatusConflict, "still has 1 node(s) (nas)")
+	refused(t, s.RemoveMesh(ctx, cli(), "Lab!"), http.StatusBadRequest, "mesh")
+	refused(t, s.RemoveMesh(ctx, cli(), "none"), http.StatusNotFound, "none")
+	if _, err := s.Named("lab").Remove(ctx, cli(), "nas"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RemoveMesh(ctx, cli(), "lab"); err != nil {
+		t.Fatal(err)
+	}
+	if l, err := s.Meshes(ctx); err != nil || len(l.Meshes) != 2 || h.audits(t, "mesh.rm") != 1 {
+		t.Fatalf("after removing the lab: %+v, %v, %d mesh.rm", l, err, h.audits(t, "mesh.rm"))
+	}
+}
+
+// A mesh moved onto another's addresses or names by any write -- the IPv6
+// prefix here -- is refused by the reconciler, and nothing changes.
+func TestMeshesStayApart(t *testing.T) {
+	h := meshHarness(t)
+	ctx := context.Background()
+	if _, err := h.nodes().SetIPv6(ctx, cli(), IPv6Request{Prefix: testfix.MeshCIDR6}); err != nil {
+		t.Fatal(err)
+	}
+	lab := h.addLab(t)
+	before := h.latestVersion(t)
+	_, err := h.nodes().In(lab.ID).SetIPv6(ctx, cli(), IPv6Request{Prefix: testfix.MeshCIDR6})
+	refused(t, err, http.StatusConflict, "IPv6 prefix "+testfix.MeshCIDR6+" overlaps mesh default's")
+	if v6, err := h.nodes().In(lab.ID).IPv6(ctx); err != nil || v6.Prefix != "" || h.latestVersion(t) != before {
+		t.Fatalf("after the refusal: %+v, %v", v6, err)
+	}
+}
+
+// Every admin route but the meshes' own takes ?mesh=; a name that is not a
+// mesh name is refused before the database, an unknown one says how to list
+// them, and the admin client names its mesh on each request.
+func TestAdminRoutesNameTheirMesh(t *testing.T) {
+	h := newHarness(t)
+	h.seedServers(t)
+	h.addLab(t)
+	var l NodeList
+	if code, eb := adminCall(t, h, http.MethodGet, AdminNodes+"?mesh=lab", nil, &l); code != 200 || len(l.Nodes) != 0 {
+		t.Fatalf("the lab's nodes = %d %+v %+v", code, eb, l)
+	}
+	if code, eb := adminCall(t, h, http.MethodGet, AdminNodes+"?mesh=default", nil, &l); code != 200 || len(l.Nodes) != 3 {
+		t.Fatalf("the first mesh's nodes = %d %+v %+v", code, eb, l)
+	}
+	if code, eb := adminCall(t, h, http.MethodGet, AdminNodes+"?mesh=none", nil, nil); code != 404 || !strings.Contains(eb.Message, "meshctl mesh list") {
+		t.Errorf("an unknown mesh = %d %+v", code, eb)
+	}
+	h.db.n.Store(0)
+	if code, eb := adminCall(t, h, http.MethodGet, AdminNodes+"?mesh=Lab%21", nil, nil); code != 400 || !strings.Contains(eb.Message, "mesh") {
+		t.Errorf("a bad mesh name = %d %+v", code, eb)
+	}
+	if n := h.db.n.Load(); n != 0 {
+		t.Fatalf("a bad mesh name ran %d transactions", n)
+	}
+	var seg SegmentView
+	if code, eb := adminCall(t, h, http.MethodGet, AdminSegmentation+"?mesh=lab", nil, &seg); code != 200 || len(seg.Nodes) != 0 {
+		t.Errorf("the lab's firewall = %d %+v", code, eb)
+	}
+
+	dir, err := os.MkdirTemp("", "mad")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	sock := filepath.Join(dir, "admin.sock")
+	srv := httptest.NewUnstartedServer(h.admin)
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.Listener = ln
+	srv.Start()
+	defer srv.Close()
+	c, ctx := NewAdminClient(sock), context.Background()
+	if _, err := c.List(ctx); err == nil || !strings.Contains(err.Error(), "--mesh") {
+		t.Fatalf("List with two meshes = %v", err)
+	}
+	if ch, err := c.In("lab").Add(ctx, NodeAddRequest{Name: "nas", Role: "spoke"}); err != nil || !strings.HasPrefix(ch.Node.MeshIP, "10.78.") {
+		t.Fatalf("Add in the lab = %+v, %v", ch, err)
+	}
+	if r, err := c.In("lab").Reach(ctx, ReachRequest{From: "nas", To: "10.78.0.9", Service: "tcp/22"}); err != nil || !strings.HasPrefix(r.From, "10.78.") {
+		t.Fatalf("Reach in the lab = %+v, %v", r, err)
+	}
+	if u, err := c.AddMesh(ctx, MeshAddRequest{Name: "home"}); err != nil || u.Mesh.Slot != 2 {
+		t.Fatalf("AddMesh = %+v, %v", u, err)
+	}
+	if l, err := c.Meshes(ctx); err != nil || len(l.Meshes) != 3 || l.Meshes[1].Nodes != 1 {
+		t.Fatalf("Meshes = %+v, %v", l, err)
+	}
+	if u, err := c.SetMesh(ctx, "home", MeshSetRequest{Name: ptr("house")}); err != nil || u.Mesh.Name != "house" {
+		t.Fatalf("SetMesh = %+v, %v", u, err)
+	}
+	if m, err := c.ShowMesh(ctx, "house"); err != nil || m.Slot != 2 {
+		t.Fatalf("ShowMesh = %+v, %v", m, err)
+	}
+	if err := c.RemoveMesh(ctx, "house"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.RemoveMesh(ctx, "lab"); err == nil {
+		t.Fatal("a mesh with a node was removed")
+	}
+}
+
+// SetSettings (the web UI's Settings page) changes its mesh's settings as a
+// config version, refuses a bad value before the database, and names no mesh
+// it cannot tell.
+func TestSetSettings(t *testing.T) {
+	h := meshHarness(t)
+	ctx := context.Background()
+	before := h.latestVersion(t)
+	if ch, err := h.nodes().SetSettings(ctx, Actor{Name: "user:ops", UserID: 1}, SettingsRequest{Zone: ptr("corp")}); err != nil || ch.Version != before+1 {
+		t.Fatalf("a new zone = %+v, %v", ch, err)
+	}
+	h.db.n.Store(0)
+	_, err := h.nodes().SetSettings(ctx, cli(), SettingsRequest{DefaultMTU: ptr(100)})
+	refused(t, err, http.StatusBadRequest, "default_mtu")
+	if n := h.db.n.Load(); n != 0 {
+		t.Fatalf("a refused setting ran %d transactions", n)
+	}
+	h.addLab(t)
+	_, err = h.nodes().SetSettings(ctx, cli(), SettingsRequest{DefaultMTU: ptr(1380)})
 	refused(t, err, http.StatusBadRequest, "--mesh")
 }
