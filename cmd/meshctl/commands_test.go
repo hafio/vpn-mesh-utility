@@ -245,7 +245,8 @@ func TestAgentJoinTakesTheTokenFromTheEnvironment(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(b, &got)
-		_ = json.NewEncoder(w).Encode(proto.JoinResponse{NodeID: 7, Name: "vps-1", Role: proto.RoleServer, MeshIP: "10.77.0.1"})
+		_ = json.NewEncoder(w).Encode(proto.JoinResponse{NodeID: 7, Name: "vps-1", Role: proto.RoleServer, MeshIP: "10.77.0.1",
+			ConfigKey: testfix.ConfigKeyB64()})
 	}))
 	defer srv.Close()
 

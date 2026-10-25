@@ -45,7 +45,9 @@ progress): `meshctl mesh add|list|show|set|rm`, each with its own network, DNS z
 firewall and history, none sharing an address or a domain with another, `--mesh` on every
 admin command, each mesh's web UI pages under `/m/<mesh>/` with a Meshes page, admins and
 users granted meshes, and a host in two meshes running one agent per mesh, each on its slot's
-interface, port, tables and firewall names. The live tests and the v1.0.0 release follow.
+interface, port, tables and firewall names. Configs, mesh views and refusals are signed by the
+control plane and checked by every agent; every join makes fresh keys, and a new token cuts a
+node off at once. The live tests and the v1.0.0 release follow.
 
 ## Quick start
 

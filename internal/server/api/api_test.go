@@ -63,7 +63,8 @@ func newHarness(t *testing.T) *harness {
 	db := &countingDB{st: st}
 	hub := NewHub()
 	rec := NewReconciler(db, hub, nil)
-	d := Deps{DB: db, Hub: hub, Reconciler: rec, Now: clock.Now, ServerURL: testURL, Version: "v1.0.0", KeepAlive: 20 * time.Millisecond}
+	d := Deps{DB: db, Hub: hub, Reconciler: rec, Now: clock.Now, ServerURL: testURL, Version: "v1.0.0", KeepAlive: 20 * time.Millisecond,
+		ConfigKey: testfix.ConfigKey()}
 	return &harness{st: st, db: db, hub: hub, rec: rec, clock: clock, pub: New(d), admin: NewAdmin(d)}
 }
 

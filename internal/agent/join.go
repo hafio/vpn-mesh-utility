@@ -83,10 +83,17 @@ func Join(ctx context.Context, o JoinOptions) (proto.JoinResponse, error) {
 	if err != nil {
 		return proto.JoinResponse{}, err
 	}
-	keys, err := dir.LoadOrCreateKeys()
+	// Never under a running agent, or beside another join.
+	unlock, err := dir.Lock()
 	if err != nil {
 		return proto.JoinResponse{}, err
 	}
+	defer unlock()
+	// Fresh keys at every join (amendment A50), written only once the
+	// control plane has accepted them: a copied data dir that joins again
+	// can never share keys with the original, and a failed join changes
+	// nothing.
+	keys := state.NewKeys()
 	wgPub, err := keys.WGPublic()
 	if err != nil {
 		return proto.JoinResponse{}, err
@@ -117,6 +124,13 @@ func Join(ctx context.Context, o JoinOptions) (proto.JoinResponse, error) {
 	if !slot.Valid() {
 		return resp, fmt.Errorf("join %s: the control plane answered mesh slot %d, outside 0..%d; upgrade this agent", server, resp.Slot, proto.MaxSlot)
 	}
+	if _, err := proto.ParseConfigKey(resp.ConfigKey); err != nil {
+		return resp, fmt.Errorf("join %s: %w", server, err)
+	}
+	if err := dir.SaveKeys(keys); err != nil {
+		return resp, fmt.Errorf("the control plane accepted this node's new keys, but they could not be written: %w; "+
+			"join again with a new token (`meshctl node token %s`)", err, resp.Name)
+	}
 
 	prev, err := dir.Enrollment()
 	if err == nil && (prev.Server != server || prev.NodeID != resp.NodeID) {
@@ -126,7 +140,7 @@ func Join(ctx context.Context, o JoinOptions) (proto.JoinResponse, error) {
 		}
 	}
 	if err := dir.SaveEnrollment(state.Enrollment{Server: server, NodeID: resp.NodeID, Name: resp.Name, Role: resp.Role,
-		MeshIP: resp.MeshIP, JoinedAt: o.Now().Unix(), Mesh: resp.Mesh, MeshUUID: resp.MeshUUID, Slot: slot}); err != nil {
+		MeshIP: resp.MeshIP, JoinedAt: o.Now().Unix(), Mesh: resp.Mesh, MeshUUID: resp.MeshUUID, Slot: slot, ConfigKey: resp.ConfigKey}); err != nil {
 		return resp, err
 	}
 	fmt.Fprintf(o.Out, "joined %s as %s (%s, mesh %s, node id %d)\n", server, resp.Name, resp.Role, meshAddresses(resp), resp.NodeID)

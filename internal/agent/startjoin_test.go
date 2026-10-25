@@ -36,7 +36,7 @@ func startDir(t *testing.T, joined bool, recorded string) (string, *state.Dir) {
 	}
 	if joined {
 		if err := dir.SaveEnrollment(state.Enrollment{Server: "https://mesh.example.com", NodeID: 4, Name: "nas", Role: proto.RoleSpoke,
-			MeshIP: "10.77.1.1"}); err != nil {
+			MeshIP: "10.77.1.1", ConfigKey: testfix.ConfigKeyB64()}); err != nil {
 			t.Fatal(err)
 		}
 	}

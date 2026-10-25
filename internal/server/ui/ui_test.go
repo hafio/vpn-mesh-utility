@@ -330,6 +330,45 @@ func (r *rig) nodes() []store.Node {
 	return out
 }
 
+// A token for a node seen within five minutes asks first, since it cuts
+// the running node off (amendment A50); confirmed, it does, and says so.
+func TestTokenForARunningNode(t *testing.T) {
+	r := newRig(t)
+	cookie, csrf := r.signIn()
+	post := func(path string, form url.Values) *httptest.ResponseRecorder {
+		t.Helper()
+		form.Set("csrf", csrf)
+		return r.do(http.MethodPost, path, cookie, form)
+	}
+	if w := post("/m/default/nodes", url.Values{"name": {"vps-1"}, "role": {"server"}, "endpoint": {"203.0.113.10:51820"}}); w.Code != http.StatusOK {
+		t.Fatalf("add = %d", w.Code)
+	}
+	if err := r.st.MeshTx(context.Background(), store.FirstMesh, func(tx *store.MeshTx) error {
+		n, err := tx.NodeByName("vps-1")
+		if err != nil {
+			return err
+		}
+		n.Enrolled, n.WGPubKey, n.IdentityPubKey = true, testfix.WGKey(1), testfix.IdentityKeyB64(1)
+		if err := tx.UpdateNode(n); err != nil {
+			return err
+		}
+		return tx.RecordStatus(n.ID, store.StatusUpdate{AgentVersion: "v1.0.0", WGBackend: "kernel", StatusJSON: "{}"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if w := post("/m/default/nodes/vps-1/token", url.Values{}); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Cut vps-1 off and issue a token") ||
+		!r.nodes()[0].Enrolled {
+		t.Fatalf("token for a running node = %d\n%s", w.Code, w.Body)
+	}
+	if w := post("/m/default/nodes/vps-1/token", url.Values{"confirm": {"yes"}}); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "is cut off now") ||
+		r.nodes()[0].Enrolled {
+		t.Fatalf("token confirmed = %d\n%s", w.Code, w.Body)
+	}
+	if w := post("/m/default/nodes/ghost/token", url.Values{}); w.Code != http.StatusNotFound {
+		t.Fatalf("token for an unknown node = %d", w.Code)
+	}
+}
+
 func TestNodeLifecycle(t *testing.T) {
 	r := newRig(t)
 	cookie, csrf := r.signIn()
@@ -1126,7 +1165,7 @@ func TestEveryPageRenders(t *testing.T) {
 	data := map[string]any{
 		"login": loginData{}, "totp": nil, "enroll": enrollData{Account: "admin", Secret: "ABCD EFGH"}, "dashboard": dashboardData{},
 		"nodes": nodesData{}, "enrollment": enrollmentData{Node: "vps-1", Token: "t"},
-		"node": nodeData{Node: api.NodeInfo{Rollback: &proto.Rollback{From: 5, To: 4, Reason: "no answer from the server"}}}, "remove": api.NodeInfo{Name: "x"},
+		"node": nodeData{Node: api.NodeInfo{Rollback: &proto.Rollback{From: 5, To: 4, Reason: "no answer from the server"}}}, "remove": api.NodeInfo{Name: "x"}, "token": tokenData{Node: api.NodeInfo{Name: "x"}, Ago: time.Minute},
 		"versions": versionsData{}, "version": versionData{Current: true}, "audit": auditData{}, "settings": settingsData{},
 		"users": usersData{Rows: []userRow{{Name: "ops"}, {Name: "admin", Self: true}}, Meshes: []string{"default"}}, "account": nil, "error": nil, "meshes": meshesData{Meshes: []api.MeshInfo{{Name: "default"}}},
 		"dns": dnsData{}, "firewall": fwPage{Tabs: fwTabs, View: policiesView{Policies: []policyRow{{Pos: 1, Name: "p", First: true}}}},

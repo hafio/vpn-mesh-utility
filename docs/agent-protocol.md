@@ -79,7 +79,7 @@ The server checks, in this order, and stops at the first failure:
 | timestamp within +-60 s of the server clock | 401 `clock_skew`, with `server_time` |
 | signature not seen in the last 120 s | 401 `replay` |
 | node exists and has joined | 401 `unauthorized` |
-| signature verifies with the node's identity key | 401 `unauthorized` |
+| signature verifies with the node's identity key | 403 `replaced` when it verifies with a key the node had before (amendment A50), else 401 `unauthorized` |
 | node is not disabled | 403 `node_disabled` |
 
 The first four need no database read. A signature is remembered only after it verifies, and when
@@ -96,8 +96,21 @@ Every non-2xx answer is JSON:
 
 Agents branch on `code`, never on `message`. Codes: `bad_request`, `unauthorized`,
 `clock_skew`, `replay`, `node_disabled`, `token_invalid`, `not_found`, `conflict`,
-`rate_limited`, `too_large`, `internal`. Messages say what failed and what to do; they never
+`rate_limited`, `too_large`, `internal`, `replaced`. Messages say what failed and what to do; they never
 contain a token or a key. A 500 says only "internal error"; the detail is in the server log.
+
+**Signed answers** (amendment A50). The control plane signs with its key (`<data>/config.key`,
+Ed25519, pinned by the agent at join):
+
+| Answer | Header | Covers |
+| --- | --- | --- |
+| a config, a mesh view (200 with a body) | `X-Mesh-Config-Signature` | `"meshctl-config"` or `"meshctl-mesh"`, the node id, its mesh's slot, the request's nonce, then the exact body, joined by newlines |
+| a definitive refusal (`replaced`) | `X-Mesh-Refusal-Signature` | `"meshctl-refusal"`, the node id, the code, the request's nonce and the body's `server_time`, joined by newlines |
+
+The agent uses a config or mesh view only when its signature verifies for the request it sent,
+and keeps it with its nonce and signature (`config.json.sig`, `mesh.json.sig`), checked again at
+every boot. A definitive refusal ends the agent's run (`agent run` exits 3) only when its
+signature verifies; unsigned, it is logged and retried like any other error.
 
 ## Join
 
@@ -114,6 +127,15 @@ consumed in the same transaction that registers the keys and recomputes the mesh
 fails for any reason (a disabled node, a key another node already uses, a plan error) leaves the
 token usable. Phones cannot join this way; they enroll by QR code (M4).
 
+Every join brings fresh keys (amendment A50): the agent makes a new identity and WireGuard key,
+sends their public halves and writes them only after the 200, so a failed join leaves the old
+ones. An identity key any node ever had is refused (409 `conflict`). The key the join replaces
+joins the node's key history. Issuing a token (`meshctl node token`, the node page,
+`POST /admin/v1/nodes/{name}/token`) retires the node's current key at once and takes it out of
+every peer's config until it joins again; a request signed with any retired key of the node is
+answered 403 `replaced`, signed. The agent holds `<data>/agent.lock` while it joins and while it
+runs: a join under a running agent, or a second agent, is refused before it touches anything.
+
 A server node's endpoint is `endpoint` (from `--endpoint`), else `public_ip` (the first public
 IPv4 on the agent's interfaces) with the node's listen port, else the endpoint set with
 `meshctl node add --endpoint`, else the address the request came from if it is public
@@ -124,8 +146,9 @@ endpoint. Spokes ignore all of these.
 
 The answer: `{"node_id", "name", "role", "mesh_ip", "config_version", "server_time"}`,
 `mesh_ip6` when the node has one, and the mesh it joined: `mesh` (its name), `mesh_uuid` and
-`slot` (amendment A49; 0 is left out). The agent records them in `state.json` (a slot outside
-0..63 is refused, nothing recorded) and names everything it makes on the host after the slot
+`slot` (amendment A49; 0 is left out), and `config_key`, the control plane's public key
+(amendment A50). The agent records them in `state.json` (a slot outside 0..63, or no valid key,
+is refused and nothing recorded) and names everything it makes on the host after the slot
 (below).
 
 ## Config and events

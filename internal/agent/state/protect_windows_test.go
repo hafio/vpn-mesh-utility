@@ -15,7 +15,7 @@ import (
 // Administrators' (plus an unelevated creator's), and nobody else's.
 func TestDataDirIsProtectedOnWindows(t *testing.T) {
 	d := open(t)
-	if _, err := d.LoadOrCreateKeys(); err != nil {
+	if err := d.SaveKeys(NewKeys()); err != nil {
 		t.Fatal(err)
 	}
 	for _, p := range []string{d.Path, filepath.Join(d.Path, WGKeyFile)} {

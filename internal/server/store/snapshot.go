@@ -155,7 +155,8 @@ func DecodeSnapshot(b []byte) (Snapshot, error) {
 // deleted, nodes in s are re-created or updated (keeping their ids, so
 // references stay valid), and custom DNS records, segmentation and desired
 // settings are replaced. Heartbeat and reconciler fields of surviving nodes
-// are left alone; the caller recomputes configs afterwards.
+// are left alone, and so is what each brought at its join: keys, enrollment
+// and platform (amendment A50). The caller recomputes configs afterwards.
 func (t *MeshTx) Restore(s Snapshot) error {
 	if s.Format != SnapshotFormat {
 		return fmt.Errorf("restore: snapshot format %q is not %q", s.Format, SnapshotFormat)
@@ -188,22 +189,27 @@ func (t *MeshTx) Restore(s Snapshot) error {
 		if family == "" {
 			family = proto.FamilyDual
 		}
-		args := []any{n.Name, n.Role, nullStr(n.MeshIP), nullStr(n.WGPubKey), nullStr(n.IdentityPubKey), n.Endpoint,
-			n.ListenPort, boolInt(n.CanExit), n.Keepalive, n.MTU, boolInt(n.Enrolled), boolInt(n.Disabled),
-			n.OS, n.Arch, n.Hostname, n.WGBackend, mode, n.ContainerSubnet,
-			nullStr(n.MeshIP6), family, n.Endpoint6, n.ContainerSubnet6}
 		if exists[n.ID] {
-			_, err = t.exec(`UPDATE nodes SET name = ?, role = ?, mesh_ip = ?, wg_pubkey = ?, identity_pubkey = ?,
-					endpoint = ?, listen_port = ?, can_exit = ?, keepalive = ?, mtu = ?, enrolled = ?, disabled = ?,
-					os = ?, arch = ?, hostname = ?, wg_backend = ?, mode = ?, container_subnet = ?,
+			// What the node itself brought at its join -- its keys, whether
+			// it is enrolled, its platform -- stays as it is now: a rollback
+			// or an import must never bring back a key a token cut off
+			// (amendment A50).
+			_, err = t.exec(`UPDATE nodes SET name = ?, role = ?, mesh_ip = ?, endpoint = ?, listen_port = ?, can_exit = ?,
+					keepalive = ?, mtu = ?, disabled = ?, mode = ?, container_subnet = ?,
 					mesh_ip6 = ?, ip_family = ?, endpoint6 = ?, container_subnet6 = ?,
 					primary_hub_id = NULL, exit_via = NULL
-				WHERE id = ?`, append(args, n.ID)...)
+				WHERE id = ?`, n.Name, n.Role, nullStr(n.MeshIP), n.Endpoint, n.ListenPort, boolInt(n.CanExit),
+				n.Keepalive, n.MTU, boolInt(n.Disabled), mode, n.ContainerSubnet,
+				nullStr(n.MeshIP6), family, n.Endpoint6, n.ContainerSubnet6, n.ID)
 		} else {
 			_, err = t.exec(`INSERT INTO nodes (name, role, mesh_ip, wg_pubkey, identity_pubkey, endpoint,
 					listen_port, can_exit, keepalive, mtu, enrolled, disabled, os, arch, hostname, wg_backend,
 					mode, container_subnet, mesh_ip6, ip_family, endpoint6, container_subnet6, id, created_at, mesh_id)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, append(args, n.ID, n.CreatedAt, t.mesh)...)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				n.Name, n.Role, nullStr(n.MeshIP), nullStr(n.WGPubKey), nullStr(n.IdentityPubKey), n.Endpoint,
+				n.ListenPort, boolInt(n.CanExit), n.Keepalive, n.MTU, boolInt(n.Enrolled), boolInt(n.Disabled),
+				n.OS, n.Arch, n.Hostname, n.WGBackend, mode, n.ContainerSubnet,
+				nullStr(n.MeshIP6), family, n.Endpoint6, n.ContainerSubnet6, n.ID, n.CreatedAt, t.mesh)
 		}
 		if err != nil {
 			return fmt.Errorf("restore node %q: %w", n.Name, err)

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -38,10 +39,16 @@ func (a *api) authenticate(w http.ResponseWriter, r *http.Request) (store.Node, 
 	if a.replay.Seen(sig, now) {
 		return store.Node{}, nil, errReplay
 	}
-	var node store.Node
+	var (
+		node    store.Node
+		retired []string
+	)
 	err = a.DB.Tx(r.Context(), func(tx *store.Tx) error {
 		var err error
-		node, err = tx.NodeByID(signed.NodeID)
+		if node, err = tx.NodeByID(signed.NodeID); err != nil {
+			return err
+		}
+		retired, err = tx.RetiredKeys(node.ID)
 		return err
 	})
 	switch {
@@ -52,13 +59,25 @@ func (a *api) authenticate(w http.ResponseWriter, r *http.Request) (store.Node, 
 		return store.Node{}, nil, err
 	}
 	pub, err := base64.StdEncoding.DecodeString(node.IdentityPubKey)
-	if !node.Enrolled || err != nil {
+	verr := signed.Verify(pub, r.Method, r.URL.RequestURI(), body, now)
+	if !node.Enrolled || err != nil || verr != nil {
+		// A key the node had before is told so, definitively (amendment
+		// A50): this copy stops instead of retrying forever.
+		for _, k := range retired {
+			if old, err := base64.StdEncoding.DecodeString(k); err == nil && signed.Verify(old, r.Method, r.URL.RequestURI(), body, now) == nil {
+				return store.Node{}, nil, errorf(http.StatusForbidden, proto.CodeReplaced,
+					"node %q no longer has this agent's key: a new join token was issued for it, or it joined again elsewhere; "+
+						"this copy stops -- join it with a new token (`meshctl node token %s`) if it should run here", node.Name, node.Name)
+			}
+		}
+	}
+	switch {
+	case !node.Enrolled || err != nil:
 		return store.Node{}, nil, errorf(http.StatusUnauthorized, proto.CodeUnauthorized,
 			"node %q has not joined yet; run `meshctl agent join` with its token", node.Name)
-	}
-	if err := signed.Verify(pub, r.Method, r.URL.RequestURI(), body, now); err != nil {
+	case verr != nil:
 		return store.Node{}, nil, errorf(http.StatusUnauthorized, proto.CodeUnauthorized,
-			"%v; the agent's identity key does not match the one registered for node %q (re-join if its data dir was replaced)", err, node.Name)
+			"%v; the agent's identity key does not match the one registered for node %q (re-join if its data dir was replaced)", verr, node.Name)
 	}
 	if node.Disabled {
 		return store.Node{}, nil, errorf(http.StatusForbidden, proto.CodeNodeDisabled,
@@ -122,6 +141,21 @@ func (a *api) join(w http.ResponseWriter, r *http.Request) {
 			return errorf(http.StatusBadRequest, proto.CodeBadRequest, "node %q is a phone; phones join by QR code, not with an agent", n.Name)
 		}
 		rejoin := n.Enrolled
+		// Every join brings fresh keys (amendment A50): one this node, or
+		// any other, ever had is refused, and the key it replaces joins
+		// the node's key history.
+		switch used, err := tx.KeyRetired(req.IdentityPublicKey); {
+		case err != nil:
+			return err
+		case used:
+			return errorf(http.StatusConflict, proto.CodeConflict,
+				"this identity key was cut off before; the agent makes fresh keys at every join -- is it an older meshctl? Upgrade it")
+		}
+		if n.IdentityPubKey != req.IdentityPublicKey {
+			if err := tx.RetireKey(n.ID, n.IdentityPubKey, a.Now().Unix()); err != nil {
+				return err
+			}
+		}
 		n.WGPubKey, n.IdentityPubKey = req.WGPublicKey, req.IdentityPublicKey
 		n.OS, n.Arch, n.Hostname, n.WGBackend, n.AgentVersion = req.OS, req.Arch, req.Hostname, req.WGBackend, req.AgentVersion
 		n.Enrolled = true
@@ -168,10 +202,15 @@ func (a *api) join(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
+	if a.ConfigKey == nil {
+		a.fail(w, r, errNoConfigKey)
+		return
+	}
 	writeJSON(w, http.StatusOK, proto.JoinResponse{
 		NodeID: n.ID, Name: n.Name, Role: proto.Role(n.Role), MeshIP: n.MeshIP,
 		ConfigVersion: n.ConfigVersion, ServerTime: a.Now().Unix(), MeshIP6: n.MeshIP6,
 		Mesh: m.Name, MeshUUID: m.UUID, Slot: m.Slot,
+		ConfigKey: base64.StdEncoding.EncodeToString(a.ConfigKey.Public().(ed25519.PublicKey)),
 	})
 }
 
@@ -253,7 +292,7 @@ func (a *api) config(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
-	writeJSON(w, http.StatusOK, cfg)
+	a.writeSigned(w, r, proto.SignedConfig, node.ID, cfg.Node.Slot, cfg)
 }
 
 // events is the node's SSE stream (spec S6.3). It opens with a retry hint and
@@ -483,9 +522,13 @@ func (a *api) mesh(w http.ResponseWriter, r *http.Request) {
 	}
 	now := a.Now()
 	view := proto.MeshView{ServerTime: now.Unix(), Nodes: []proto.MeshNode{}}
+	var m store.Mesh
 	err = a.DB.Tx(r.Context(), func(raw *store.Tx) error {
 		tx := raw.In(node.MeshID)
 		var err error
+		if m, err = tx.MeshByID(node.MeshID); err != nil {
+			return err
+		}
 		if view.Version, err = tx.LatestVersion(); err != nil {
 			return err
 		}
@@ -511,7 +554,7 @@ func (a *api) mesh(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, view)
+	a.writeSigned(w, r, proto.SignedMesh, node.ID, proto.Slot(m.Slot), view)
 }
 
 // health answers the container healthcheck: the process is serving and the

@@ -30,7 +30,7 @@ func TestSafeApplyStateMachine(t *testing.T) {
 	if _, ok := s.confirm(clock.Now()); ok {
 		t.Fatal("confirmed with nothing pending")
 	}
-	s.arm(version(4), "h4", version(3), clock.Now())
+	s.arm(version(4), proto.SignedBody{}, "h4", version(3), clock.Now())
 	if s.confirmedHash() == "" {
 		t.Fatal("a pending apply knows the confirmed config's hash")
 	}
@@ -46,8 +46,8 @@ func TestSafeApplyStateMachine(t *testing.T) {
 	}
 
 	// A config that replaces a pending one keeps the confirmed one as prev.
-	s.arm(version(5), "h5", version(4), clock.Now())
-	s.arm(version(6), "h6", version(5), clock.Now())
+	s.arm(version(5), proto.SignedBody{}, "h5", version(4), clock.Now())
+	s.arm(version(6), proto.SignedBody{}, "h6", version(5), clock.Now())
 	clock.Advance(time.Minute)
 	p, ok := s.expired(clock.Now())
 	if !ok || p.cfg.Version != 6 || p.prev.Version != 4 || s.pending != nil {
@@ -56,7 +56,7 @@ func TestSafeApplyStateMachine(t *testing.T) {
 	if s.confirmedHash() != "" {
 		t.Fatal("nothing is pending any more")
 	}
-	s.arm(version(7), "h7", version(6), clock.Now())
+	s.arm(version(7), proto.SignedBody{}, "h7", version(6), clock.Now())
 	s.disarm()
 	if _, ok := s.expired(clock.Now().Add(time.Hour)); ok {
 		t.Fatal("a disarmed apply expired")
@@ -85,7 +85,7 @@ func TestSafeApplyConfirmsWhenTheServerAnswers(t *testing.T) {
 	eventually(t, "v3", func() bool { return r.peers() == 2 })
 	f.push <- f.set(version(4))
 	eventually(t, "v4 confirmed and cached", func() bool {
-		c, _ := dir.Config()
+		c, _ := dir.Config(vps1)
 		return r.peers() == 1 && c != nil && c.Version == 4 && !pendingExists(dir)
 	})
 	clock.Advance(2 * time.Second)
@@ -103,7 +103,7 @@ func TestSafeApplyRollsBackWithoutAnAnswer(t *testing.T) {
 	f.setStatusDown(true)
 	f.push <- f.set(version(4))
 	eventually(t, "v4 applied and pending", func() bool { return r.peers() == 1 && pendingExists(dir) })
-	if c, _ := dir.Config(); c.Version != 3 {
+	if c, _ := dir.Config(vps1); c.Version != 3 {
 		t.Fatalf("the cache moved to v%d before confirmation", c.Version)
 	}
 	clock.Advance(2 * time.Second)
@@ -127,17 +127,17 @@ func TestSafeApplyRollsBackWithoutAnAnswer(t *testing.T) {
 	f.push <- f.set(version(5))
 	eventually(t, "v5 confirmed without the rollback", func() bool {
 		rep, ok := f.lastReport()
-		c, _ := dir.Config()
+		c, _ := dir.Config(vps1)
 		return ok && rep.AppliedVersion == 5 && rep.Rollback == nil && c != nil && c.Version == 5
 	})
 }
 
 func TestSafeApplyRecoversAPendingConfigAtBoot(t *testing.T) {
 	dir, f := joinedTo(t, version(4))
-	if err := dir.SaveConfig(version(3)); err != nil {
+	if err := dir.SaveConfig(testfix.SignedConfig(version(3))); err != nil {
 		t.Fatal(err)
 	}
-	if err := dir.SavePending(version(4)); err != nil { // the agent stopped inside the window
+	if err := dir.SavePending(testfix.SignedConfig(version(4))); err != nil { // the agent stopped inside the window
 		t.Fatal(err)
 	}
 	r, _ := safeRig(t, dir)
@@ -178,7 +178,7 @@ func TestSafeApplyDisarmsWhenTheServerGoesBack(t *testing.T) {
 	if strings.Contains(logs.String(), "rolled back") {
 		t.Fatalf("a disarmed apply was rolled back:\n%s", logs.String())
 	}
-	if c, _ := dir.Config(); c == nil || c.Version != 3 {
+	if c, _ := dir.Config(vps1); c == nil || c.Version != 3 {
 		t.Fatalf("cached config %+v, want v3", c)
 	}
 }
@@ -216,7 +216,7 @@ func TestSpokesDoNotArmSafeApply(t *testing.T) {
 	next.Peers = next.Peers[:2]
 	f.push <- f.set(next)
 	eventually(t, "v6 cached", func() bool {
-		c, _ := dir.Config()
+		c, _ := dir.Config(testfix.Pinned(testfix.Laptop.ID))
 		return r.peers() == 2 && c != nil && c.Version == 6 && !pendingExists(dir)
 	})
 	clock.Advance(2 * time.Second) // past the window, inside the signature skew

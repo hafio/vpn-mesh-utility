@@ -161,8 +161,13 @@ func TestAdminTokenAndShow(t *testing.T) {
 		t.Fatalf("token: %d %+v", code, ch)
 	}
 	var d NodeDetail
-	if code, _ := adminCall(t, h, http.MethodGet, AdminNodes+"/vps-2", nil, &d); code != 200 || d.Config == nil || d.Node.Name != "vps-2" {
+	if code, _ := adminCall(t, h, http.MethodGet, AdminNodes+"/vps-1", nil, &d); code != 200 || d.Config == nil || d.Node.Name != "vps-1" {
 		t.Fatalf("show: %d %+v", code, d)
+	}
+	// The token cut vps-2 off (amendment A50): no config until it joins.
+	var cut NodeDetail
+	if code, _ := adminCall(t, h, http.MethodGet, AdminNodes+"/vps-2", nil, &cut); code != 200 || cut.Config != nil || cut.Node.Enrolled {
+		t.Fatalf("show the cut-off vps-2: %d %+v", code, cut)
 	}
 	if code, _ := adminCall(t, h, http.MethodGet, AdminNodes+"/Bad_Name", nil, nil); code != 400 {
 		t.Fatalf("show with a bad name: %d", code)

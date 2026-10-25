@@ -14,6 +14,9 @@ Type=simple
 ExecStart=/usr/local/bin/meshctl agent run --data /var/lib/meshctl
 Restart=always
 RestartSec=5
+# Exit 3: the control plane refused this node (amendment A50); it stays
+# stopped until an operator acts.
+RestartPreventExitStatus=3
 StateDirectory=meshctl
 StateDirectoryMode=0700
 RuntimeDirectory=meshctl wireguard

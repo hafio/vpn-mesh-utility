@@ -46,6 +46,10 @@ const (
 	// JoinFile is the fingerprint of the join token `meshctl start` last
 	// used (amendment A47), so a container joins once per token.
 	JoinFile = "join.json"
+	// LockFile is held by the one process that uses the data dir (Lock).
+	LockFile = "agent.lock"
+	// sigSuffix names the signature beside a cached body: config.json.sig.
+	sigSuffix = ".sig"
 )
 
 // ErrNotJoined means the data directory has no enrollment yet.
@@ -87,6 +91,16 @@ type Enrollment struct {
 	Mesh     string     `json:"mesh,omitempty"`
 	MeshUUID string     `json:"mesh_uuid,omitempty"`
 	Slot     proto.Slot `json:"slot,omitempty"`
+	// ConfigKey is the control plane's public key pinned at join
+	// (amendment A50): the agent trusts no config, mesh view or refusal
+	// that it did not sign.
+	ConfigKey string `json:"config_key"`
+}
+
+// Pinned is what the node checks its control plane's answers with.
+func (e Enrollment) Pinned() proto.Pinned {
+	key, _ := proto.ParseConfigKey(e.ConfigKey) // checked by Enrollment
+	return proto.Pinned{Key: key, NodeID: e.NodeID, Slot: e.Slot}
 }
 
 // Enrollment reads state.json; ErrNotJoined when there is none.
@@ -101,6 +115,9 @@ func (d *Dir) Enrollment() (Enrollment, error) {
 	var e Enrollment
 	if err := json.Unmarshal(b, &e); err != nil {
 		return Enrollment{}, fmt.Errorf("read enrollment %s: %w (re-join to rewrite it)", d.file(EnrollmentFile), err)
+	}
+	if _, err := proto.ParseConfigKey(e.ConfigKey); err != nil {
+		return Enrollment{}, fmt.Errorf("enrollment %s has no valid control plane key (%w); re-join with a new token", d.file(EnrollmentFile), err)
 	}
 	if _, err := validate.ServerURL("server", e.Server); err != nil || e.NodeID <= 0 || !e.Slot.Valid() {
 		return Enrollment{}, fmt.Errorf("enrollment %s is damaged; re-join to rewrite it", d.file(EnrollmentFile))
@@ -154,30 +171,30 @@ func (d *Dir) LoadKeys() (Keys, error) {
 	return k, nil
 }
 
-// LoadOrCreateKeys reads both keys, generating whichever is missing. Re-joining
-// keeps existing keys, so a node that only needed a new token keeps its
-// identity.
-func (d *Dir) LoadOrCreateKeys() (Keys, error) {
+// NewKeys makes a fresh pair of keys. A join sends their public halves and
+// writes them (SaveKeys) only once the control plane has accepted them
+// (amendment A50), so a failed join leaves the old keys as they were.
+func NewKeys() Keys {
+	k := Keys{Identity: ed25519.NewKeyFromSeed(newSeed())}
+	copy(k.WG[:], newWGKey())
+	return k
+}
+
+// SaveKeys replaces both keys, each file atomically.
+func (d *Dir) SaveKeys(k Keys) error {
 	for _, f := range []struct {
 		name string
-		gen  func() []byte
+		key  []byte
 	}{
-		{IdentityKeyFile, newSeed},
-		{WGKeyFile, newWGKey},
+		{IdentityKeyFile, k.Identity.Seed()},
+		{WGKeyFile, k.WG[:]},
 	} {
-		_, err := os.Stat(d.file(f.name))
-		if err == nil {
-			continue
-		}
-		if !errors.Is(err, fs.ErrNotExist) {
-			return Keys{}, fmt.Errorf("check %s: %w", d.file(f.name), err)
-		}
-		line := base64.StdEncoding.EncodeToString(f.gen()) + "\n"
+		line := base64.StdEncoding.EncodeToString(f.key) + "\n"
 		if err := fsutil.WriteAtomic(d.Path, f.name, []byte(line), 0o600); err != nil {
-			return Keys{}, err
+			return err
 		}
 	}
-	return d.LoadKeys()
+	return nil
 }
 
 func newSeed() []byte {
@@ -219,65 +236,117 @@ func (d *Dir) readKey(name string, size int) ([]byte, error) {
 	return key, nil
 }
 
-// Config returns the cached config, or nil when there is none.
-func (d *Dir) Config() (*proto.NodeConfig, error) { return d.readConfig(ConfigFile) }
+// The caches hold the control plane's answers exactly as it signed them
+// (amendment A50): the body in its file, the request nonce and signature in
+// the file beside it (config.json.sig). Each is checked with the pinned key
+// when it is read, so a cache changed on disk is ignored like a forged
+// answer.
 
-// PendingConfig returns the config safe apply was waiting to confirm, or nil.
-func (d *Dir) PendingConfig() (*proto.NodeConfig, error) { return d.readConfig(PendingConfigFile) }
+// sigFile is the signature beside a cached body.
+type sigFile struct {
+	Nonce     string `json:"nonce"`
+	Signature string `json:"signature"`
+	// FetchedAt is when a mesh view was fetched (unix seconds).
+	FetchedAt int64 `json:"fetched_at,omitempty"`
+}
 
-func (d *Dir) readConfig(name string) (*proto.NodeConfig, error) {
-	b, err := os.ReadFile(d.file(name))
+// writeSigned caches b in name, the signature first: a crash in between
+// leaves a pair that does not verify, which is ignored.
+func (d *Dir) writeSigned(name string, b proto.SignedBody, fetchedAt int64) error {
+	sig, err := json.Marshal(sigFile{Nonce: b.Nonce, Signature: b.Signature, FetchedAt: fetchedAt})
+	if err != nil {
+		return fmt.Errorf("encode %s%s: %w", name, sigSuffix, err)
+	}
+	if err := fsutil.WriteAtomic(d.Path, name+sigSuffix, append(sig, '\n'), 0o600); err != nil {
+		return err
+	}
+	return fsutil.WriteAtomic(d.Path, name, b.Body, 0o600)
+}
+
+// readSigned reads a cached body and its signature, checked with p as kind;
+// nothing cached is nil.
+func (d *Dir) readSigned(name, kind string, p proto.Pinned) (*proto.SignedBody, int64, error) {
+	body, err := os.ReadFile(d.file(name))
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
+		return nil, 0, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", d.file(name), err)
+		return nil, 0, fmt.Errorf("read %s: %w", d.file(name), err)
+	}
+	raw, err := os.ReadFile(d.file(name + sigSuffix))
+	var sig sigFile
+	if err == nil {
+		err = json.Unmarshal(raw, &sig)
+	}
+	b := proto.SignedBody{Body: body, Nonce: sig.Nonce, Signature: sig.Signature}
+	if err == nil {
+		err = p.VerifyBody(kind, b)
+	}
+	if err != nil {
+		return nil, 0, fmt.Errorf("%s is not as the control plane signed it (%w); it is ignored until the server sends a new one", d.file(name), err)
+	}
+	return &b, sig.FetchedAt, nil
+}
+
+// removeSigned drops a cached body and its signature.
+func (d *Dir) removeSigned(name string) error {
+	for _, f := range []string{name, name + sigSuffix} {
+		if err := os.Remove(d.file(f)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("remove %s: %w", d.file(f), err)
+		}
+	}
+	return nil
+}
+
+// Config returns the cached config, checked with p, or nil when there is
+// none.
+func (d *Dir) Config(p proto.Pinned) (*proto.NodeConfig, error) { return d.readConfig(ConfigFile, p) }
+
+// PendingConfig returns the config safe apply was waiting to confirm,
+// checked with p, or nil.
+func (d *Dir) PendingConfig(p proto.Pinned) (*proto.NodeConfig, error) {
+	return d.readConfig(PendingConfigFile, p)
+}
+
+func (d *Dir) readConfig(name string, p proto.Pinned) (*proto.NodeConfig, error) {
+	b, _, err := d.readSigned(name, proto.SignedConfig, p)
+	if b == nil || err != nil {
+		return nil, err
 	}
 	var c proto.NodeConfig
-	if err := json.Unmarshal(b, &c); err != nil {
+	if err := json.Unmarshal(b.Body, &c); err != nil {
 		return nil, fmt.Errorf("cached config %s is damaged (%w); it is ignored until the server sends a new one", d.file(name), err)
 	}
 	return &c, nil
 }
 
-// SavePending records c as applied but not yet confirmed.
-func (d *Dir) SavePending(c proto.NodeConfig) error {
-	b, err := json.MarshalIndent(c, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode config: %w", err)
-	}
-	return fsutil.WriteAtomic(d.Path, PendingConfigFile, append(b, '\n'), 0o600)
-}
+// SavePending records a config as applied but not yet confirmed.
+func (d *Dir) SavePending(b proto.SignedBody) error { return d.writeSigned(PendingConfigFile, b, 0) }
 
 // ClearPending drops the pending config: it was confirmed or rolled back.
-func (d *Dir) ClearPending() error {
-	if err := os.Remove(d.file(PendingConfigFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("remove %s: %w", d.file(PendingConfigFile), err)
-	}
-	return nil
-}
+func (d *Dir) ClearPending() error { return d.removeSigned(PendingConfigFile) }
 
-// SaveConfig caches c as the config to re-apply at boot, keeping the one it
-// replaces as config.prev.json.
-func (d *Dir) SaveConfig(c proto.NodeConfig) error {
-	b, err := json.MarshalIndent(c, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode config: %w", err)
-	}
-	if prev, err := os.ReadFile(d.file(ConfigFile)); err == nil {
-		if err := fsutil.WriteAtomic(d.Path, PrevConfigFile, prev, 0o600); err != nil {
+// SaveConfig caches a config as the one to re-apply at boot, keeping the one
+// it replaces as config.prev.json.
+func (d *Dir) SaveConfig(b proto.SignedBody) error {
+	for _, f := range []string{ConfigFile + sigSuffix, ConfigFile} {
+		prev, err := os.ReadFile(d.file(f))
+		if err != nil {
+			continue
+		}
+		if err := fsutil.WriteAtomic(d.Path, strings.Replace(f, ConfigFile, PrevConfigFile, 1), prev, 0o600); err != nil {
 			return err
 		}
 	}
-	return fsutil.WriteAtomic(d.Path, ConfigFile, append(b, '\n'), 0o600)
+	return d.writeSigned(ConfigFile, b, 0)
 }
 
 // ClearConfig drops the cached configs; join calls it when the node now
 // belongs to another mesh or another node id.
 func (d *Dir) ClearConfig() error {
 	for _, f := range []string{ConfigFile, PrevConfigFile, PendingConfigFile} {
-		if err := os.Remove(d.file(f)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return fmt.Errorf("remove %s: %w", d.file(f), err)
+		if err := d.removeSigned(f); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -313,34 +382,26 @@ func (d *Dir) SaveLocal(l Local) error {
 	return fsutil.WriteAtomic(d.Path, LocalFile, append(b, '\n'), 0o600)
 }
 
-// Mesh reads the cached mesh view; none yet is the zero value.
-func (d *Dir) Mesh() (proto.LocalMesh, error) {
-	b, err := os.ReadFile(d.file(MeshFile))
-	if errors.Is(err, fs.ErrNotExist) {
-		return proto.LocalMesh{}, nil
+// Mesh reads the cached mesh view, checked with p; none yet is the zero
+// value.
+func (d *Dir) Mesh(p proto.Pinned) (proto.LocalMesh, error) {
+	b, at, err := d.readSigned(MeshFile, proto.SignedMesh, p)
+	if b == nil || err != nil {
+		return proto.LocalMesh{}, err
 	}
-	if err != nil {
-		return proto.LocalMesh{}, fmt.Errorf("read %s: %w", d.file(MeshFile), err)
-	}
-	var m proto.LocalMesh
-	if err = json.Unmarshal(b, &m); err == nil {
+	m := proto.LocalMesh{FetchedAt: at}
+	if err = json.Unmarshal(b.Body, &m.View); err == nil {
 		err = m.View.Validate()
 	}
 	if err != nil {
 		return proto.LocalMesh{}, fmt.Errorf("cached mesh view %s is damaged (%w); it is ignored until the server sends a new one", d.file(MeshFile), err)
 	}
-	m.Error = ""
 	return m, nil
 }
 
-// SaveMesh caches a mesh view fetched from the server.
-func (d *Dir) SaveMesh(m proto.LocalMesh) error {
-	m.Error = ""
-	b, err := json.MarshalIndent(m, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode %s: %w", MeshFile, err)
-	}
-	return fsutil.WriteAtomic(d.Path, MeshFile, append(b, '\n'), 0o600)
+// SaveMesh caches a mesh view the server signed, fetched at fetchedAt.
+func (d *Dir) SaveMesh(b proto.SignedBody, fetchedAt int64) error {
+	return d.writeSigned(MeshFile, b, fetchedAt)
 }
 
 // JoinRecord is what `meshctl start` remembers of the last join token it

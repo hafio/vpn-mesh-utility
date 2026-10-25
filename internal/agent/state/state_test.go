@@ -23,21 +23,26 @@ func open(t *testing.T) *Dir {
 	return d
 }
 
-func TestKeysAreCreatedOnceAndKept(t *testing.T) {
+// Every join makes fresh keys (amendment A50); saved, they read back as
+// they were, each file 0600.
+func TestFreshKeysAreSavedAndRead(t *testing.T) {
 	d := open(t)
 	if _, err := d.LoadKeys(); !errors.Is(err, ErrNotJoined) {
 		t.Fatalf("LoadKeys before join = %v, want ErrNotJoined", err)
 	}
-	k1, err := d.LoadOrCreateKeys()
-	if err != nil {
+	k1, other := NewKeys(), NewKeys()
+	if k1.Identity.Equal(other.Identity) || k1.WG == other.WG {
+		t.Fatal("two joins made the same keys")
+	}
+	if err := d.SaveKeys(k1); err != nil {
 		t.Fatal(err)
 	}
-	k2, err := d.LoadOrCreateKeys()
+	k2, err := d.LoadKeys()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !k1.Identity.Equal(k2.Identity) || k1.WG != k2.WG {
-		t.Fatal("re-join must keep the existing keys")
+		t.Fatal("the saved keys read back differently")
 	}
 	if k1.WG[0]&7 != 0 || k1.WG[31]&128 != 0 || k1.WG[31]&64 == 0 {
 		t.Fatal("the WireGuard key is not clamped")
@@ -62,7 +67,7 @@ func TestKeysAreCreatedOnceAndKept(t *testing.T) {
 
 func TestLoadKeysRefusesLooseOrDamagedFiles(t *testing.T) {
 	d := open(t)
-	if _, err := d.LoadOrCreateKeys(); err != nil {
+	if err := d.SaveKeys(NewKeys()); err != nil {
 		t.Fatal(err)
 	}
 	if runtime.GOOS != "windows" {
@@ -89,7 +94,8 @@ func TestEnrollmentRoundTrip(t *testing.T) {
 	if _, err := d.Enrollment(); !errors.Is(err, ErrNotJoined) {
 		t.Fatalf("Enrollment before join = %v", err)
 	}
-	e := Enrollment{Server: "https://mesh.example.com", NodeID: 4, Name: "nas", Role: proto.RoleSpoke, MeshIP: "10.77.1.1", JoinedAt: testfix.Epoch.Unix()}
+	e := Enrollment{Server: "https://mesh.example.com", NodeID: 4, Name: "nas", Role: proto.RoleSpoke, MeshIP: "10.77.1.1", JoinedAt: testfix.Epoch.Unix(),
+		ConfigKey: testfix.ConfigKeyB64()}
 	if err := d.SaveEnrollment(e); err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +111,12 @@ func TestEnrollmentRoundTrip(t *testing.T) {
 	if got, err := d.Enrollment(); err != nil || got != e {
 		t.Fatalf("Enrollment in slot 3 = %+v, %v", got, err)
 	}
-	for _, bad := range []string{`{"server":"ftp://x","node_id":4}`, `{"server":"https://mesh.example.com","node_id":4,"slot":64}`} {
+	if p := e.Pinned(); p.NodeID != 4 || p.Slot != 3 || !p.Key.Equal(testfix.Pinned(4).Key) {
+		t.Fatalf("Pinned = %+v", p)
+	}
+	key := `,"config_key":"` + testfix.ConfigKeyB64() + `"`
+	for _, bad := range []string{`{"server":"ftp://x","node_id":4` + key + `}`, `{"server":"https://mesh.example.com","node_id":4,"slot":64` + key + `}`,
+		`{"server":"https://mesh.example.com","node_id":4}`, `{"server":"https://mesh.example.com","node_id":4,"config_key":"c2hvcnQ="}`} {
 		if err := os.WriteFile(filepath.Join(d.Path, EnrollmentFile), []byte(bad), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -115,39 +126,102 @@ func TestEnrollmentRoundTrip(t *testing.T) {
 	}
 }
 
+// vps1 is what the agent of vps-1 checks its caches with.
+var vps1 = testfix.Pinned(testfix.VPS1.ID)
+
 func TestConfigCacheKeepsThePrevious(t *testing.T) {
 	d := open(t)
-	if c, err := d.Config(); c != nil || err != nil {
+	if c, err := d.Config(vps1); c != nil || err != nil {
 		t.Fatalf("Config before any = %v, %v", c, err)
 	}
 	a := testfix.ServerConfig()
 	b := testfix.ServerConfig()
 	b.Version = 4
-	if err := d.SaveConfig(a); err != nil {
+	if err := d.SaveConfig(testfix.SignedConfig(a)); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.SaveConfig(b); err != nil {
+	if err := d.SaveConfig(testfix.SignedConfig(b)); err != nil {
 		t.Fatal(err)
 	}
-	got, err := d.Config()
+	got, err := d.Config(vps1)
 	if err != nil || got.Version != 4 {
 		t.Fatalf("Config = %+v, %v", got, err)
 	}
 	prev, err := os.ReadFile(filepath.Join(d.Path, PrevConfigFile))
-	if err != nil || !strings.Contains(string(prev), `"version": 3`) {
-		t.Fatalf("config.prev.json = %s, %v", prev, err)
+	if _, serr := os.Stat(filepath.Join(d.Path, PrevConfigFile+".sig")); err != nil || serr != nil || !strings.Contains(string(prev), `"version":3`) {
+		t.Fatalf("config.prev.json = %s, %v, %v", prev, err, serr)
 	}
 	if err := d.ClearConfig(); err != nil {
 		t.Fatal(err)
 	}
-	if c, err := d.Config(); c != nil || err != nil {
+	if c, err := d.Config(vps1); c != nil || err != nil {
 		t.Fatalf("Config after ClearConfig = %v, %v", c, err)
 	}
-	if err := os.WriteFile(filepath.Join(d.Path, ConfigFile), []byte("{"), 0o600); err != nil {
+	broken := proto.SignedBody{Body: []byte("{"), Nonce: testfix.Nonce}
+	broken.Signature = proto.SignBody(testfix.ConfigKey(), proto.SignedConfig, vps1.NodeID, 0, testfix.Nonce, broken.Body)
+	if err := d.SaveConfig(broken); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.Config(); err == nil || !strings.Contains(err.Error(), "damaged") {
+	if _, err := d.Config(vps1); err == nil || !strings.Contains(err.Error(), "damaged") {
 		t.Fatalf("damaged cache = %v", err)
+	}
+}
+
+// A cache is used only as the control plane signed it for this node
+// (amendment A50): changed on disk, without its signature, or another
+// node's, it is ignored and says why.
+func TestCachesAreCheckedWithThePinnedKey(t *testing.T) {
+	d := open(t)
+	if err := d.SaveConfig(testfix.SignedConfig(testfix.ServerConfig())); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SaveMesh(testfix.Signed(proto.SignedMesh, vps1.NodeID, testfix.MeshView()), testfix.Epoch.Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Config(testfix.Pinned(testfix.VPS2.ID)); err == nil || !strings.Contains(err.Error(), "not as the control plane signed it") {
+		t.Fatalf("vps-1's config read as vps-2's = %v", err)
+	}
+	if _, err := d.Mesh(proto.Pinned{Key: vps1.Key, NodeID: vps1.NodeID, Slot: 1}); err == nil {
+		t.Fatal("slot 0's mesh view read as slot 1's")
+	}
+	b, err := os.ReadFile(filepath.Join(d.Path, ConfigFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tampered := strings.Replace(string(b), testfix.VPS2.Endpoint, "198.51.100.66:51820", 1)
+	if err := os.WriteFile(filepath.Join(d.Path, ConfigFile), []byte(tampered), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := d.Config(vps1); c != nil || err == nil || !strings.Contains(err.Error(), ConfigFile) {
+		t.Fatalf("a tampered cache = %+v, %v", c, err)
+	}
+	if err := os.Remove(filepath.Join(d.Path, MeshFile+".sig")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Mesh(vps1); err == nil || !strings.Contains(err.Error(), MeshFile) {
+		t.Fatalf("a mesh view without its signature = %v", err)
+	}
+}
+
+// One process per data dir (amendment A50): a second Lock is refused,
+// naming the holder's pid; once released, the next one gets it.
+func TestLock(t *testing.T) {
+	d := open(t)
+	unlock, err := d.Lock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&Dir{Path: d.Path}).Lock(); !errors.Is(err, ErrLocked) || !strings.Contains(err.Error(), "pid") {
+		t.Fatalf("a second Lock = %v", err)
+	}
+	unlock()
+	again, err := d.Lock()
+	if err != nil {
+		t.Fatalf("Lock after unlock = %v", err)
+	}
+	again()
+	if _, err := (&Dir{Path: filepath.Join(d.Path, "missing")}).Lock(); err == nil || errors.Is(err, ErrLocked) {
+		t.Fatalf("Lock in a missing dir = %v", err)
 	}
 }
 
@@ -156,17 +230,17 @@ func TestPendingConfigIsKeptApart(t *testing.T) {
 	d := open(t)
 	confirmed, pending := testfix.ServerConfig(), testfix.ServerConfig()
 	pending.Version = 4
-	if err := d.SaveConfig(confirmed); err != nil {
+	if err := d.SaveConfig(testfix.SignedConfig(confirmed)); err != nil {
 		t.Fatal(err)
 	}
-	if p, err := d.PendingConfig(); p != nil || err != nil {
+	if p, err := d.PendingConfig(vps1); p != nil || err != nil {
 		t.Fatalf("PendingConfig before any = %v, %v", p, err)
 	}
-	if err := d.SavePending(pending); err != nil {
+	if err := d.SavePending(testfix.SignedConfig(pending)); err != nil {
 		t.Fatal(err)
 	}
-	p, err := d.PendingConfig()
-	c, _ := d.Config()
+	p, err := d.PendingConfig(vps1)
+	c, _ := d.Config(vps1)
 	if err != nil || p.Version != 4 || c.Version != 3 {
 		t.Fatalf("pending %+v, %v; confirmed v%d", p, err, c.Version)
 	}
@@ -176,16 +250,16 @@ func TestPendingConfigIsKeptApart(t *testing.T) {
 	if err := d.ClearPending(); err != nil {
 		t.Fatalf("clearing twice = %v", err)
 	}
-	if p, _ := d.PendingConfig(); p != nil {
+	if p, _ := d.PendingConfig(vps1); p != nil {
 		t.Fatal("the pending config survived ClearPending")
 	}
-	if err := d.SavePending(pending); err != nil {
+	if err := d.SavePending(testfix.SignedConfig(pending)); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.ClearConfig(); err != nil {
 		t.Fatal(err)
 	}
-	if p, _ := d.PendingConfig(); p != nil {
+	if p, _ := d.PendingConfig(vps1); p != nil {
 		t.Fatal("ClearConfig (a re-join) must drop the pending config too")
 	}
 }
@@ -213,7 +287,7 @@ func TestUnusableFilesAreReported(t *testing.T) {
 	d := open(t)
 	mkdirs(t, d, EnrollmentFile, ConfigFile, PendingConfigFile, IdentityKeyFile)
 	_, errEnrollment := d.Enrollment()
-	_, errConfig := d.Config()
+	_, errConfig := d.Config(vps1)
 	_, errKeys := d.LoadKeys()
 	for name, err := range map[string]error{
 		EnrollmentFile:    errEnrollment,
@@ -232,16 +306,21 @@ func TestUnusableFilesAreReported(t *testing.T) {
 	// The previous config cannot be kept: the cached one stays as it was.
 	d2 := open(t)
 	first := testfix.ServerConfig()
-	if err := d2.SaveConfig(first); err != nil {
+	if err := d2.SaveConfig(testfix.SignedConfig(first)); err != nil {
 		t.Fatal(err)
 	}
 	mkdirs(t, d2, PrevConfigFile)
 	next := first
 	next.Version++
-	if err := d2.SaveConfig(next); err == nil {
+	if err := d2.SaveConfig(testfix.SignedConfig(next)); err == nil {
 		t.Fatal("SaveConfig succeeded without keeping the previous config")
 	}
-	if c, _ := d2.Config(); c == nil || c.Version != first.Version {
+	d3 := open(t)
+	mkdirs(t, d3, ConfigFile+sigSuffix)
+	if err := d3.SaveConfig(testfix.SignedConfig(first)); err == nil {
+		t.Fatal("SaveConfig succeeded without its signature")
+	}
+	if c, _ := d2.Config(vps1); c == nil || c.Version != first.Version {
 		t.Fatalf("cached config %+v, want v%d", c, first.Version)
 	}
 
@@ -254,8 +333,8 @@ func TestUnusableFilesAreReported(t *testing.T) {
 		t.Errorf("Open under a file = %v", err)
 	}
 	under := &Dir{Path: filepath.Join(file, "data")}
-	if _, err := under.LoadOrCreateKeys(); err == nil {
-		t.Error("LoadOrCreateKeys under a file succeeded")
+	if err := under.SaveKeys(NewKeys()); err == nil {
+		t.Error("SaveKeys under a file succeeded")
 	}
 }
 
@@ -327,34 +406,36 @@ func TestJoinRecord(t *testing.T) {
 
 func TestMeshCache(t *testing.T) {
 	d := open(t)
-	if m, err := d.Mesh(); err != nil || m.FetchedAt != 0 || len(m.View.Nodes) != 0 {
+	if m, err := d.Mesh(vps1); err != nil || m.FetchedAt != 0 || len(m.View.Nodes) != 0 {
 		t.Fatalf("no file = %+v, %v", m, err)
 	}
-	want := proto.LocalMesh{View: testfix.MeshView(), FetchedAt: testfix.Epoch.Unix(), Error: "the server did not answer"}
-	if err := d.SaveMesh(want); err != nil {
+	view := testfix.MeshView()
+	if err := d.SaveMesh(testfix.Signed(proto.SignedMesh, vps1.NodeID, view), testfix.Epoch.Unix()); err != nil {
 		t.Fatal(err)
 	}
-	m, err := (&Dir{Path: d.Path}).Mesh()
-	if err != nil || m.FetchedAt != want.FetchedAt || m.Error != "" || len(m.View.Nodes) != len(want.View.Nodes) || m.View.Nodes[4] != want.View.Nodes[4] {
+	m, err := (&Dir{Path: d.Path}).Mesh(vps1)
+	if err != nil || m.FetchedAt != testfix.Epoch.Unix() || m.Error != "" || len(m.View.Nodes) != len(view.Nodes) || m.View.Nodes[4] != view.Nodes[4] {
 		t.Fatalf("after a restart = %+v, %v", m, err)
 	}
 	if st, err := os.Stat(filepath.Join(d.Path, MeshFile)); err != nil || (runtime.GOOS != "windows" && st.Mode().Perm() != 0o600) {
 		t.Fatalf("mode = %v, %v", st.Mode().Perm(), err)
 	}
-	for _, bad := range []string{"{", `{"view":{"nodes":[{"name":"vps-1;id","role":"server","mesh_ip":"10.77.0.1","health":"ok","state":""}]}}`} {
-		if err := os.WriteFile(filepath.Join(d.Path, MeshFile), []byte(bad), 0o600); err != nil {
+	for _, bad := range []string{"{", `{"nodes":[{"name":"vps-1;id","role":"server","mesh_ip":"10.77.0.1","health":"ok","state":""}]}`} {
+		b := proto.SignedBody{Body: []byte(bad), Nonce: testfix.Nonce}
+		b.Signature = proto.SignBody(testfix.ConfigKey(), proto.SignedMesh, vps1.NodeID, 0, testfix.Nonce, b.Body)
+		if err := d.SaveMesh(b, 1); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := d.Mesh(); err == nil || !strings.Contains(err.Error(), "is damaged") {
+		if _, err := d.Mesh(vps1); err == nil || !strings.Contains(err.Error(), "is damaged") {
 			t.Fatalf("damaged %s = %v", bad, err)
 		}
 	}
 	d2 := open(t)
 	mkdirs(t, d2, MeshFile)
-	if _, err := d2.Mesh(); err == nil || !strings.Contains(err.Error(), MeshFile) {
+	if _, err := d2.Mesh(vps1); err == nil || !strings.Contains(err.Error(), MeshFile) {
 		t.Fatalf("unreadable = %v", err)
 	}
-	if err := d2.SaveMesh(want); err == nil {
+	if err := d2.SaveMesh(testfix.Signed(proto.SignedMesh, vps1.NodeID, view), 1); err == nil {
 		t.Fatal("SaveMesh over a directory succeeded")
 	}
 }

@@ -470,7 +470,7 @@ meshctl node show <name> [flags]
 
 ## meshctl node token
 
-Issue a new join token (revokes unused ones; re-keys an enrolled node).
+Issue a new join token (revokes unused ones; cuts an enrolled node off until it joins with it).
 
 ```
 meshctl node token <name> [flags]

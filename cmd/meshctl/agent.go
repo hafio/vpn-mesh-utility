@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -146,7 +147,16 @@ func setupAgentRun(fs *flag.FlagSet, e *env) action {
 			StatusEvery: *statusEvery, EndpointRetry: *endpointRetry,
 		}
 		if asService {
-			return service.RunWindowsService(func(ctx context.Context) error { return agent.Run(ctx, d) })
+			return service.RunWindowsService(func(ctx context.Context) error {
+				err := agent.Run(ctx, d)
+				if errors.Is(err, agent.ErrRefused) {
+					// A clean stop: the service manager restarts only a
+					// failed run (amendment A50).
+					log.Error("the agent stopped and the service stays stopped until an operator acts", "err", err)
+					return nil
+				}
+				return err
+			})
 		}
 		return agent.Run(ctx, d)
 	}

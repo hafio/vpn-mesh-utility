@@ -18,6 +18,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/hafio/vpn-mesh-utility/internal/agent"
 )
 
 // version is stamped at build time with -ldflags "-X main.version=<tag>" by
@@ -30,6 +32,9 @@ const (
 	exitOK      = 0
 	exitFailure = 1
 	exitUsage   = 2
+	// exitRefused is an agent the control plane refused (amendment A50);
+	// the systemd unit does not restart it.
+	exitRefused = 3
 )
 
 // env is what every command gets instead of reaching for globals. goos and
@@ -114,8 +119,11 @@ func runLeaf(ctx context.Context, e *env, path string, c command, args []string)
 	}
 	fmt.Fprintf(e.stderr, "%s: %v\n", path, err)
 	var u *usageError
-	if errors.As(err, &u) {
+	switch {
+	case errors.As(err, &u):
 		return exitUsage
+	case errors.Is(err, agent.ErrRefused):
+		return exitRefused
 	}
 	return exitFailure
 }

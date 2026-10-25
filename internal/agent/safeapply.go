@@ -26,8 +26,10 @@ const defaultConfirmWindow = 60 * time.Second
 
 // pendingApply is a config applied and awaiting confirmation.
 type pendingApply struct {
-	cfg  proto.NodeConfig
-	hash string
+	cfg proto.NodeConfig
+	// signed is cfg as the control plane signed it, what confirm caches.
+	signed proto.SignedBody
+	hash   string
 	// prev is the last confirmed config, what a rollback restores.
 	prev     proto.NodeConfig
 	armedAt  time.Time
@@ -44,11 +46,11 @@ type safeApply struct {
 // arm starts waiting for confirmation of cfg, applied at now over prev. A
 // config that replaces one still pending keeps that one's prev: only a
 // confirmed config is safe to go back to.
-func (s *safeApply) arm(cfg proto.NodeConfig, hash string, prev proto.NodeConfig, now time.Time) {
+func (s *safeApply) arm(cfg proto.NodeConfig, signed proto.SignedBody, hash string, prev proto.NodeConfig, now time.Time) {
 	if s.pending != nil {
 		prev = s.pending.prev
 	}
-	s.pending = &pendingApply{cfg: cfg, hash: hash, prev: prev, armedAt: now, deadline: now.Add(s.window)}
+	s.pending = &pendingApply{cfg: cfg, signed: signed, hash: hash, prev: prev, armedAt: now, deadline: now.Add(s.window)}
 }
 
 // disarm drops a pending config without confirming it: the server's config

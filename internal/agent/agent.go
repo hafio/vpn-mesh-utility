@@ -196,9 +196,12 @@ type runner struct {
 	d      Deps
 	dir    *state.Dir
 	enr    state.Enrollment
+	pinned proto.Pinned
 	engine *apply.Engine
 	cl     *client.Client
 	log    *slog.Logger
+	// stop ends the run with ErrRefused (serverError).
+	stop context.CancelCauseFunc
 	// backend is the WireGuard backend in use, as reported.
 	backend string
 
@@ -248,13 +251,25 @@ type runner struct {
 	meshStale atomic.Bool
 }
 
-// Run runs the agent until ctx ends.
+// ErrRefused is the end of a run the control plane refused, definitively
+// and signed (amendment A50): the agent stops and is not to be restarted
+// until an operator acts (`meshctl agent run` exits 3).
+var ErrRefused = errors.New("the control plane refused this node")
+
+// Run runs the agent until ctx ends, or until the control plane refuses
+// the node definitively (ErrRefused).
 func Run(ctx context.Context, d Deps) error {
 	d.defaults()
 	dir, err := state.Open(d.DataDir)
 	if err != nil {
 		return err
 	}
+	// One process per data dir, before anything is read or touched.
+	unlock, err := dir.Lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	enr, err := dir.Enrollment()
 	if errors.Is(err, state.ErrNotJoined) {
 		return fmt.Errorf("%w: run `meshctl agent join --server <url> --token <token>` first (data dir %s)", err, d.DataDir)
@@ -306,12 +321,16 @@ func Run(ctx context.Context, d Deps) error {
 	if err != nil {
 		d.Log.Warn("ignoring the node's own settings; DNS stays on", "err", err)
 	}
-	cl, err := client.New(client.Options{Server: enr.Server, NodeID: enr.NodeID, Key: keys.Identity, Version: d.Version, Now: d.Now, Transport: d.Transport})
+	pinned := enr.Pinned()
+	cl, err := client.New(client.Options{Server: enr.Server, NodeID: enr.NodeID, Key: keys.Identity, ConfigKey: pinned.Key, Slot: slot,
+		Version: d.Version, Now: d.Now, Transport: d.Transport})
 	if err != nil {
 		return err
 	}
+	ctx, stop := context.WithCancelCause(ctx)
+	defer stop(nil)
 	r := &runner{
-		d: d, dir: dir, enr: enr, cl: cl, backend: backend,
+		d: d, dir: dir, enr: enr, pinned: pinned, cl: cl, backend: backend, stop: stop,
 		log:      d.Log.With("node", enr.Name),
 		syncKick: make(chan struct{}, 1), statusKick: make(chan struct{}, 1), proxyKick: make(chan struct{}, 1),
 		meshKick: make(chan struct{}, 1), namesKick: make(chan struct{}, 1), scheduleKick: make(chan struct{}, 1),
@@ -320,7 +339,7 @@ func Run(ctx context.Context, d Deps) error {
 			EndpointRetry: d.EndpointRetry}),
 	}
 	r.engine.SetDNSOff(local.DNSOff)
-	if r.mesh, err = dir.Mesh(); err != nil {
+	if r.mesh, err = dir.Mesh(pinned); err != nil {
 		r.log.Warn("ignoring the cached mesh view", "err", err)
 	}
 	r.setNames(r.mesh.View.Names) // the containers' names resolve with the server down
@@ -349,13 +368,13 @@ func Run(ctx context.Context, d Deps) error {
 	// Boot from cache: the mesh comes up even when the server is down. A
 	// config safe apply was still waiting on was never confirmed, so the
 	// confirmed one is what comes back.
-	cfg, err := dir.Config()
+	cfg, err := dir.Config(pinned)
 	if err != nil {
 		r.log.Warn("ignoring the cached config", "err", err)
 	}
 	r.recoverPending(cfg)
 	if cfg != nil {
-		r.apply(ctx, *cfg, "cache")
+		r.apply(ctx, *cfg, proto.SignedBody{}, "cache")
 	}
 
 	var loops sync.WaitGroup
@@ -389,6 +408,9 @@ func Run(ctx context.Context, d Deps) error {
 	r.trigger()
 	<-ctx.Done()
 	loops.Wait()
+	if err := context.Cause(ctx); errors.Is(err, ErrRefused) {
+		return err
+	}
 	return nil
 }
 
@@ -471,7 +493,7 @@ func (r *runner) syncLoop(ctx context.Context) {
 			return
 		case <-r.syncKick:
 		}
-		cfg, err := r.cl.Config(ctx, r.etag())
+		cfg, signed, err := r.cl.Config(ctx, r.etag())
 		if err != nil {
 			r.serverError("fetch config", err)
 			continue
@@ -480,15 +502,16 @@ func (r *runner) syncLoop(ctx context.Context) {
 		if cfg == nil {
 			continue // 304: already applied
 		}
-		r.apply(ctx, *cfg, "server")
+		r.apply(ctx, *cfg, signed, "server")
 	}
 }
 
-// apply runs the engine and records the outcome. A config that failed is not
+// apply runs the engine and records the outcome; signed is cfg as the
+// control plane signed it, what the cache keeps. A config that failed is not
 // retried until a newer one arrives or retryFailed passes, so a bad config
 // does not loop; one safe apply rolled back is not retried at all until the
 // server's config differs (amendment A15).
-func (r *runner) apply(ctx context.Context, cfg proto.NodeConfig, source string) {
+func (r *runner) apply(ctx context.Context, cfg proto.NodeConfig, signed proto.SignedBody, source string) {
 	r.cfgMu.Lock()
 	defer r.cfgMu.Unlock()
 	hash, err := cfg.Hash()
@@ -531,7 +554,7 @@ func (r *runner) apply(ctx context.Context, cfg proto.NodeConfig, source string)
 		case r.safe.pending != nil && hash == r.safe.confirmedHash():
 			r.safe.disarm() // the server went back to the confirmed config
 		case prev != nil && hash != prevHash:
-			r.safe.arm(cfg, hash, *prev, r.d.Now())
+			r.safe.arm(cfg, signed, hash, *prev, r.d.Now())
 			pending = true
 		}
 	}
@@ -539,11 +562,11 @@ func (r *runner) apply(ctx context.Context, cfg proto.NodeConfig, source string)
 	switch {
 	case pending:
 		// config.json stays the confirmed config until the server answers.
-		if err := r.dir.SavePending(cfg); err != nil {
+		if err := r.dir.SavePending(signed); err != nil {
 			r.log.Error("config applied but not recorded as pending; a restart before it is confirmed keeps it", "err", err)
 		}
 	case source != "cache":
-		if err := r.dir.SaveConfig(cfg); err != nil {
+		if err := r.dir.SaveConfig(signed); err != nil {
 			r.log.Error("config applied but not cached; a reboot without the server would miss it", "err", err)
 		}
 		if err := r.dir.ClearPending(); err != nil {
@@ -560,7 +583,7 @@ func (r *runner) apply(ctx context.Context, cfg proto.NodeConfig, source string)
 // confirmed config, rejects the pending one until the server's differs, and
 // reports the rollback.
 func (r *runner) recoverPending(confirmed *proto.NodeConfig) {
-	p, err := r.dir.PendingConfig()
+	p, err := r.dir.PendingConfig(r.pinned)
 	if err != nil {
 		r.log.Warn("ignoring the pending config", "err", err)
 	}
@@ -608,7 +631,7 @@ func (r *runner) confirm(sentAt time.Time) {
 	if !ok {
 		return
 	}
-	if err := r.dir.SaveConfig(p.cfg); err != nil {
+	if err := r.dir.SaveConfig(p.signed); err != nil {
 		r.log.Error("config confirmed but not cached; a reboot without the server would miss it", "err", err)
 	}
 	if err := r.dir.ClearPending(); err != nil {
@@ -833,7 +856,7 @@ func (r *runner) refreshMesh(ctx context.Context) {
 	r.meshTried = r.d.Now()
 	fctx, cancel := context.WithTimeout(ctx, meshTimeout)
 	defer cancel()
-	v, err := r.cl.Mesh(fctx)
+	v, signed, err := r.cl.Mesh(fctx)
 	if err != nil {
 		r.serverError("fetch the mesh view", err)
 		r.meshErr = "the server did not answer: " + oneLine(err.Error())
@@ -842,7 +865,7 @@ func (r *runner) refreshMesh(ctx context.Context) {
 	r.contact()
 	r.mesh, r.meshErr = proto.LocalMesh{View: v, FetchedAt: r.meshTried.Unix()}, ""
 	r.setNames(v.Names)
-	if err := r.dir.SaveMesh(r.mesh); err != nil {
+	if err := r.dir.SaveMesh(signed, r.meshTried.Unix()); err != nil {
 		r.log.Warn("mesh view not cached; the local UI cannot show it while the server is down", "err", err)
 	}
 }
@@ -871,6 +894,13 @@ func (r *runner) meshLoop(ctx context.Context) {
 func (r *runner) serverError(what string, err error) {
 	var ce *client.Error
 	switch {
+	case errors.As(err, &ce) && ce.Definitive:
+		// Signed for this very request: this copy of the node stops
+		// (amendment A50).
+		r.log.Error(what+": the control plane refused this node; the agent stops", "code", ce.Code, "err", err)
+		if r.stop != nil {
+			r.stop(fmt.Errorf("%w: %s", ErrRefused, ce.Message))
+		}
 	case errors.Is(err, context.Canceled):
 	case errors.As(err, &ce) && ce.Code == proto.CodeClockSkew:
 		r.log.Error(what+": this node's clock is off; sync it with NTP", "server_time", time.Unix(ce.ServerTime, 0).UTC(), "err", err)
@@ -1059,6 +1089,9 @@ func (r *runner) prefs(ctx context.Context, req proto.PrefsRequest) (proto.Prefs
 	if err != nil {
 		var ce *client.Error
 		if errors.As(err, &ce) {
+			if ce.Definitive {
+				r.serverError("change the node's settings", err)
+			}
 			return proto.PrefsResponse{}, &localapi.Refusal{Status: ce.Status, Code: ce.Code, Message: ce.Message}
 		}
 		return proto.PrefsResponse{}, err

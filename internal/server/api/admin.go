@@ -852,7 +852,11 @@ func (s *Nodes) Token(ctx context.Context, by Actor, name string) (NodeChange, e
 	if err != nil {
 		return NodeChange{}, err
 	}
-	var enroll *Enrollment
+	var (
+		enroll   *Enrollment
+		cutOff   bool
+		lastSeen int64
+	)
 	res, err := s.apply(ctx, Change{Actor: by.Name, UserID: by.UserID, Action: "node.token", Target: name}, func(tx *store.MeshTx, c *Change) error {
 		n, err := nodeByName(tx, name, "node")
 		if err != nil {
@@ -869,15 +873,40 @@ func (s *Nodes) Token(ctx context.Context, by Actor, name string) (NodeChange, e
 		if err != nil {
 			return err
 		}
+		// A new token cuts the node off at once (amendment A50): its key
+		// joins its history, so whatever runs with it is told it was
+		// replaced, and its peers drop it until a join with this token.
+		cutOff, lastSeen = n.Enrolled, n.LastSeen
+		if err := tx.RetireKey(n.ID, n.IdentityPubKey, s.now().Unix()); err != nil {
+			return err
+		}
+		n.Enrolled, n.IdentityPubKey, n.WGPubKey = false, "", ""
+		if err := tx.UpdateNode(n); err != nil {
+			return err
+		}
 		enroll = s.enrollment(token, exp.Unix())
-		c.Detail = map[string]any{"rekey": n.Enrolled, "expires_at": exp.Unix()}
+		c.Detail = map[string]any{"cut_off": cutOff, "expires_at": exp.Unix()}
 		return nil
 	})
 	if err != nil {
 		return NodeChange{}, err
 	}
-	return s.answer(ctx, name, res, enroll)
+	ch, err := s.answer(ctx, name, res, enroll)
+	if err == nil && cutOff {
+		note := fmt.Sprintf("%s is cut off: its agent stops and its peers drop it until it joins with this token", name)
+		if ago := s.now().Sub(time.Unix(lastSeen, 0)); lastSeen != 0 && ago < RecentlySeen {
+			note = fmt.Sprintf("%s was seen %s ago and is cut off now: its agent stops and its peers drop it until it joins with this token",
+				name, ago.Round(time.Second))
+		}
+		ch.Notes = append(ch.Notes, note)
+	}
+	return ch, err
 }
+
+// RecentlySeen is how recently a node must have reported for issuing a
+// token to need a confirmation on the node page (amendment A50): it is
+// probably running, and the token takes it off the mesh.
+const RecentlySeen = 5 * time.Minute
 
 // answer is a NodeChange with the node as it is now.
 func (s *Nodes) answer(ctx context.Context, name string, res Result, enroll *Enrollment) (NodeChange, error) {

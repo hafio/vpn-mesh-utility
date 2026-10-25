@@ -463,14 +463,38 @@ func (u *ui) setDisabled(w http.ResponseWriter, r *http.Request, s auth.Session,
 	u.renderNode(w, r, s, http.StatusOK, page{Flash: changed(what, ch)})
 }
 
+// tokenData is the confirmation of a token for a node that is probably
+// running (amendment A50).
+type tokenData struct {
+	Node api.NodeInfo
+	Ago  time.Duration
+}
+
 func (u *ui) tokenNode(w http.ResponseWriter, r *http.Request, s auth.Session) {
+	if r.PostFormValue("confirm") != "yes" {
+		d, err := u.Nodes.Show(r.Context(), r.PathValue("name"))
+		if err != nil {
+			u.fail(w, r, s, err)
+			return
+		}
+		// A token cuts a running node off: ask first.
+		if ago := u.Now().Sub(time.Unix(d.Node.LastSeen, 0)); d.Node.Enrolled && d.Node.LastSeen != 0 && ago < api.RecentlySeen {
+			u.show(w, r, s, http.StatusOK, "token", "nodes", "New join token for "+d.Node.Name,
+				page{Data: tokenData{Node: d.Node, Ago: ago.Round(time.Second)}})
+			return
+		}
+	}
 	ch, err := u.Nodes.Token(r.Context(), actor(s), r.PathValue("name"))
 	if err != nil {
 		status, msg := message(err)
 		u.renderNode(w, r, s, status, page{Error: msg})
 		return
 	}
-	u.showEnrollment(w, r, s, ch, "New join token for "+ch.Node.Name+"; unused older tokens no longer work")
+	flash := "New join token for " + ch.Node.Name + "; unused older tokens no longer work"
+	for _, n := range ch.Notes {
+		flash += ". " + n
+	}
+	u.showEnrollment(w, r, s, ch, flash)
 }
 
 func (u *ui) removePage(w http.ResponseWriter, r *http.Request, s auth.Session) {

@@ -10,6 +10,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -50,7 +51,16 @@ type Deps struct {
 	TrustedProxies []netip.Prefix
 	// KeepAlive is the SSE comment interval; zero means 20 s.
 	KeepAlive time.Duration
+	// ConfigKey signs every config, mesh view and definitive refusal the
+	// agent API answers (amendment A50); its public half goes out with
+	// every join. The agent API answers those with 500 without it.
+	ConfigKey ed25519.PrivateKey
 }
+
+// ConfigKeyFile holds the control plane's signing key (an Ed25519 seed) in
+// its data dir, made at first start like secret.key. Losing it means every
+// node joins again: agents trust no other key.
+const ConfigKeyFile = "config.key"
 
 // Agent API timing.
 const (
@@ -200,6 +210,12 @@ func (a *api) fail(w http.ResponseWriter, r *http.Request, err error) {
 	if ae.code == proto.CodeClockSkew {
 		body.ServerTime = a.Now().Unix()
 	}
+	// A definitive refusal ends the agent's run, so it is signed for the
+	// request it answers (amendment A50); unsigned, the agent retries.
+	if signed, perr := proto.ParseSigned(r.Header); proto.Definitive(ae.code) && perr == nil && a.ConfigKey != nil {
+		body.ServerTime = a.Now().Unix()
+		w.Header().Set(proto.HeaderRefusalSignature, proto.SignRefusal(a.ConfigKey, signed.NodeID, ae.code, signed.Nonce, body.ServerTime))
+	}
 	if ae.status >= http.StatusInternalServerError {
 		a.Log.Error("request failed", "method", r.Method, "path", r.URL.Path, "err", err)
 	} else {
@@ -209,6 +225,28 @@ func (a *api) fail(w http.ResponseWriter, r *http.Request, err error) {
 		w.Header().Set("Retry-After", "60")
 	}
 	writeJSON(w, ae.status, body)
+}
+
+// errNoConfigKey is the agent API without a signing key: a wiring mistake.
+var errNoConfigKey = errors.New("the control plane has no config key to sign answers with")
+
+// writeSigned answers 200 with v as JSON, signed as kind for node in slot,
+// bound to the nonce of the request it answers (amendment A50).
+func (a *api) writeSigned(w http.ResponseWriter, r *http.Request, kind string, node int64, slot proto.Slot, v any) {
+	if a.ConfigKey == nil {
+		a.fail(w, r, errNoConfigKey)
+		return
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		a.fail(w, r, fmt.Errorf("encode the answer: %w", err))
+		return
+	}
+	b = append(b, '\n')
+	w.Header().Set(proto.HeaderConfigSignature, proto.SignBody(a.ConfigKey, kind, node, slot, r.Header.Get(proto.HeaderNonce), b))
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(b) // the client went away; nothing to do
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

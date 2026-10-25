@@ -8,6 +8,7 @@ package server
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -96,6 +97,12 @@ func Run(ctx context.Context, c Config) error {
 	if err != nil {
 		return err
 	}
+	// So is the key every config, mesh view and definitive refusal is
+	// signed with (amendment A50); agents pin its public half at join.
+	seed, err := auth.LoadOrCreateKey(filepath.Join(c.DataDir, api.ConfigKeyFile))
+	if err != nil {
+		return err
+	}
 	st, err := store.Open(ctx, filepath.Join(c.DataDir, DBFile), store.Options{Now: c.Now, Log: c.Log})
 	if err != nil {
 		return err
@@ -137,7 +144,7 @@ func Run(ctx context.Context, c Config) error {
 
 	deps := api.Deps{
 		DB: st, Hub: hub, Reconciler: rec, Now: c.Now, Log: c.Log, ServerURL: origin, Version: c.Version,
-		DistDir: c.DistDir, TrustedProxies: c.TrustedProxies,
+		DistDir: c.DistDir, TrustedProxies: c.TrustedProxies, ConfigKey: ed25519.NewKeyFromSeed(seed),
 	}
 	nodes := api.NewNodes(deps)
 	// Both families by default (M8): a mesh whose IPv6 was never chosen gets

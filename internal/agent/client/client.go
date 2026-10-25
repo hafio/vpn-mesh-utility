@@ -35,6 +35,12 @@ type Options struct {
 	Server string
 	NodeID int64
 	Key    ed25519.PrivateKey
+	// ConfigKey is the control plane's key pinned at join, and Slot the
+	// node's mesh's: configs, mesh views and definitive refusals are
+	// trusted only when signed with that key for this node and slot
+	// (amendment A50). The join itself needs neither.
+	ConfigKey ed25519.PublicKey
+	Slot      proto.Slot
 	// Version is the agent build, sent as the User-Agent.
 	Version string
 	Now     func() time.Time
@@ -47,6 +53,7 @@ type Client struct {
 	base    string
 	nodeID  int64
 	key     ed25519.PrivateKey
+	pinned  proto.Pinned
 	ua      string
 	now     func() time.Time
 	calls   *http.Client
@@ -67,7 +74,7 @@ func New(o Options) (*Client, error) {
 		tr = http.DefaultTransport
 	}
 	return &Client{
-		base: base, nodeID: o.NodeID, key: o.Key, ua: "meshctl/" + o.Version, now: o.Now,
+		base: base, nodeID: o.NodeID, key: o.Key, ua: "meshctl/" + o.Version, now: o.Now, pinned: proto.Pinned{Key: o.ConfigKey, NodeID: o.NodeID, Slot: o.Slot},
 		calls: &http.Client{Transport: tr, Timeout: requestTimeout},
 		// Streams have no overall timeout; Events watches for silence.
 		streams: &http.Client{Transport: tr},
@@ -81,6 +88,11 @@ type Error struct {
 	Code       string
 	Message    string
 	ServerTime int64
+	// Definitive is a refusal that ends the agent's run: a definitive code
+	// whose signature verifies with the pinned key for this very request
+	// (amendment A50). An unsigned or mis-signed one is not, and the agent
+	// retries.
+	Definitive bool
 }
 
 func (e *Error) Error() string {
@@ -127,27 +139,53 @@ func (c *Client) signed(ctx context.Context, method, path string, body []byte) (
 // do sends r and decodes a 2xx JSON answer into out (when out is non-nil).
 // It returns the status code; a non-2xx answer is an *Error.
 func (c *Client) do(r *http.Request, out any) (int, error) {
+	status, b, _, err := c.raw(r)
+	if err != nil || status == http.StatusNotModified || out == nil {
+		return status, err
+	}
+	if err := json.Unmarshal(b, out); err != nil {
+		return status, fmt.Errorf("%s %s: decode answer: %w", r.Method, r.URL.Path, err)
+	}
+	return status, nil
+}
+
+// raw sends r and returns a 2xx or 304 answer as it came: status, body and
+// headers. A non-2xx answer is an *Error.
+func (c *Client) raw(r *http.Request) (int, []byte, http.Header, error) {
 	resp, err := c.calls.Do(r)
 	if err != nil {
-		return 0, fmt.Errorf("%s %s: %w", r.Method, r.URL.Path, err)
+		return 0, nil, nil, fmt.Errorf("%s %s: %w", r.Method, r.URL.Path, err)
 	}
 	defer resp.Body.Close()
 	b, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse))
 	if err != nil {
-		return resp.StatusCode, fmt.Errorf("%s %s: read answer: %w", r.Method, r.URL.Path, err)
+		return resp.StatusCode, nil, nil, fmt.Errorf("%s %s: read answer: %w", r.Method, r.URL.Path, err)
 	}
-	if resp.StatusCode == http.StatusNotModified {
-		return resp.StatusCode, nil
+	if resp.StatusCode != http.StatusNotModified && resp.StatusCode/100 != 2 {
+		return resp.StatusCode, nil, nil, c.refused(r, resp, b)
 	}
-	if resp.StatusCode/100 != 2 {
-		return resp.StatusCode, apiError(resp.StatusCode, b)
+	return resp.StatusCode, b, resp.Header, nil
+}
+
+// refused is the *Error of a non-2xx answer to r, Definitive when the
+// control plane signed it for r.
+func (c *Client) refused(r *http.Request, resp *http.Response, body []byte) error {
+	err := apiError(resp.StatusCode, body)
+	if e, ok := err.(*Error); ok && proto.Definitive(e.Code) {
+		e.Definitive = c.pinned.VerifyRefusal(e.Code, r.Header.Get(proto.HeaderNonce), e.ServerTime, resp.Header.Get(proto.HeaderRefusalSignature)) == nil
 	}
-	if out != nil {
-		if err := json.Unmarshal(b, out); err != nil {
-			return resp.StatusCode, fmt.Errorf("%s %s: decode answer: %w", r.Method, r.URL.Path, err)
-		}
+	return err
+}
+
+// signedBody is a 200 answer to r as the control plane signed it, checked
+// as kind with the pinned key.
+func (c *Client) signedBody(r *http.Request, kind string, body []byte, h http.Header) (proto.SignedBody, error) {
+	b := proto.SignedBody{Body: body, Nonce: r.Header.Get(proto.HeaderNonce), Signature: h.Get(proto.HeaderConfigSignature)}
+	if err := c.pinned.VerifyBody(kind, b); err != nil {
+		return proto.SignedBody{}, fmt.Errorf("%s %s: %w; it was changed on the way, or comes from another control plane -- nothing of it is used",
+			r.Method, r.URL.Path, err)
 	}
-	return resp.StatusCode, nil
+	return b, nil
 }
 
 func apiError(status int, body []byte) error {
@@ -168,23 +206,31 @@ func clip(s string) string {
 	return s
 }
 
-// Config fetches the node's desired config. etag is the ETag of the applied
-// config ("" for none); when nothing changed the server answers 304 and
-// Config returns nil.
-func (c *Client) Config(ctx context.Context, etag string) (*proto.NodeConfig, error) {
+// Config fetches the node's desired config and checks the control plane's
+// signature, returning it as signed too, for the cache. etag is the ETag of
+// the applied config ("" for none); when nothing changed the server answers
+// 304 and Config returns nil.
+func (c *Client) Config(ctx context.Context, etag string) (*proto.NodeConfig, proto.SignedBody, error) {
 	r, err := c.signed(ctx, http.MethodGet, proto.PathConfig, nil)
 	if err != nil {
-		return nil, err
+		return nil, proto.SignedBody{}, err
 	}
 	if etag != "" {
 		r.Header.Set("If-None-Match", etag)
 	}
-	var cfg proto.NodeConfig
-	status, err := c.do(r, &cfg)
+	status, body, h, err := c.raw(r)
 	if err != nil || status == http.StatusNotModified {
-		return nil, err
+		return nil, proto.SignedBody{}, err
 	}
-	return &cfg, nil
+	b, err := c.signedBody(r, proto.SignedConfig, body, h)
+	if err != nil {
+		return nil, proto.SignedBody{}, err
+	}
+	var cfg proto.NodeConfig
+	if err := json.Unmarshal(body, &cfg); err != nil {
+		return nil, proto.SignedBody{}, fmt.Errorf("GET %s: decode answer: %w", proto.PathConfig, err)
+	}
+	return &cfg, b, nil
 }
 
 // Status sends a heartbeat.
@@ -221,21 +267,30 @@ func (c *Client) Prefs(ctx context.Context, req proto.PrefsRequest) (proto.Prefs
 	return resp, nil
 }
 
-// Mesh fetches the mesh view for the local UI (spec S7.6) and checks it
-// before anything caches or shows it.
-func (c *Client) Mesh(ctx context.Context) (proto.MeshView, error) {
+// Mesh fetches the mesh view for the local UI (spec S7.6) and checks the
+// control plane's signature and the view itself before anything caches or
+// shows it; the view comes back as signed too, for the cache.
+func (c *Client) Mesh(ctx context.Context) (proto.MeshView, proto.SignedBody, error) {
 	r, err := c.signed(ctx, http.MethodGet, proto.PathMesh, nil)
 	if err != nil {
-		return proto.MeshView{}, err
+		return proto.MeshView{}, proto.SignedBody{}, err
+	}
+	_, body, h, err := c.raw(r)
+	if err != nil {
+		return proto.MeshView{}, proto.SignedBody{}, err
+	}
+	b, err := c.signedBody(r, proto.SignedMesh, body, h)
+	if err != nil {
+		return proto.MeshView{}, proto.SignedBody{}, err
 	}
 	var v proto.MeshView
-	if _, err := c.do(r, &v); err != nil {
-		return proto.MeshView{}, err
+	if err := json.Unmarshal(body, &v); err != nil {
+		return proto.MeshView{}, proto.SignedBody{}, fmt.Errorf("GET %s: decode answer: %w", proto.PathMesh, err)
 	}
 	if err := v.Validate(); err != nil {
-		return proto.MeshView{}, fmt.Errorf("the server's mesh view is not valid, so it is not shown: %w", err)
+		return proto.MeshView{}, proto.SignedBody{}, fmt.Errorf("the server's mesh view is not valid, so it is not shown: %w", err)
 	}
-	return v, nil
+	return v, b, nil
 }
 
 // Names reports the node's container names (amendment A38).
@@ -274,7 +329,7 @@ func (c *Client) Events(ctx context.Context, fn func(proto.ConfigEvent), mesh fu
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponse)) // best effort: the status already failed
-		return apiError(resp.StatusCode, b)
+		return c.refused(r, resp, b)
 	}
 	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
 		return fmt.Errorf("event stream answered with Content-Type %q; a proxy in front of the server may be rewriting it", ct)

@@ -1,0 +1,9 @@
+{{define "content"}}
+<p><strong>{{.Data.Node.Name}}</strong> was seen {{.Data.Ago}} ago, so its agent is probably running. A new join token cuts it off at once: its agent stops, and every peer drops it until it joins with the new token.</p>
+<form method="post" action="{{$.Base}}/nodes/{{.Data.Node.Name}}/token">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<input type="hidden" name="confirm" value="yes">
+<button type="submit" class="danger">Cut {{.Data.Node.Name}} off and issue a token</button>
+<a href="{{$.Base}}/nodes/{{.Data.Node.Name}}">Cancel</a>
+</form>
+{{end}}

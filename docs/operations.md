@@ -139,7 +139,7 @@ At every start the agent decides:
 | has not joined | none | stops: set `MESHCTL_TOKEN` (the container restarts and says so again) |
 | has not joined | one it has not used | joins, then runs |
 | has joined | none, or the one it joined with | runs; no join |
-| has joined | a new one (`meshctl node token <name>`) | joins again with the same keys, then runs |
+| has joined | a new one (`meshctl node token <name>`) | joins again with fresh keys, then runs |
 
 The data directory keeps a fingerprint of the token (`join.json`), never the token. A token
 the server calls spent (used or expired) is remembered too, so restarts do not ask again; any
@@ -664,7 +664,12 @@ import fails). Node ids belong to the whole control plane: an export whose node 
 holds is refused. Users are not in an export: for a full restore, including users and
 `secret.key` (which seals their TOTP secrets), keep a copy of the `meshctl-data` volume as well
 (`docker run --rm -v meshctl-data:/data -v $PWD:/b alpine tar czf /b/meshctl-data.tgz -C /data .`,
-with the server stopped).
+with the server stopped). The volume holds `config.key` too, the key every config is signed with
+(amendment A50): agents trust no other, so a control plane restored without it signs with a new
+one and every node must join again with a new token. A rollback or an import never changes what a
+node brought at its join -- its keys, whether it is enrolled, its platform -- so a node cut off by
+a token stays cut off; a node the file re-creates gets the keys the file has, and joins again if
+it joined since.
 
 ## 11. When the control plane is down
 
@@ -731,5 +736,14 @@ server is back. When it is, agents reconnect within a minute.
 Server: bump `MESHCTL_VERSION` and redeploy. At start the server recomputes every node's config;
 if the new release computes differently, the agents receive the change like any other.
 
-Agents: run the install command again with a fresh token (`node token <name>`), or replace
-`/usr/local/bin/meshctl` with the new release and `systemctl restart meshctl-agent`.
+Agents: replace `/usr/local/bin/meshctl` with the new release and `systemctl restart
+meshctl-agent`, or run the install command again with a fresh token (`node token <name>`) -- the
+token cuts the node off until the new join (below).
+
+**A new token cuts the node off** (amendment A50). `meshctl node token <name>` (or the node page)
+retires the node's current key at once: its peers drop it, and its running agent is told, signed,
+that it was replaced -- it stops (`agent run` exits 3, which the systemd unit does not restart; on
+Windows the service stops). The node comes back when it joins with the new token, with fresh
+keys: every join makes new ones. The node page asks first when the node was seen in the last 5
+minutes; `node token` says it was. A copy of an old data dir, from any earlier join, is told the
+same and stops.

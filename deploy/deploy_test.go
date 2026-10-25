@@ -25,6 +25,7 @@ var wantService = map[string]string{
 	"ExecStart":                "/usr/local/bin/meshctl agent run --data /var/lib/meshctl",
 	"Restart":                  "always",
 	"RestartSec":               "5",
+	"RestartPreventExitStatus": "3",
 	"StateDirectory":           "meshctl",
 	"StateDirectoryMode":       "0700",
 	"RuntimeDirectory":         "meshctl wireguard",

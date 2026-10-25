@@ -33,7 +33,8 @@ func nodeCommands() []command {
 		{name: "rm", args: "<name>", summary: "remove a node; every peer drops it on the next apply", setup: nodeAction("rm")},
 		{name: "set", args: "<name>", summary: "change a node's endpoint, hub, exit, keepalive, MTU, container network, mesh IP or groups", setup: setupNodeSet},
 		{name: "show", args: "<name>", summary: "show a node, its container network's values, its computed config and its peers", setup: setupNodeShow},
-		{name: "token", args: "<name>", summary: "issue a new join token (revokes unused ones; re-keys an enrolled node)", setup: nodeAction("token")},
+		{name: "token", args: "<name>", summary: "issue a new join token (revokes unused ones; cuts an enrolled node off until it joins with it)",
+			setup: nodeAction("token")},
 	}
 }
 

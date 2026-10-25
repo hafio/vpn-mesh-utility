@@ -129,7 +129,8 @@ func TestStartNodeRuns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := dir.SaveEnrollment(state.Enrollment{Server: "https://mesh.example.com", NodeID: 4, Name: "nas", Role: proto.RoleSpoke}); err != nil {
+	if err := dir.SaveEnrollment(state.Enrollment{Server: "https://mesh.example.com", NodeID: 4, Name: "nas", Role: proto.RoleSpoke,
+		ConfigKey: testfix.ConfigKeyB64()}); err != nil {
 		t.Fatal(err)
 	}
 	// MESHCTL_URL is the control plane's flag only: a node that has joined

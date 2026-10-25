@@ -172,6 +172,10 @@ type JoinResponse struct {
 	Mesh     string `json:"mesh,omitempty"`
 	MeshUUID string `json:"mesh_uuid,omitempty"`
 	Slot     int    `json:"slot,omitempty"`
+	// ConfigKey is the control plane's public key (base64 Ed25519), which
+	// the agent pins: every config, mesh view and definitive refusal is
+	// signed with it (amendment A50).
+	ConfigKey string `json:"config_key"`
 }
 
 // StatusReport is the agent heartbeat (spec S6.3): every 30 s and right after

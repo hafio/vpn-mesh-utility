@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -37,14 +38,20 @@ import (
 	"github.com/hafio/vpn-mesh-utility/internal/validate"
 )
 
+// vps1 is what the agent of vps-1 checks its control plane's answers with.
+var vps1 = testfix.Pinned(testfix.VPS1.ID)
+
 // fakeServer speaks the agent API for one node and checks every signature
 // against that node's identity key. The agent tests cannot import the real
 // server (TestModuleBoundaries), so this is the contract seen from the agent.
 type fakeServer struct {
 	t   *testing.T
 	pub ed25519.PublicKey
-	// refuse, when set, is the error every signed call is answered with.
-	refuse *proto.ErrorBody
+	// refuse, when set, is the error every signed call is answered with;
+	// a definitive one is signed (amendment A50) unless unsigned is set, as
+	// a proxy forging it would send it.
+	refuse   *proto.ErrorBody
+	unsigned bool
 
 	mu      sync.Mutex
 	cfg     proto.NodeConfig
@@ -91,16 +98,32 @@ func (f *fakeServer) verify(w http.ResponseWriter, r *http.Request) ([]byte, boo
 		return nil, false
 	}
 	if f.refuse != nil {
-		status := http.StatusUnauthorized
-		if f.refuse.Code == proto.CodeNodeDisabled {
+		status, eb := http.StatusUnauthorized, *f.refuse
+		switch {
+		case eb.Code == proto.CodeNodeDisabled:
 			status = http.StatusForbidden
+		case proto.Definitive(eb.Code):
+			status, eb.ServerTime = http.StatusForbidden, time.Now().Unix()
+			if !f.unsigned {
+				w.Header().Set(proto.HeaderRefusalSignature, proto.SignRefusal(testfix.ConfigKey(), s.NodeID, eb.Code, s.Nonce, eb.ServerTime))
+			}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
-		_ = json.NewEncoder(w).Encode(f.refuse)
+		_ = json.NewEncoder(w).Encode(eb)
 		return nil, false
 	}
 	return body, true
+}
+
+// signed answers 200 with v as the control plane signs it (amendment A50):
+// for the node that asked, in slot, bound to the request's nonce.
+func signed(w http.ResponseWriter, r *http.Request, kind string, slot proto.Slot, v any) {
+	b, _ := json.Marshal(v)
+	b = append(b, '\n')
+	node, _ := strconv.ParseInt(r.Header.Get(proto.HeaderNode), 10, 64)
+	w.Header().Set(proto.HeaderConfigSignature, proto.SignBody(testfix.ConfigKey(), kind, node, slot, r.Header.Get(proto.HeaderNonce), b))
+	_, _ = w.Write(b)
 }
 
 func (f *fakeServer) set(cfg proto.NodeConfig) proto.ConfigEvent {
@@ -124,7 +147,7 @@ func (f *fakeServer) config(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
-	_ = json.NewEncoder(w).Encode(cfg)
+	signed(w, r, proto.SignedConfig, cfg.Node.Slot, cfg)
 }
 
 func (f *fakeServer) events(w http.ResponseWriter, r *http.Request) {
@@ -239,7 +262,7 @@ func (f *fakeServer) meshHandler(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(proto.ErrorBody{Code: proto.CodeInternal, Message: "the server is down"})
 		return
 	}
-	_ = json.NewEncoder(w).Encode(f.mesh)
+	signed(w, r, proto.SignedMesh, f.cfg.Node.Slot, f.mesh)
 }
 
 func (f *fakeServer) setMesh(v *proto.MeshView) {
@@ -276,8 +299,8 @@ func newDir(t *testing.T) (*state.Dir, ed25519.PublicKey) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	keys, err := dir.LoadOrCreateKeys()
-	if err != nil {
+	keys := state.NewKeys()
+	if err := dir.SaveKeys(keys); err != nil {
 		t.Fatal(err)
 	}
 	return dir, keys.Identity.Public().(ed25519.PublicKey)
@@ -288,7 +311,8 @@ func enroll(t *testing.T, dir *state.Dir, server string) { enrollAs(t, dir, serv
 
 func enrollAs(t *testing.T, dir *state.Dir, server string, n testfix.Node) {
 	t.Helper()
-	if err := dir.SaveEnrollment(state.Enrollment{Server: server, NodeID: n.ID, Name: n.Name, Role: n.Role, MeshIP: n.MeshIP}); err != nil {
+	if err := dir.SaveEnrollment(state.Enrollment{Server: server, NodeID: n.ID, Name: n.Name, Role: n.Role, MeshIP: n.MeshIP,
+		ConfigKey: testfix.ConfigKeyB64()}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -351,6 +375,19 @@ type rig struct {
 	deps   Deps
 	done   chan error
 	cancel context.CancelFunc
+}
+
+// stop ends the run and waits for it, as a service manager does before it
+// starts the agent again: until then the data dir is the old run's.
+func (r *rig) stop(t *testing.T) {
+	t.Helper()
+	r.cancel()
+	select {
+	case err := <-r.done:
+		r.done <- err // for the cleanup
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not stop")
+	}
 }
 
 func start(t *testing.T, dir *state.Dir, socket string) *rig {
@@ -416,7 +453,7 @@ func TestRunFollowsTheServer(t *testing.T) {
 	f.push <- f.set(next)
 	eventually(t, "the pushed change", func() bool { return r.peers() == 1 })
 	eventually(t, "the cache to hold v4", func() bool {
-		c, err := dir.Config()
+		c, err := dir.Config(vps1)
 		return err == nil && c != nil && c.Version == 4
 	})
 
@@ -436,7 +473,7 @@ func TestRunNamesItsSlot(t *testing.T) {
 	_, srv := newFakeServer(t, pub, cfg, nil)
 	n := testfix.VPS1
 	if err := dir.SaveEnrollment(state.Enrollment{Server: srv.URL, NodeID: n.ID, Name: n.Name, Role: n.Role, MeshIP: n.MeshIP,
-		Mesh: "lab", Slot: 2}); err != nil {
+		Mesh: "lab", Slot: 2, ConfigKey: testfix.ConfigKeyB64()}); err != nil {
 		t.Fatal(err)
 	}
 	r := start(t, dir, "")
@@ -470,7 +507,7 @@ func TestRunPollsWhenTheStreamIsSilent(t *testing.T) {
 func TestRunBootsFromTheCacheWithoutTheServer(t *testing.T) {
 	dir, _ := newDir(t)
 	enroll(t, dir, "http://127.0.0.1:1") // nothing listens there
-	if err := dir.SaveConfig(testfix.ServerConfig()); err != nil {
+	if err := dir.SaveConfig(testfix.SignedConfig(testfix.ServerConfig())); err != nil {
 		t.Fatal(err)
 	}
 	r := start(t, dir, "")
@@ -493,7 +530,7 @@ func TestRunKeepsTheOldConfigWhenANewOneFails(t *testing.T) {
 	if r.peers() != 2 {
 		t.Fatal("a refused config changed the interface")
 	}
-	if c, _ := dir.Config(); c == nil || c.Version != 3 {
+	if c, _ := dir.Config(vps1); c == nil || c.Version != 3 {
 		t.Fatal("a refused config replaced the cache")
 	}
 }
@@ -590,10 +627,10 @@ func TestRunRefusesAnUnusableDataDir(t *testing.T) {
 	// came first would skip the cached one as rolled back and pass here too.
 	// Every seam is a fake, so such a boot would touch nothing real either.
 	cfg, pending := withDNS(version(3)), withDNS(version(4))
-	if err := dir.SaveConfig(cfg); err != nil {
+	if err := dir.SaveConfig(testfix.SignedConfig(cfg)); err != nil {
 		t.Fatal(err)
 	}
-	if err := dir.SavePending(pending); err != nil {
+	if err := dir.SavePending(testfix.SignedConfig(pending)); err != nil {
 		t.Fatal(err)
 	}
 	h = agentfake.NewHost()
@@ -621,7 +658,7 @@ func TestRunIgnoresDamagedConfigFiles(t *testing.T) {
 	var logs syncBuffer
 	r := startLogged(t, dir, "", slog.New(slog.NewTextHandler(&logs, nil)))
 	eventually(t, "the server's config, cached", func() bool {
-		c, _ := dir.Config()
+		c, _ := dir.Config(vps1)
 		return r.peers() == 2 && c != nil && c.Version == 3 && !pendingExists(dir)
 	})
 	for _, want := range []string{"ignoring the cached config", "ignoring the pending config"} {
@@ -650,7 +687,7 @@ func TestRunReportsUnreadablePeerStatus(t *testing.T) {
 func TestPrefsNeedTheServer(t *testing.T) {
 	dir, _ := newDir(t)
 	enrollAs(t, dir, "http://127.0.0.1:1", testfix.Laptop) // nothing listens there
-	if err := dir.SaveConfig(testfix.SpokeConfig("")); err != nil {
+	if err := dir.SaveConfig(testfix.SignedConfig(testfix.SpokeConfig(""))); err != nil {
 		t.Fatal(err)
 	}
 	sock := filepath.Join(dir.Path, "agent.sock")
@@ -696,7 +733,7 @@ func TestDefaultSocket(t *testing.T) {
 	// which the CLI finds from the data dir.
 	dir, _ := newDir(t)
 	if err := dir.SaveEnrollment(state.Enrollment{Server: "https://mesh.example.com", NodeID: 9, Name: "laptop", Role: proto.RoleSpoke,
-		Mesh: "lab", Slot: 2}); err != nil {
+		Mesh: "lab", Slot: 2, ConfigKey: testfix.ConfigKeyB64()}); err != nil {
 		t.Fatal(err)
 	}
 	if got := DefaultSocket("windows", dir.Path); got != `\\.\pipe\meshctl-agent-2` {
@@ -740,7 +777,7 @@ func (s *fakeService) Install(context.Context) error {
 
 func TestJoin(t *testing.T) {
 	var got proto.JoinRequest
-	nodeID, mesh, slot := int64(7), "", 0
+	nodeID, mesh, slot, configKey := int64(7), "", 0, testfix.ConfigKeyB64()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != proto.PathJoin || r.Header.Get(proto.HeaderSignature) != "" {
 			t.Errorf("join must be an unsigned POST to %s", proto.PathJoin)
@@ -748,7 +785,7 @@ func TestJoin(t *testing.T) {
 		b, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(b, &got)
 		_ = json.NewEncoder(w).Encode(proto.JoinResponse{NodeID: nodeID, Name: "vps-1", Role: proto.RoleServer, MeshIP: "10.77.0.1",
-			Mesh: mesh, MeshUUID: "8c2b6f3e-0d1a-4c55-9e7a-1f2d3c4b5a69", Slot: slot})
+			Mesh: mesh, MeshUUID: "8c2b6f3e-0d1a-4c55-9e7a-1f2d3c4b5a69", Slot: slot, ConfigKey: configKey})
 	}))
 	defer srv.Close()
 	data := filepath.Join(t.TempDir(), "data")
@@ -780,7 +817,7 @@ func TestJoin(t *testing.T) {
 	}
 
 	// Re-joining as another node drops the cached config.
-	if err := dir.SaveConfig(testfix.ServerConfig()); err != nil {
+	if err := dir.SaveConfig(testfix.SignedConfig(testfix.ServerConfig())); err != nil {
 		t.Fatal(err)
 	}
 	nodeID = 8
@@ -789,14 +826,16 @@ func TestJoin(t *testing.T) {
 	if _, err := Join(context.Background(), opts); err != nil {
 		t.Fatal(err)
 	}
-	if c, _ := dir.Config(); c != nil {
+	if c, _ := dir.Config(vps1); c != nil {
 		t.Fatal("the old node's cached config survived a re-join as another node")
 	}
 	if !strings.Contains(out.String(), "no systemd here") {
 		t.Fatalf("the reason for skipping the service must be printed: %s", out.String())
 	}
-	if again, _ := dir.LoadKeys(); !again.Identity.Equal(keys.Identity) {
-		t.Fatal("re-join replaced the identity key")
+	// Every join makes fresh keys (amendment A50), the ones it sent.
+	again, _ := dir.LoadKeys()
+	if again.Identity.Equal(keys.Identity) || again.WG == keys.WG || got.IdentityPublicKey != again.IdentityPublic() {
+		t.Fatal("re-join kept the old keys, or wrote others than it sent")
 	}
 
 	// A mesh in slot 1 (amendment A49) is recorded, and its names said; a
@@ -812,12 +851,47 @@ func TestJoin(t *testing.T) {
 	if !strings.Contains(out.String(), "mesh lab, slot 1: interface wg1, local UI port 7444") {
 		t.Fatalf("join output: %s", out.String())
 	}
+	joined, _ := dir.LoadKeys() // the lab join's
 	slot = proto.MaxSlot + 1
 	if _, err := Join(context.Background(), opts); err == nil || !strings.Contains(err.Error(), "slot 64") {
 		t.Fatalf("join into slot 64 = %v", err)
 	}
 	if e, err := dir.Enrollment(); err != nil || e.Slot != 1 {
 		t.Fatalf("enrollment after the refusal %+v, %v", e, err)
+	}
+	// A join the agent refuses after the answer, here for want of a config
+	// key to pin, writes no key; nor does one under a running agent, which
+	// never reaches the server (amendment A50).
+	slot, configKey = 1, ""
+	if _, err := Join(context.Background(), opts); err == nil || !strings.Contains(err.Error(), "config key") {
+		t.Fatalf("a join answer without a config key = %v", err)
+	}
+	if k, _ := dir.LoadKeys(); !k.Identity.Equal(joined.Identity) || k.WG != joined.WG {
+		t.Fatal("a refused join replaced the keys")
+	}
+	// Keys that cannot be written after the answer: the error says to join
+	// again.
+	slot, configKey = 0, testfix.ConfigKeyB64()
+	broken := opts
+	broken.DataDir = filepath.Join(t.TempDir(), "broken")
+	bdir, err := state.Open(broken.DataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(bdir.Path, state.IdentityKeyFile, "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Join(context.Background(), broken); err == nil || !strings.Contains(err.Error(), "could not be written") {
+		t.Fatalf("a join whose keys cannot be written = %v", err)
+	}
+	unlock, err := dir.Lock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	got = proto.JoinRequest{}
+	if _, err := Join(context.Background(), opts); !errors.Is(err, state.ErrLocked) || got.Token != "" {
+		t.Fatalf("a join under a running agent = %v (request %+v)", err, got)
 	}
 }
 
@@ -902,7 +976,7 @@ func TestRunExplainsRefusals(t *testing.T) {
 			dir, pub := newDir(t)
 			_, srv := newFakeServer(t, pub, testfix.ServerConfig(), &c.refuse)
 			enroll(t, dir, srv.URL)
-			if err := dir.SaveConfig(testfix.ServerConfig()); err != nil {
+			if err := dir.SaveConfig(testfix.SignedConfig(testfix.ServerConfig())); err != nil {
 				t.Fatal(err)
 			}
 			var logs syncBuffer
@@ -912,6 +986,57 @@ func TestRunExplainsRefusals(t *testing.T) {
 				t.Fatal("the cached config must stay applied")
 			}
 		})
+	}
+}
+
+// A definitive refusal the control plane signed for the request ends the
+// run with ErrRefused (amendment A50); the same answer unsigned, as a
+// proxy would forge it, is logged and retried.
+func TestRunStopsOnASignedRefusal(t *testing.T) {
+	refuse := proto.ErrorBody{Code: proto.CodeReplaced, Message: "node vps-1 no longer has this agent's key"}
+	dir, pub := newDir(t)
+	f, srv := newFakeServer(t, pub, testfix.ServerConfig(), &refuse)
+	f.unsigned = true
+	enroll(t, dir, srv.URL)
+	var logs syncBuffer
+	r := startLogged(t, dir, "", slog.New(slog.NewTextHandler(&logs, nil)))
+	eventually(t, "the unsigned refusal retried", func() bool { return strings.Contains(logs.String(), "will retry") })
+	select {
+	case err := <-r.done:
+		r.done <- err // for the cleanup
+		t.Fatalf("an unsigned refusal ended the run: %v", err)
+	default:
+	}
+
+	dir2, pub2 := newDir(t)
+	_, srv2 := newFakeServer(t, pub2, testfix.ServerConfig(), &refuse)
+	enroll(t, dir2, srv2.URL)
+	r2 := start(t, dir2, "")
+	select {
+	case err := <-r2.done:
+		r2.done <- err
+		if !errors.Is(err, ErrRefused) || !strings.Contains(err.Error(), "no longer has") {
+			t.Fatalf("Run after a signed refusal = %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("a signed refusal did not end the run")
+	}
+}
+
+// A second agent on a data dir in use is refused before it reads or
+// touches anything (amendment A50).
+func TestRunNeedsTheDataDirToItself(t *testing.T) {
+	dir, _ := joinedTo(t, testfix.ServerConfig())
+	unlock, err := dir.Lock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	h := agentfake.NewHost()
+	err = Run(context.Background(), Deps{DataDir: dir.Path, Host: h, Routes: agentfake.NewRoutes(), Exit: &agentfake.Policy{}, Sysctl: &agentfake.Sysctl{},
+		RuntimeSocket: RuntimeOff})
+	if !errors.Is(err, state.ErrLocked) || h.Mutations() != 0 {
+		t.Fatalf("Run on a locked data dir = %v, %d host changes", err, h.Mutations())
 	}
 }
 
@@ -976,7 +1101,7 @@ func TestDNSOnAndOffStayOnTheNode(t *testing.T) {
 	if l, err := dir.Local(); err != nil || !l.DNSOff {
 		t.Fatalf("local.json = %+v, %v", l, err)
 	}
-	r.cancel()
+	r.stop(t)
 	eventually(t, "the resolver to stop with the agent", r.dns.IsClosed)
 
 	again := start(t, dir, filepath.Join(dir.Path, "again.sock"))
@@ -1072,7 +1197,7 @@ func TestMeshViewIsCached(t *testing.T) {
 	r := start(t, dir, sock)
 	eventually(t, "the first config, and the mesh view in mesh.json", func() bool {
 		st, err := localapi.NewClient(sock).Status(context.Background())
-		m, merr := dir.Mesh()
+		m, merr := dir.Mesh(vps1)
 		return err == nil && st.AppliedVersion == 3 && merr == nil && len(m.View.Nodes) == len(view.Nodes)
 	})
 	eventually(t, "the view fetched at start and after the first config", func() bool { return f.meshCalls() >= 2 })
@@ -1100,11 +1225,11 @@ func TestMeshViewIsCached(t *testing.T) {
 		t.Fatalf("after a new config the server was asked %d times in all, want %d (%v)", f.meshCalls(), asked+1, err)
 	}
 
-	last, err := dir.Mesh()
+	last, err := dir.Mesh(vps1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.cancel()
+	r.stop(t)
 	f.setMesh(nil)
 	again := filepath.Join(dir.Path, "again.sock")
 	start(t, dir, again)
@@ -1403,7 +1528,7 @@ func TestMeshNamesReachTheResolver(t *testing.T) {
 	dir, f := joinedTo(t, testfix.ServerConfig())
 	cached := testfix.MeshView()
 	cached.Names = testfix.MeshNames()[:1]
-	if err := dir.SaveMesh(proto.LocalMesh{View: cached, FetchedAt: 1}); err != nil {
+	if err := dir.SaveMesh(testfix.Signed(proto.SignedMesh, testfix.VPS1.ID, cached), 1); err != nil {
 		t.Fatal(err)
 	}
 	r := startWith(t, dir, "", func(d *Deps) { d.MeshEvery = time.Hour })
