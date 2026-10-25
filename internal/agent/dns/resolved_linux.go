@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
+
+	"github.com/hafio/vpn-mesh-utility/internal/proto"
 )
 
 // systemd-resolved's D-Bus API (org.freedesktop.resolve1(5)).
@@ -36,8 +38,9 @@ type resolved struct {
 	conn *dbus.Conn
 }
 
-// NewRegistrar returns the host's registrar: systemd-resolved.
-func NewRegistrar() Registrar { return &resolved{} }
+// NewRegistrar returns the host's registrar: systemd-resolved, which keeps
+// each agent's registration on its own interface, whatever its slot.
+func NewRegistrar(proto.Slot) Registrar { return &resolved{} }
 
 // linkDNS and linkDomain are resolved's a(iay) and a(sb).
 type linkDNS struct {

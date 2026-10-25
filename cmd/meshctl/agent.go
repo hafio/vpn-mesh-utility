@@ -178,7 +178,8 @@ func agentLog(stderr io.Writer, data string, asService bool) (io.Writer, func(),
 // socket once flags are parsed: --socket, else the default for the data dir.
 func socketFlags(fs *flag.FlagSet, e *env) (*string, func() string) {
 	data := fs.String("data", defaultAgentData(e), "agent data directory")
-	socket := fs.String("socket", "", `local API socket (default: /run/meshctl/agent.sock for the standard data dir, else <data>/agent.sock; \\.\pipe\meshctl-agent on Windows)`)
+	socket := fs.String("socket", "", `local API socket (default: /run/meshctl/agent.sock for the standard data dir, else <data>/agent.sock; `+
+		`on Windows \\.\pipe\meshctl-agent, with -<slot> for a mesh in another slot)`)
 	return data, func() string {
 		if *socket != "" {
 			return *socket

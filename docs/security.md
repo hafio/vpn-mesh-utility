@@ -359,19 +359,23 @@ machine other people log in to, run the agent with `--ui-listen off`.
   `agent.log` live there.
 - **The local API** is the named pipe `\\.\pipe\meshctl-agent`, which only Administrators and
   SYSTEM may open (`D:P(A;;GA;;;BA)(A;;GA;;;SY)`, amendment A7): `meshctl status`, `exit` and
-  `ui` need an elevated prompt. A second agent cannot take the pipe while one listens.
+  `ui` need an elevated prompt. A second agent cannot take the pipe while one listens. The agent
+  of a mesh in slot s (amendment A49) has `\\.\pipe\meshctl-agent-<s>`, with the same DACL.
 - **The log file** is capped at 10 MiB plus one older copy and carries what the journal carries
   on Linux: no key, no token.
 - **Split DNS** is NRPT rules under the agent's own keys in
   `HKLM\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters\DnsPolicyConfig`: `.mesh`, one per
   extra domain (amendment A39), and in exit mode `.` (every name), all to the mesh IP. Every key
-  starts with the agent's prefix (`{6d657368-6374-6c0`, "meshctl" in hex), a domain's derived from
-  its name; the agent writes, reads and removes only keys with that prefix, and takes them back on
-  `meshctl dns off` and when it stops.
+  is a GUID that starts with the agent's prefix (`{6d657368-6374-`, "meshctl" in hex) and whose
+  third part names its mesh's slot (`6c00` and `6c01` for slot 0, `6c00`+2s and `6c01`+2s for
+  slot s, amendment A49), a domain's derived from its name; each agent writes, reads and removes
+  only its own slot's keys, and takes them back on `meshctl dns off` and when it stops.
 - **Exit mode** routes 0.0.0.0/1 and 128.0.0.0/1 into the tunnel, and ::/1 and 8000::/1 too,
   with no IPv6 peer behind them, so IPv6 cannot leak around the exit (amendment A11). The
   tunnel's own packets are bound to the interface of the host's default route, so they never
-  loop into the tunnel; the agent rebinds them when that route moves.
+  loop into the tunnel; the agent rebinds them when that route moves. While another mesh's
+  adapter (known by its GUID) holds those routes, exit mode stays off (degraded `exit`,
+  amendment A49); the other meshes' tunnels then run through that exit.
 - **Exit mode on a Linux kernel without IPv6 policy routing** (amendment A45) cannot hold IPv6
   back: the node carries IPv4 through the exit and reports `degraded exit` until IPv6 is turned
   off on the host; the leak is reported, never silent.

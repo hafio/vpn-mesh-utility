@@ -306,7 +306,9 @@ mode's rules 10*s lower and table 51820+2s, the container network's rules 10*s h
 51821+2s, the bridge `meshctl<s>` and runtime network `meshctl-mesh<s>`, the firewalld zone
 `mesh<s>` and policies `meshctl<s>-relay|exit` (a config's rules name the zone `mesh`), the table
 `inet meshctl<s>` and its interfaces' sysctl keys -- and lists, changes and removes only its
-own (`internal/proto/slot.go`). The fwmark is every slot's. Exit mode stays off while another
+own (`internal/proto/slot.go`). The fwmark is every slot's. On Windows the slot also names the
+local API's pipe (`\\.\pipe\meshctl-agent-<s>`), the wintun adapter's GUID and the NRPT keys,
+and exit mode stays off while another meshctl adapter holds the split default routes. Exit mode stays off while another
 slot's exit rules are on the host (degraded `exit`, naming that slot's interface); of two that
 added theirs at once, the lower slot keeps them.
 

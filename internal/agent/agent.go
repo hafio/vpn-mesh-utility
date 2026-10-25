@@ -297,7 +297,7 @@ func Run(ctx context.Context, d Deps) error {
 		d.Firewall = &firewall.Firewall{Run: execrun.Exec{}, Dir: dir.Path, Iface: iface, Slot: slot}
 	}
 	if d.DNS == nil {
-		d.DNS = dns.New(dns.NewRegistrar(), d.Log)
+		d.DNS = dns.New(dns.NewRegistrar(slot), d.Log)
 	}
 	if d.Containers == nil {
 		d.Containers = containers.NewNet()
@@ -1068,16 +1068,27 @@ func (r *runner) prefs(ctx context.Context, req proto.PrefsRequest) (proto.Prefs
 	return resp, nil
 }
 
-// PipeName is the local API on Windows (amendment A7).
+// PipeName is the local API on Windows (amendment A7): the first mesh's.
 const PipeName = `\\.\pipe\meshctl-agent`
 
-// DefaultSocket is the local API socket for a data dir on goos: the named
-// pipe on Windows; the runtime dir for the standard data dir, else inside
-// the data dir.
+// Pipe is the local API's named pipe of the agent of a mesh in slot s
+// (amendment A49): PipeName, PipeName-1, ...
+func Pipe(s proto.Slot) string {
+	if s == 0 {
+		return PipeName
+	}
+	return fmt.Sprintf("%s-%d", PipeName, s)
+}
+
+// DefaultSocket is the local API socket for a data dir on goos: on Windows
+// the named pipe of the slot the data dir's node joined (slot 0's before a
+// join, or when its enrollment cannot be read); the runtime dir for the
+// standard data dir, else inside the data dir.
 func DefaultSocket(goos, dataDir string) string {
 	switch {
 	case goos == "windows":
-		return PipeName
+		e, _ := (&state.Dir{Path: dataDir}).Enrollment() // read only; the zero value is slot 0
+		return Pipe(e.Slot)
 	case dataDir == "/var/lib/meshctl":
 		return "/run/meshctl/agent.sock"
 	}

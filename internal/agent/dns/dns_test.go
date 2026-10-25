@@ -260,7 +260,7 @@ func TestZoneFollowsTheConfig(t *testing.T) {
 	if r := desired(Want{IP: laptop, Config: d}); len(r.Domains) != 1 || r.Domains[0].Name != "home.arpa" {
 		t.Fatalf("registration = %+v", r)
 	}
-	if rules := rulesFor(desired(Want{IP: laptop, Config: d, Exit: true})); len(rules) != 2 || rules[0].Name != ".home.arpa" {
+	if rules := rulesFor(desired(Want{IP: laptop, Config: d, Exit: true}), 0); len(rules) != 2 || rules[0].Name != ".home.arpa" {
 		t.Fatalf("NRPT rules = %+v", rules)
 	}
 }

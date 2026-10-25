@@ -37,7 +37,7 @@ func TestClassifyBusErrors(t *testing.T) {
 // An interface that does not exist fails before anything is sent to
 // resolved, wherever the test runs (with a system bus or without).
 func TestRegistrarNeedsTheInterface(t *testing.T) {
-	r := NewRegistrar()
+	r := NewRegistrar(0)
 	ctx := context.Background()
 	if _, err := r.Get(ctx, "mctest-none"); err == nil {
 		t.Fatal("Get of a missing interface succeeded")

@@ -55,7 +55,7 @@ meshctl agent run [flags]
 | `--log-level` | `info` | debug, info, warn or error |
 | `--no-firewall` | `false` | leave the host firewall alone (you open the WireGuard port and the Swarm ports yourself) |
 | `--runtime-socket` | `auto` | the container runtime's API socket the containers' names are read from (GET only): auto (Docker's, then Podman's), off, or a path |
-| `--socket` |  | local API socket (default: /run/meshctl/agent.sock for the standard data dir, else &lt;data&gt;/agent.sock; \\.\pipe\meshctl-agent on Windows) |
+| `--socket` |  | local API socket (default: /run/meshctl/agent.sock for the standard data dir, else &lt;data&gt;/agent.sock; on Windows \\.\pipe\meshctl-agent, with -&lt;slot&gt; for a mesh in another slot) |
 | `--status-every` | `30s` | how often the agent reports to the server; the server's --hub-down-after must be longer on a server |
 | `--ui-listen` | `auto` | the local UI's loopback address, auto (127.0.0.1:7443, plus the mesh's slot) or off; meshctl ui prints a sign-in link |
 | `--wg-backend` | `auto` | WireGuard backend: auto (kernel when the module is there), kernel or userspace (wireguard-go on /dev/net/tun) |
@@ -102,7 +102,7 @@ meshctl dns [on|off] [flags]
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--data` | `/var/lib/meshctl` | agent data directory |
-| `--socket` |  | local API socket (default: /run/meshctl/agent.sock for the standard data dir, else &lt;data&gt;/agent.sock; \\.\pipe\meshctl-agent on Windows) |
+| `--socket` |  | local API socket (default: /run/meshctl/agent.sock for the standard data dir, else &lt;data&gt;/agent.sock; on Windows \\.\pipe\meshctl-agent, with -&lt;slot&gt; for a mesh in another slot) |
 
 ## meshctl exit
 
@@ -115,7 +115,7 @@ meshctl exit [<server>|off] [flags]
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--data` | `/var/lib/meshctl` | agent data directory |
-| `--socket` |  | local API socket (default: /run/meshctl/agent.sock for the standard data dir, else &lt;data&gt;/agent.sock; \\.\pipe\meshctl-agent on Windows) |
+| `--socket` |  | local API socket (default: /run/meshctl/agent.sock for the standard data dir, else &lt;data&gt;/agent.sock; on Windows \\.\pipe\meshctl-agent, with -&lt;slot&gt; for a mesh in another slot) |
 | `--wait` | `30s` | how long to wait for the agent to apply the change (0 returns once the server accepted it) |
 
 ## meshctl export
@@ -187,7 +187,7 @@ meshctl healthcheck agent [flags]
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--data` | `/var/lib/meshctl` | agent data directory |
-| `--socket` |  | local API socket (default: /run/meshctl/agent.sock for the standard data dir, else &lt;data&gt;/agent.sock; \\.\pipe\meshctl-agent on Windows) |
+| `--socket` |  | local API socket (default: /run/meshctl/agent.sock for the standard data dir, else &lt;data&gt;/agent.sock; on Windows \\.\pipe\meshctl-agent, with -&lt;slot&gt; for a mesh in another slot) |
 
 ## meshctl healthcheck control
 
@@ -248,7 +248,7 @@ meshctl logs [flags]
 | --- | --- | --- |
 | `--data` | `/var/lib/meshctl` | agent data directory |
 | `-f` | `false` | keep printing new lines until interrupted |
-| `--socket` |  | local API socket (default: /run/meshctl/agent.sock for the standard data dir, else &lt;data&gt;/agent.sock; \\.\pipe\meshctl-agent on Windows) |
+| `--socket` |  | local API socket (default: /run/meshctl/agent.sock for the standard data dir, else &lt;data&gt;/agent.sock; on Windows \\.\pipe\meshctl-agent, with -&lt;slot&gt; for a mesh in another slot) |
 
 ## meshctl mesh add
 
@@ -520,7 +520,7 @@ meshctl status [flags]
 | --- | --- | --- |
 | `--data` | `/var/lib/meshctl` | agent data directory |
 | `--json` | `false` | print the status as JSON |
-| `--socket` |  | local API socket (default: /run/meshctl/agent.sock for the standard data dir, else &lt;data&gt;/agent.sock; \\.\pipe\meshctl-agent on Windows) |
+| `--socket` |  | local API socket (default: /run/meshctl/agent.sock for the standard data dir, else &lt;data&gt;/agent.sock; on Windows \\.\pipe\meshctl-agent, with -&lt;slot&gt; for a mesh in another slot) |
 
 ## meshctl ui
 
@@ -533,7 +533,7 @@ meshctl ui [flags]
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--data` | `/var/lib/meshctl` | agent data directory |
-| `--socket` |  | local API socket (default: /run/meshctl/agent.sock for the standard data dir, else &lt;data&gt;/agent.sock; \\.\pipe\meshctl-agent on Windows) |
+| `--socket` |  | local API socket (default: /run/meshctl/agent.sock for the standard data dir, else &lt;data&gt;/agent.sock; on Windows \\.\pipe\meshctl-agent, with -&lt;slot&gt; for a mesh in another slot) |
 
 ## meshctl user add
 

@@ -16,14 +16,20 @@ import (
 	"golang.zx2c4.com/wireguard/tun"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 
+	"github.com/hafio/vpn-mesh-utility/internal/agent/exitmode"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/routes"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/wintun"
+	"github.com/hafio/vpn-mesh-utility/internal/proto"
 )
 
-// adapterGUID is the wintun adapter's GUID. It is fixed, so Windows sees
-// the same network after every restart of the agent instead of a new one
-// each time (amendment A34).
-var adapterGUID = windows.GUID{Data1: 0x6d657368, Data2: 0x6374, Data3: 0x6c00, Data4: [8]byte{0x8a, 0x2f, 0x41, 0x7e, 0x0c, 0x5b, 0x93, 0xd1}}
+// adapterGUID is the wintun adapter's GUID for the interface name. It is
+// fixed for each mesh slot (adapter.go), so Windows sees the same network
+// after every restart of the agent instead of a new one each time
+// (amendment A34).
+func adapterGUID(name string) (windows.GUID, error) {
+	d3, err := adapterPart(name)
+	return windows.GUID{Data1: adapterData1, Data2: adapterData2, Data3: d3, Data4: adapterData4}, err
+}
 
 // userspace is the Host on Windows: wireguard-go (wgdev) on a wintun
 // adapter whose MTU and addresses go through the IP helper API (winipcfg).
@@ -86,7 +92,11 @@ func (u *userspace) CreateLink(name string) error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.closeLocked()
-	tdev, err := tun.CreateTUNWithRequestedGUID(name, &adapterGUID, device.DefaultMTU)
+	guid, err := adapterGUID(name)
+	if err != nil {
+		return err
+	}
+	tdev, err := tun.CreateTUNWithRequestedGUID(name, &guid, device.DefaultMTU)
 	if err != nil {
 		return fmt.Errorf("create the WireGuard adapter %s: %w (it takes the service, or an elevated prompt)", name, err)
 	}
@@ -191,14 +201,23 @@ func (u *userspace) closeLocked() {
 // SetExit turns exit mode on or off (wg.ExitRouter): the split default
 // routes on the adapter, and the tunnel's own packets bound to the
 // physical interface so they never loop into the tunnel (amendment A11).
+// While another mesh's adapter holds the split default routes (amendment
+// A49), exit mode stays off and the error wraps exitmode.ErrExitTaken; of
+// two that hold them at once, the lower slot keeps them.
 func (u *userspace) SetExit(name string, on bool) (int, error) {
 	luid, _, err := u.adapter(name)
 	if err != nil {
 		return 0, err
 	}
-	have, err := exitRoutes(luid)
+	have, others, err := exitRoutes(luid)
 	if err != nil {
 		return 0, err
+	}
+	var taken error
+	if own, _ := proto.InterfaceSlot(name); on {
+		if holder, ok := exitmode.Holder(own, len(have) > 0, others); ok {
+			on, taken = false, exitmode.Taken(holder)
+		}
 	}
 	n := 0
 	for _, p := range routes.ExitPrefixes {
@@ -216,7 +235,10 @@ func (u *userspace) SetExit(name string, on bool) (int, error) {
 		}
 	}
 	c, err := u.bindExit(on)
-	return n + c, err
+	if err != nil {
+		return n + c, err
+	}
+	return n + c, taken
 }
 
 func unspecified(p netip.Prefix) netip.Addr {
@@ -226,22 +248,34 @@ func unspecified(p netip.Prefix) netip.Addr {
 	return netip.IPv6Unspecified()
 }
 
-// exitRoutes are the split default routes on the adapter now.
-func exitRoutes(luid winipcfg.LUID) (map[netip.Prefix]bool, error) {
+// exitRoutes are the split default routes on the adapter now, and the
+// slots of the other meshctl adapters that hold some (by their GUIDs;
+// another program's adapter is not counted).
+func exitRoutes(luid winipcfg.LUID) (map[netip.Prefix]bool, []proto.Slot, error) {
 	have := map[netip.Prefix]bool{}
+	var others []proto.Slot
 	for _, family := range []winipcfg.AddressFamily{windows.AF_INET, windows.AF_INET6} {
 		rows, err := winipcfg.GetIPForwardTable2(family)
 		if err != nil {
-			return nil, fmt.Errorf("exit mode: list routes: %w", err)
+			return nil, nil, fmt.Errorf("exit mode: list routes: %w", err)
 		}
 		for i := range rows {
 			r := &rows[i]
-			if p := r.DestinationPrefix.Prefix(); r.InterfaceLUID == luid && slices.Contains(routes.ExitPrefixes, p) {
-				have[p] = true
+			if p := r.DestinationPrefix.Prefix(); !slices.Contains(routes.ExitPrefixes, p) {
+				continue
+			}
+			if r.InterfaceLUID == luid {
+				have[r.DestinationPrefix.Prefix()] = true
+				continue
+			}
+			if g, err := r.InterfaceLUID.GUID(); err == nil {
+				if s, ok := adapterSlot(g.Data1, g.Data2, g.Data3, g.Data4); ok {
+					others = append(others, s)
+				}
 			}
 		}
 	}
-	return have, nil
+	return have, others, nil
 }
 
 // bindExit binds the tunnel's sockets to the interfaces of the host's

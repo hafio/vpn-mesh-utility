@@ -1,6 +1,9 @@
 package proto
 
-import "strconv"
+import (
+	"strconv"
+	"strings"
+)
 
 // Slot is a mesh's number on its control plane, 0..MaxSlot (amendment A49).
 // An agent derives from it every name it uses on its host, so the agents of
@@ -31,6 +34,17 @@ func (s Slot) n() string {
 
 // Interface is the WireGuard interface: wg0, wg1, ...
 func (s Slot) Interface() string { return "wg" + strconv.Itoa(int(s)) }
+
+// InterfaceSlot is the slot whose interface is name, if any: the inverse
+// of Interface ("wg01" and "wg64" are no slot's).
+func InterfaceSlot(name string) (Slot, bool) {
+	digits, ok := strings.CutPrefix(name, "wg")
+	n, err := strconv.Atoi(digits)
+	if !ok || err != nil || !Slot(n).Valid() || Slot(n).Interface() != name {
+		return 0, false
+	}
+	return Slot(n), true
+}
 
 // ListenPort is a server's default WireGuard port: 51820, 51821, ...
 func (s Slot) ListenPort() int { return DefaultListenPort + int(s) }

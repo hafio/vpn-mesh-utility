@@ -314,6 +314,14 @@ func (e *Engine) Apply(ctx context.Context, cfg proto.NodeConfig) (Result, error
 	via6 := exitOn && slices.ContainsFunc(cfg.Peers, func(p proto.Peer) bool {
 		return p.Name == cfg.Exit.Via && slices.Contains(p.AllowedIPs, "::/0")
 	})
+	// Another mesh's agent carrying the host's internet (amendment A49)
+	// leaves the tunnel up and this exit off.
+	taken := func(err error) {
+		exitOn = false
+		res.Degraded = append(res.Degraded, StepExit)
+		res.Errors = append(res.Errors, err.Error())
+		e.d.Log.Warn("exit mode is off", "err", err)
+	}
 	switch router, ok := e.d.Host.(wg.ExitRouter); {
 	case e.d.Exit != nil:
 		n, err := exitmode.Sync(e.d.Exit, e.d.Slot, e.d.Iface, exitOn, via6)
@@ -325,19 +333,17 @@ func (e *Engine) Apply(ctx context.Context, cfg proto.NodeConfig) (Result, error
 			res.Errors = append(res.Errors, err.Error())
 			e.d.Log.Warn("exit mode carries IPv4 only", "err", err)
 		case errors.Is(err, exitmode.ErrExitTaken):
-			// Another mesh's agent carries the host's internet (amendment
-			// A49): the tunnel is up, this exit is not.
-			exitOn = false
-			res.Degraded = append(res.Degraded, StepExit)
-			res.Errors = append(res.Errors, err.Error())
-			e.d.Log.Warn("exit mode is off", "err", err)
+			taken(err)
 		case err != nil:
 			return fail(StepExit, err)
 		}
 	case ok:
 		n, err := router.SetExit(e.d.Iface, exitOn)
 		res.Changes += n
-		if err != nil {
+		switch {
+		case errors.Is(err, exitmode.ErrExitTaken):
+			taken(err)
+		case err != nil:
 			return fail(StepExit, err)
 		}
 	case exitOn:

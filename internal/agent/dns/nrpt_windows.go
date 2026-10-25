@@ -10,6 +10,8 @@ import (
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
+
+	"github.com/hafio/vpn-mesh-utility/internal/proto"
 )
 
 // nrptBase holds the local NRPT rules the DNS Client reads.
@@ -18,12 +20,13 @@ const nrptBase = `SYSTEM\CurrentControlSet\Services\Dnscache\Parameters\DnsPolic
 // nrptGenericServers is ConfigOptions' flag for "send to GenericDNSServers".
 const nrptGenericServers = 0x8
 
-// nrpt registers the resolver through NRPT rules; the interface name only
-// labels errors, since the rules are the host's, not the adapter's.
-type nrpt struct{}
+// nrpt registers the resolver through NRPT rules under slot's keys; the
+// interface name only labels errors, since the rules are the host's, not
+// the adapter's.
+type nrpt struct{ slot proto.Slot }
 
-// NewRegistrar returns the host's registrar: NRPT.
-func NewRegistrar() Registrar { return nrpt{} }
+// NewRegistrar returns the host's registrar for the agent of slot s: NRPT.
+func NewRegistrar(s proto.Slot) Registrar { return nrpt{slot: s} }
 
 var flushCache = windows.NewLazySystemDLL("dnsapi.dll").NewProc("DnsFlushResolverCache")
 
@@ -32,8 +35,8 @@ var flushCache = windows.NewLazySystemDLL("dnsapi.dll").NewProc("DnsFlushResolve
 // either way.
 func flush() { _, _, _ = flushCache.Call() }
 
-// ownedKeys lists the agent's rules under nrptBase.
-func ownedKeys() ([]string, error) {
+// ownedKeys lists slot s's rules under nrptBase.
+func ownedKeys(s proto.Slot) ([]string, error) {
 	base, err := registry.OpenKey(registry.LOCAL_MACHINE, nrptBase, registry.ENUMERATE_SUB_KEYS)
 	if errors.Is(err, registry.ErrNotExist) {
 		return nil, nil
@@ -48,15 +51,15 @@ func ownedKeys() ([]string, error) {
 	}
 	var out []string
 	for _, n := range names {
-		if ownedKey(n) {
+		if ownedKey(n, s) {
 			out = append(out, n)
 		}
 	}
 	return out, nil
 }
 
-func (nrpt) Get(_ context.Context, iface string) (Registration, error) {
-	keys, err := ownedKeys()
+func (n nrpt) Get(_ context.Context, iface string) (Registration, error) {
+	keys, err := ownedKeys(n.slot)
 	if err != nil {
 		return Registration{}, fmt.Errorf("list the NRPT rules for %s: %w", iface, err)
 	}
@@ -80,8 +83,8 @@ func (nrpt) Get(_ context.Context, iface string) (Registration, error) {
 	return fromRules(rules), nil
 }
 
-func (nrpt) Set(_ context.Context, iface string, r Registration) error {
-	want := rulesFor(r)
+func (n nrpt) Set(_ context.Context, iface string, r Registration) error {
+	want := rulesFor(r, n.slot)
 	keep := map[string]bool{}
 	for _, rule := range want {
 		keep[strings.ToLower(rule.Key)] = true
@@ -101,7 +104,7 @@ func (nrpt) Set(_ context.Context, iface string, r Registration) error {
 			return fmt.Errorf("write NRPT rule %s for %s: %w", rule.Name, iface, err)
 		}
 	}
-	keys, err := ownedKeys()
+	keys, err := ownedKeys(n.slot)
 	if err != nil {
 		return fmt.Errorf("list the NRPT rules for %s: %w", iface, err)
 	}
@@ -116,8 +119,8 @@ func (nrpt) Set(_ context.Context, iface string, r Registration) error {
 	return nil
 }
 
-func (nrpt) Revert(_ context.Context, iface string) error {
-	keys, err := ownedKeys()
+func (n nrpt) Revert(_ context.Context, iface string) error {
+	keys, err := ownedKeys(n.slot)
 	if err != nil {
 		return fmt.Errorf("list the NRPT rules for %s: %w", iface, err)
 	}

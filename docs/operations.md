@@ -182,6 +182,12 @@ resolver (`Get-DnsClientNrptPolicy` lists them); `meshctl dns off` removes them.
 on Linux: the laptop routes everything but the mesh through vps-2, IPv6 is blocked meanwhile, and
 the tunnel follows the laptop from one network to the next.
 
+A Windows laptop in a second mesh (amendment A49) runs a second agent with its own data dir
+(`--data C:\ProgramData\meshctl\lab`) on its slot's adapter (`wg1`, a GUID of its own), its local UI
+on 7443 plus the slot and its pipe `\\.\pipe\meshctl-agent-<slot>` (the CLI finds it from `--data`);
+its NRPT rules sit under keys of its own slot. One mesh's exit at a time: a second one stays off
+(degraded `exit`), and while an exit is on, the other meshes' tunnels run through it.
+
 **Exits.** Allow a server to be an exit once: `node set vps-2 --can-exit`. Its agent turns on
 forwarding and firewalld's `meshctl-exit` policy, which masquerades mesh traffic to the
 internet. Then, on the laptop (root, or a member of group `meshctl`):

@@ -153,6 +153,29 @@ var ErrIPv6Unguarded = errors.New("exit mode carries IPv4 only: this kernel has 
 // mesh's exit stays off, and the apply reports it as degraded.
 var ErrExitTaken = errors.New("exit mode is off: the agent of another mesh on this host already sends its internet through that mesh's exit")
 
+// Holder is the slot that keeps the host's exit while own wants exit mode
+// on: the lowest of others (the slots with exit-mode state on the host),
+// unless own holds its own too and is the lower slot. ok false lets own go
+// ahead. Linux's Sync and Windows' exit routes decide by it alike.
+func Holder(own proto.Slot, holding bool, others []proto.Slot) (proto.Slot, bool) {
+	lowest := proto.Slot(-1)
+	for _, s := range others {
+		if s != own && (lowest < 0 || s < lowest) {
+			lowest = s
+		}
+	}
+	if lowest < 0 || (holding && own < lowest) {
+		return 0, false
+	}
+	return lowest, true
+}
+
+// Taken is ErrExitTaken naming the interface of holder, the slot whose exit
+// carries the host's internet.
+func Taken(holder proto.Slot) error {
+	return fmt.Errorf("%w (its interface %s); turn that exit off first (`meshctl exit off` for that mesh)", ErrExitTaken, holder.Interface())
+}
+
 // Desired is what slot s's exit mode through link needs; nothing when on is
 // false. ipv6 is a host with IPv6 policy routing, via6 an exit that
 // carries IPv6.
@@ -197,20 +220,20 @@ func Sync(p Policy, s proto.Slot, link string, on, via6 bool) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	var haveRules []Rule
-	holder := proto.Slot(-1) // the lowest other slot with exit rules
+	var (
+		haveRules []Rule
+		others    []proto.Slot
+	)
 	for _, r := range all {
-		switch rs, _ := SlotOf(r.Priority); {
-		case rs == s:
+		if rs, _ := SlotOf(r.Priority); rs == s {
 			haveRules = append(haveRules, r)
-		case holder < 0 || rs < holder:
-			holder = rs
+		} else {
+			others = append(others, rs)
 		}
 	}
 	var taken error
-	if on && holder >= 0 && (len(haveRules) == 0 || holder < s) {
-		on = false
-		taken = fmt.Errorf("%w (its interface %s); turn that exit off first (`meshctl exit off` for that mesh)", ErrExitTaken, holder.Interface())
+	if holder, ok := Holder(s, len(haveRules) > 0, others); on && ok {
+		on, taken = false, Taken(holder)
 	}
 	wantRules, wantRoutes := Desired(s, link, on, v6 == V6Policy, via6)
 	haveRoutes, err := p.Routes(s.RouteTable())

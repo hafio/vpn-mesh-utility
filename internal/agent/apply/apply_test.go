@@ -742,6 +742,12 @@ func TestExitModeThroughTheHost(t *testing.T) {
 	if _, err := e.Apply(context.Background(), testfix.SpokeConfig("vps-3")); !errors.As(err, &se) || se.Step != apply.StepExit {
 		t.Fatalf("a failing host = %v", err)
 	}
+	// Another mesh's adapter holds the host's exit (amendment A49): degraded.
+	h.err = exitmode.Taken(1)
+	res, err = e.Apply(context.Background(), testfix.SpokeConfig("vps-3"))
+	if err != nil || !slices.Equal(res.Degraded, []string{apply.StepExit}) || !strings.Contains(res.Errors[0], "wg1") {
+		t.Fatalf("an exit another mesh holds = %+v, %v", res, err)
+	}
 }
 
 func TestRemovedPeerLeavesDeviceAndRoutes(t *testing.T) {

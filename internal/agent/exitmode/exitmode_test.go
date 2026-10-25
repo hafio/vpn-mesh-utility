@@ -232,3 +232,29 @@ func TestOneMeshCarriesTheExit(t *testing.T) {
 		t.Fatalf("rules %v, want slot 0's %v", got, rules)
 	}
 }
+
+// Holder: the lowest other slot keeps the exit, unless own holds its own
+// too and is lower; nobody else, nothing kept.
+func TestHolder(t *testing.T) {
+	for _, c := range []struct {
+		own     proto.Slot
+		holding bool
+		others  []proto.Slot
+		want    proto.Slot
+		ok      bool
+	}{
+		{0, false, nil, 0, false},
+		{0, false, []proto.Slot{0, 0}, 0, false},
+		{0, false, []proto.Slot{3, 1, 1}, 1, true},
+		{0, true, []proto.Slot{3, 1}, 0, false},
+		{2, true, []proto.Slot{3, 1}, 1, true},
+		{2, false, []proto.Slot{3}, 3, true},
+	} {
+		if got, ok := exitmode.Holder(c.own, c.holding, c.others); got != c.want || ok != c.ok {
+			t.Errorf("Holder(%d, %v, %v) = %d, %v; want %d, %v", c.own, c.holding, c.others, got, ok, c.want, c.ok)
+		}
+	}
+	if err := exitmode.Taken(4); !errors.Is(err, exitmode.ErrExitTaken) || !strings.Contains(err.Error(), "wg4") {
+		t.Fatalf("Taken = %v", err)
+	}
+}

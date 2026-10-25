@@ -52,3 +52,17 @@ func TestSlotNames(t *testing.T) {
 		t.Fatal("Valid is wrong at the edges")
 	}
 }
+
+// InterfaceSlot reads a slot's interface name back, and no other name.
+func TestInterfaceSlot(t *testing.T) {
+	for s := Slot(0); s <= MaxSlot; s++ {
+		if got, ok := InterfaceSlot(s.Interface()); !ok || got != s {
+			t.Fatalf("InterfaceSlot(%s) = %d, %v", s.Interface(), got, ok)
+		}
+	}
+	for _, name := range []string{"wg", "wg01", "wg64", "wg-1", "wg+1", "eth0", "wg1 ", "meshctl0", ""} {
+		if s, ok := InterfaceSlot(name); ok {
+			t.Errorf("InterfaceSlot(%q) = %d", name, s)
+		}
+	}
+}

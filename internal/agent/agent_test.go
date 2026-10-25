@@ -34,6 +34,7 @@ import (
 	"github.com/hafio/vpn-mesh-utility/internal/agent/wg"
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
 	"github.com/hafio/vpn-mesh-utility/internal/testfix"
+	"github.com/hafio/vpn-mesh-utility/internal/validate"
 )
 
 // fakeServer speaks the agent API for one node and checks every signature
@@ -690,6 +691,19 @@ func TestDefaultSocket(t *testing.T) {
 	}
 	if got := DefaultSocket("windows", `C:\ProgramData\meshctl`); got != `\\.\pipe\meshctl-agent` {
 		t.Fatalf("Windows: %s", got)
+	}
+	// A node of a mesh in slot 2 (amendment A49) has a pipe of its own,
+	// which the CLI finds from the data dir.
+	dir, _ := newDir(t)
+	if err := dir.SaveEnrollment(state.Enrollment{Server: "https://mesh.example.com", NodeID: 9, Name: "laptop", Role: proto.RoleSpoke,
+		Mesh: "lab", Slot: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if got := DefaultSocket("windows", dir.Path); got != `\\.\pipe\meshctl-agent-2` {
+		t.Fatalf("Windows, slot 2: %s", got)
+	}
+	if _, err := validate.PipePath("pipe", Pipe(proto.MaxSlot)); err != nil || Pipe(0) != PipeName {
+		t.Fatalf("Pipe: %v", err)
 	}
 }
 
