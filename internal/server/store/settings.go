@@ -7,7 +7,8 @@ import (
 	"strings"
 )
 
-// Setting keys (spec S8.2).
+// Setting keys (spec S8.2). Each mesh has its own settings (amendment
+// A49); server_url and server_tz are the control plane's (ServerSetting).
 const (
 	SettingMeshCIDR    = "mesh_cidr"
 	SettingUpstreamDNS = "upstream_dns"
@@ -58,9 +59,9 @@ func SplitDomains(s string) []string {
 	return out
 }
 
-// Settings returns every setting.
-func (t *Tx) Settings() (map[string]string, error) {
-	rows, err := t.query(`SELECT key, value FROM settings`)
+// Settings returns every setting of the mesh.
+func (t *MeshTx) Settings() (map[string]string, error) {
+	rows, err := t.query(`SELECT key, value FROM mesh_settings WHERE mesh_id = ?`, t.mesh)
 	if err != nil {
 		return nil, fmt.Errorf("read settings: %w", err)
 	}
@@ -79,10 +80,10 @@ func (t *Tx) Settings() (map[string]string, error) {
 	return out, nil
 }
 
-// Setting returns one setting, or ErrNotFound.
-func (t *Tx) Setting(key string) (string, error) {
+// Setting returns one setting of the mesh, or ErrNotFound.
+func (t *MeshTx) Setting(key string) (string, error) {
 	var v string
-	err := t.queryRow(`SELECT value FROM settings WHERE key = ?`, key).Scan(&v)
+	err := t.queryRow(`SELECT value FROM mesh_settings WHERE mesh_id = ? AND key = ?`, t.mesh, key).Scan(&v)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", fmt.Errorf("setting %q: %w", key, ErrNotFound)
 	}
@@ -92,16 +93,40 @@ func (t *Tx) Setting(key string) (string, error) {
 	return v, nil
 }
 
-// DeleteSetting removes a setting, so it reads as never set.
-func (t *Tx) DeleteSetting(key string) error {
-	if _, err := t.exec(`DELETE FROM settings WHERE key = ?`, key); err != nil {
+// DeleteSetting removes a setting of the mesh, so it reads as never set.
+func (t *MeshTx) DeleteSetting(key string) error {
+	if _, err := t.exec(`DELETE FROM mesh_settings WHERE mesh_id = ? AND key = ?`, t.mesh, key); err != nil {
 		return fmt.Errorf("remove setting %q: %w", key, err)
 	}
 	return nil
 }
 
-// SetSetting creates or replaces a setting.
-func (t *Tx) SetSetting(key, value string) error {
+// SetSetting creates or replaces a setting of the mesh.
+func (t *MeshTx) SetSetting(key, value string) error {
+	if _, err := t.exec(`INSERT INTO mesh_settings (mesh_id, key, value) VALUES (?, ?, ?)
+		ON CONFLICT (mesh_id, key) DO UPDATE SET value = excluded.value`, t.mesh, key, value); err != nil {
+		return fmt.Errorf("write setting %q: %w", key, err)
+	}
+	return nil
+}
+
+// ServerSetting returns one of the control plane's own settings
+// (SettingServerURL, SettingServerTZ), "" when it is not set.
+func (t *Tx) ServerSetting(key string) (string, error) {
+	var v string
+	err := t.queryRow(`SELECT value FROM settings WHERE key = ?`, key).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read setting %q: %w", key, err)
+	}
+	return v, nil
+}
+
+// SetServerSetting creates or replaces one of the control plane's own
+// settings.
+func (t *Tx) SetServerSetting(key, value string) error {
 	if _, err := t.exec(`INSERT INTO settings (key, value) VALUES (?, ?)
 		ON CONFLICT (key) DO UPDATE SET value = excluded.value`, key, value); err != nil {
 		return fmt.Errorf("write setting %q: %w", key, err)

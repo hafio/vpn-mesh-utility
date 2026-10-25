@@ -90,7 +90,7 @@ func newRig(t *testing.T) *rig {
 	hub := api.NewHub()
 	r.rec = api.NewReconciler(db, hub, nil)
 	d := api.Deps{DB: db, Hub: hub, Reconciler: r.rec, Now: clock.Now, ServerURL: origin, Version: "v1.0.0"}
-	r.h, err = New(Deps{DB: db, Nodes: api.NewNodes(d), Reconciler: r.rec, Auth: svc, ServerURL: origin, Version: "v1.0.0", Now: clock.Now,
+	r.h, err = New(Deps{DB: db, Nodes: api.NewNodes(d), Auth: svc, ServerURL: origin, Version: "v1.0.0", Now: clock.Now,
 		Log: slog.New(slog.NewTextHandler(&r.logs, nil))})
 	if err != nil {
 		t.Fatal(err)
@@ -309,7 +309,7 @@ func TestChangesNeedOriginAndCSRF(t *testing.T) {
 func (r *rig) nodes() []store.Node {
 	r.t.Helper()
 	var out []store.Node
-	if err := r.st.Tx(context.Background(), func(tx *store.Tx) error {
+	if err := r.st.MeshTx(context.Background(), store.FirstMesh, func(tx *store.MeshTx) error {
 		var err error
 		out, err = tx.Nodes()
 		return err
@@ -368,7 +368,7 @@ func TestNodeLifecycle(t *testing.T) {
 		t.Fatalf("a removed node's page = %d", w.Code)
 	}
 	var audit []store.AuditEntry
-	if err := r.st.Tx(context.Background(), func(tx *store.Tx) error {
+	if err := r.st.MeshTx(context.Background(), store.FirstMesh, func(tx *store.MeshTx) error {
 		var err error
 		audit, err = tx.AuditLog(1, 0)
 		return err
@@ -433,7 +433,7 @@ func TestContainerModePages(t *testing.T) {
 	if body := r.do(http.MethodGet, "/dns", cookie, nil).Body.String(); !strings.Contains(body, "No container has reported a name yet") {
 		t.Fatalf("the DNS page without names:\n%s", body)
 	}
-	if err := r.st.Tx(context.Background(), func(tx *store.Tx) error {
+	if err := r.st.MeshTx(context.Background(), store.FirstMesh, func(tx *store.MeshTx) error {
 		box, err := tx.NodeByName("box")
 		if err != nil {
 			return err
@@ -741,7 +741,7 @@ func TestStoreFailuresAreLoggedNotShown(t *testing.T) {
 // seedServers inserts two enrolled servers and reconciles: version 1.
 func (r *rig) seedServers() {
 	r.t.Helper()
-	err := r.st.Tx(context.Background(), func(tx *store.Tx) error {
+	err := r.st.MeshTx(context.Background(), store.FirstMesh, func(tx *store.MeshTx) error {
 		for _, f := range []testfix.Node{testfix.VPS1, testfix.VPS2} {
 			n := store.Node{Name: f.Name, Role: "server", MeshIP: f.MeshIP, Endpoint: f.Endpoint, ListenPort: 51820, Keepalive: 25,
 				MTU: 1420, Enrolled: true, WGPubKey: testfix.WGKey(f.Key), IdentityPubKey: testfix.IdentityKeyB64(f.Key)}
@@ -754,7 +754,7 @@ func (r *rig) seedServers() {
 	if err != nil {
 		r.t.Fatal(err)
 	}
-	if _, err := r.rec.Apply(context.Background(), api.Change{Actor: "test"}, nil); err != nil {
+	if _, err := r.rec.Apply(context.Background(), api.Change{Mesh: store.FirstMesh, Actor: "test"}, nil); err != nil {
 		r.t.Fatal(err)
 	}
 }

@@ -101,12 +101,17 @@ func setupAgentRun(fs *flag.FlagSet, e *env) action {
 		"the container runtime's API socket the containers' names are read from (GET only): auto (Docker's, then Podman's), off, or a path")
 	statusEvery := fs.Duration("status-every", 30*time.Second,
 		"how often the agent reports to the server; the server's --hub-down-after must be longer on a server")
+	endpointRetry := fs.Duration("endpoint-retry", 45*time.Second,
+		"how long a spoke waits for a first handshake on a server's endpoint before it dials the server's other-family one")
 	return func(ctx context.Context, args []string) error {
 		if err := wantArgs(args, 0, ""); err != nil {
 			return err
 		}
 		if *statusEvery < time.Second || *statusEvery > 5*time.Minute {
 			return usagef("--status-every must be between 1s and 5m (got %s)", *statusEvery)
+		}
+		if *endpointRetry < 5*time.Second || *endpointRetry > 5*time.Minute {
+			return usagef("--endpoint-retry must be between 5s and 5m (got %s)", *endpointRetry)
 		}
 		if *runtime != agent.RuntimeAuto && *runtime != agent.RuntimeOff {
 			if _, err := validate.POSIXPath("--runtime-socket", *runtime); err != nil {
@@ -137,7 +142,7 @@ func setupAgentRun(fs *flag.FlagSet, e *env) action {
 		d := agent.Deps{
 			DataDir: *data, Socket: sock(), UIListen: uiListen, Version: e.version,
 			NoFirewall: *noFirewall, Backend: *backend, Log: log, Logs: ring, Now: e.now, RuntimeSocket: *runtime,
-			StatusEvery: *statusEvery,
+			StatusEvery: *statusEvery, EndpointRetry: *endpointRetry,
 		}
 		if asService {
 			return service.RunWindowsService(func(ctx context.Context) error { return agent.Run(ctx, d) })

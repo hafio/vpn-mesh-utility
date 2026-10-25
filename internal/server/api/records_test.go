@@ -32,7 +32,7 @@ func (h *harness) config(t *testing.T, name string) proto.NodeConfig {
 	// waits forever.
 	id := h.node(t, name).ID
 	var cfg *proto.NodeConfig
-	if err := h.st.Tx(context.Background(), func(tx *store.Tx) error {
+	if err := h.st.MeshTx(context.Background(), store.FirstMesh, func(tx *store.MeshTx) error {
 		var err error
 		_, cfg, err = configFor(tx, id)
 		return err

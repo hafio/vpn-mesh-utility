@@ -475,7 +475,7 @@ func TestDefaultIPv6(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stored string
-	if err := h.st.Tx(ctx, func(tx *store.Tx) error {
+	if err := h.st.MeshTx(ctx, store.FirstMesh, func(tx *store.MeshTx) error {
 		var err error
 		stored, err = tx.Setting(store.SettingMeshCIDR6)
 		return err

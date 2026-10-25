@@ -195,7 +195,7 @@ event: mesh
 data: {}
 ```
 
-to every stream when the containers' names may have changed (amendment A38; the agent fetches
+to every stream of the node's mesh when its containers' names may have changed (amendment A38; the agent fetches
 the mesh view), and `: ka` every 20 s. A node has at most one stream: a new one ends the previous
 one, and disabling or removing the node ends it. Agents also poll config every 60 s, for proxies
 that swallow streams (amendment A16), and fetch the mesh view after every new config.
@@ -264,7 +264,8 @@ extra domain (not the domain itself), a node's name, a custom record's and the s
 address stay theirs, and a disabled node's names are not published. Names
 are operational state, like status: never in a config version, a snapshot or an export. The
 answer is `{"stored", "dropped"}`: how many it keeps, and each name it does not publish with
-`reason`, which the agent logs. A report that changed anything sends every stream a `mesh` event.
+`reason`, which the agent logs. A report that changed anything sends every stream of the node's mesh a
+`mesh` event (amendment A49: an agent hears of its own mesh only).
 The agent sends one a second after its runtime reports a change (or a new config moves its
 network), and lists the containers every 2 minutes in case an event was missed; it sends nothing
 when the names did not change.
@@ -415,11 +416,11 @@ neither go through the exit nor be held back (amendment A45).
 **Endpoint failover** (M8). A server peer may come with a `fallback` endpoint in the other
 family. At every heartbeat the agent looks at each peer it keeps alive (a spoke's servers) that
 has one: when the endpoint it dials has had no handshake for 3 minutes, or none at all 45 seconds
-after it was set, the agent dials the other one instead, and back the same way; a re-apply keeps
-the choice until a config gives the peer other endpoints. A laptop on an IPv4-only network thus
-reaches a server over IPv4, one behind IPv6-only access over IPv6, without a setting. Server to
-server tunnels are idle between packets, so they are not judged; the planner gives them the
-endpoint of the first family both servers have.
+after it was set (`agent run --endpoint-retry`, 5s to 5m), the agent dials the other one instead,
+and back the same way; a re-apply keeps the choice until a config gives the peer other endpoints.
+A laptop on an IPv4-only network thus reaches a server over IPv4, one behind IPv6-only access
+over IPv6, without a setting. Server to server tunnels are idle between packets, so they are not
+judged; the planner gives them the endpoint of the first family both servers have.
 
 **Safe apply** (server nodes, spec S6.4, amendment A15): a config the server pushes over a
 previous one is applied at once and written to `config.pending.json`; `config.json` stays the last

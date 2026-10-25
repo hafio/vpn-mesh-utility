@@ -140,6 +140,10 @@ type Deps struct {
 	// NamesSettle is how long the names wait for the runtime to settle
 	// after a change; zero means 1 s.
 	NamesSettle time.Duration
+	// EndpointRetry is how long a server's endpoint may go without a first
+	// handshake before the agent dials the server's other one (M8); zero
+	// means 45 s.
+	EndpointRetry time.Duration
 }
 
 func (d *Deps) defaults() {
@@ -300,7 +304,8 @@ func Run(ctx context.Context, d Deps) error {
 		syncKick: make(chan struct{}, 1), statusKick: make(chan struct{}, 1), proxyKick: make(chan struct{}, 1),
 		meshKick: make(chan struct{}, 1), namesKick: make(chan struct{}, 1), scheduleKick: make(chan struct{}, 1),
 		engine: apply.New(apply.Deps{Host: host, Routes: d.Routes, Exit: d.Exit, Sysctl: d.Sysctl, MeshFirewall: d.MeshFirewall,
-			Firewall: d.Firewall, DNS: d.DNS, Containers: d.Containers, Iface: Interface, Key: wg.Key(keys.WG), Log: d.Log, Now: d.Now}),
+			Firewall: d.Firewall, DNS: d.DNS, Containers: d.Containers, Iface: Interface, Key: wg.Key(keys.WG), Log: d.Log, Now: d.Now,
+			EndpointRetry: d.EndpointRetry}),
 	}
 	r.engine.SetDNSOff(local.DNSOff)
 	if r.mesh, err = dir.Mesh(); err != nil {

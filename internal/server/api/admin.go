@@ -37,7 +37,8 @@ type Actor struct {
 	UserID int64
 }
 
-// Nodes is the node administration service.
+// Nodes is the node administration service of one mesh, or of the sole
+// mesh when it names none (amendment A49).
 type Nodes struct {
 	db        DB
 	rec       *Reconciler
@@ -45,15 +46,108 @@ type Nodes struct {
 	serverURL string
 	// now is the clock the policies' schedules are judged on.
 	now func() time.Time
+	// mesh is the mesh the service works on; 0 is the sole mesh.
+	mesh int64
 }
 
-// NewNodes wires the service from the API's dependencies.
+// NewNodes wires the service from the API's dependencies. It works on the
+// sole mesh; In picks another.
 func NewNodes(d Deps) *Nodes {
 	now := d.Now
 	if now == nil {
 		now = time.Now
 	}
 	return &Nodes{db: d.DB, rec: d.Reconciler, hub: d.Hub, serverURL: d.ServerURL, now: now}
+}
+
+// In is the service for one mesh.
+func (s *Nodes) In(mesh int64) *Nodes {
+	c := *s
+	c.mesh = mesh
+	return &c
+}
+
+// SoleMesh is the mesh a request that names none means: the only one the
+// control plane has (amendment A49).
+func SoleMesh(tx *store.Tx) (store.Mesh, error) {
+	meshes, err := tx.Meshes()
+	if err != nil {
+		return store.Mesh{}, err
+	}
+	switch len(meshes) {
+	case 1:
+		return meshes[0], nil
+	case 0:
+		return store.Mesh{}, errorf(http.StatusNotFound, proto.CodeNotFound,
+			"this control plane has no mesh: create one with `meshctl mesh add <name>`")
+	}
+	names := make([]string, len(meshes))
+	for i, m := range meshes {
+		names[i] = m.Name
+	}
+	return store.Mesh{}, errorf(http.StatusBadRequest, proto.CodeBadRequest,
+		"this control plane has %d meshes (%s): name one with --mesh", len(meshes), strings.Join(names, ", "))
+}
+
+// meshID is the service's mesh: its own, else the sole mesh.
+func (s *Nodes) meshID(tx *store.Tx) (int64, error) {
+	if s.mesh != 0 {
+		return s.mesh, nil
+	}
+	m, err := SoleMesh(tx)
+	return m.ID, err
+}
+
+// tx runs fn in a transaction scoped to the service's mesh.
+func (s *Nodes) tx(ctx context.Context, fn func(*store.MeshTx) error) error {
+	return s.db.Tx(ctx, func(raw *store.Tx) error {
+		mesh, err := s.meshID(raw)
+		if err != nil {
+			return err
+		}
+		return fn(raw.In(mesh))
+	})
+}
+
+// resolve is the service's mesh, reading the sole mesh when it names none.
+func (s *Nodes) resolve(ctx context.Context) (int64, error) {
+	if s.mesh != 0 {
+		return s.mesh, nil
+	}
+	var mesh int64
+	err := s.db.Tx(ctx, func(tx *store.Tx) error {
+		var err error
+		mesh, err = s.meshID(tx)
+		return err
+	})
+	return mesh, err
+}
+
+// apply is the reconciler's Apply in the service's mesh.
+func (s *Nodes) apply(ctx context.Context, c Change, mutate func(*store.MeshTx, *Change) error) (Result, error) {
+	var err error
+	if c.Mesh, err = s.resolve(ctx); err != nil {
+		return Result{}, err
+	}
+	return s.rec.Apply(ctx, c, mutate)
+}
+
+// Tx runs fn in a transaction scoped to the service's mesh: the web UI's
+// reads go through it.
+func (s *Nodes) Tx(ctx context.Context, fn func(*store.MeshTx) error) error { return s.tx(ctx, fn) }
+
+// Apply is the reconciler's Apply in the service's mesh.
+func (s *Nodes) Apply(ctx context.Context, c Change, mutate func(*store.MeshTx, *Change) error) (Result, error) {
+	return s.apply(ctx, c, mutate)
+}
+
+// Rollback is the reconciler's Rollback in the service's mesh.
+func (s *Nodes) Rollback(ctx context.Context, c Change, n int64) (Result, error) {
+	var err error
+	if c.Mesh, err = s.resolve(ctx); err != nil {
+		return Result{}, err
+	}
+	return s.rec.Rollback(ctx, c, n)
 }
 
 // ErrorMessage is how a failure from Nodes (or the reconciler) is shown to an
@@ -178,7 +272,7 @@ func containerNetwork(in planner.Input, n store.Node) *ContainerNetwork {
 // List returns every node and the plan's problems.
 func (s *Nodes) List(ctx context.Context) (NodeList, error) {
 	var out NodeList
-	err := s.db.Tx(ctx, func(tx *store.Tx) error {
+	err := s.tx(ctx, func(tx *store.MeshTx) error {
 		in, nodes, err := LoadInput(tx)
 		if err != nil {
 			return err
@@ -209,7 +303,7 @@ func (s *Nodes) Show(ctx context.Context, name string) (NodeDetail, error) {
 		return NodeDetail{}, err
 	}
 	var out NodeDetail
-	err = s.db.Tx(ctx, func(tx *store.Tx) error {
+	err = s.tx(ctx, func(tx *store.MeshTx) error {
 		n, err := nodeByName(tx, name, "node")
 		if err != nil {
 			return err
@@ -263,7 +357,7 @@ func (s *Nodes) Add(ctx context.Context, by Actor, req NodeAddRequest) (NodeChan
 		return NodeChange{}, err
 	}
 	var enroll *Enrollment
-	res, err := s.rec.Apply(ctx, Change{Actor: by.Name, UserID: by.UserID, Action: "node.add", Target: n.Name}, func(tx *store.Tx, c *Change) error {
+	res, err := s.apply(ctx, Change{Actor: by.Name, UserID: by.UserID, Action: "node.add", Target: n.Name}, func(tx *store.MeshTx, c *Change) error {
 		in, nodes, err := LoadInput(tx)
 		if err != nil {
 			return err
@@ -370,7 +464,7 @@ func (s *Nodes) Set(ctx context.Context, by Actor, name string, req NodeSetReque
 		return NodeChange{}, err
 	}
 	var notes []string
-	res, err := s.rec.Apply(ctx, Change{Actor: by.Name, UserID: by.UserID, Action: "node.set", Target: name}, func(tx *store.Tx, c *Change) error {
+	res, err := s.apply(ctx, Change{Actor: by.Name, UserID: by.UserID, Action: "node.set", Target: name}, func(tx *store.MeshTx, c *Change) error {
 		n, err := nodeByName(tx, name, "node")
 		if err != nil {
 			return err
@@ -534,7 +628,7 @@ func blockOf(in planner.Input, n store.Node) planner.Range {
 // setFamily changes n's address families (M8): a family it gains gets an
 // address allocated (IPv6 only once the mesh has a prefix), one it loses
 // takes its address away -- and, for IPv6, its containers' /112.
-func setFamily(tx *store.Tx, n *store.Node, family string) error {
+func setFamily(tx *store.MeshTx, n *store.Node, family string) error {
 	in, nodes, err := LoadInput(tx)
 	if err != nil {
 		return err
@@ -566,7 +660,7 @@ func setFamily(tx *store.Tx, n *store.Node, family string) error {
 
 // moveMeshIP6 gives n the IPv6 mesh address ip (M8), checked as a fixed
 // one at add is; the same address changes nothing.
-func moveMeshIP6(tx *store.Tx, n *store.Node, ip string) ([]string, error) {
+func moveMeshIP6(tx *store.MeshTx, n *store.Node, ip string) ([]string, error) {
 	addr, _ := validate.IPv6("mesh_ip6", ip) // validated in validateSet
 	old := n.MeshIP6
 	if addr.String() == old {
@@ -601,7 +695,7 @@ func moveMeshIP6(tx *store.Tx, n *store.Node, ip string) ([]string, error) {
 // /24, not another node's; the plan check that follows refuses one inside a
 // container subnet. The same address changes nothing. The notes are what
 // the move does not reach.
-func moveMeshIP(tx *store.Tx, n *store.Node, ip string) ([]string, error) {
+func moveMeshIP(tx *store.MeshTx, n *store.Node, ip string) ([]string, error) {
 	addr, _ := validate.IPv4("mesh_ip", ip) // validated in validateSet
 	old := n.MeshIP
 	if addr.String() == old {
@@ -681,7 +775,7 @@ func (s *Nodes) SetDisabled(ctx context.Context, by Actor, name string, disabled
 		action = "node.disable"
 	}
 	var id int64
-	res, err := s.rec.Apply(ctx, Change{Actor: by.Name, UserID: by.UserID, Action: action, Target: name}, func(tx *store.Tx, _ *Change) error {
+	res, err := s.apply(ctx, Change{Actor: by.Name, UserID: by.UserID, Action: action, Target: name}, func(tx *store.MeshTx, _ *Change) error {
 		n, err := nodeByName(tx, name, "node")
 		if err != nil {
 			return err
@@ -705,7 +799,7 @@ func (s *Nodes) Remove(ctx context.Context, by Actor, name string) (NodeChange, 
 		return NodeChange{}, err
 	}
 	var gone store.Node
-	res, err := s.rec.Apply(ctx, Change{Actor: by.Name, UserID: by.UserID, Action: "node.rm", Target: name}, func(tx *store.Tx, c *Change) error {
+	res, err := s.apply(ctx, Change{Actor: by.Name, UserID: by.UserID, Action: "node.rm", Target: name}, func(tx *store.MeshTx, c *Change) error {
 		n, err := nodeByName(tx, name, "node")
 		if err != nil {
 			return err
@@ -728,7 +822,7 @@ func (s *Nodes) Token(ctx context.Context, by Actor, name string) (NodeChange, e
 		return NodeChange{}, err
 	}
 	var enroll *Enrollment
-	res, err := s.rec.Apply(ctx, Change{Actor: by.Name, UserID: by.UserID, Action: "node.token", Target: name}, func(tx *store.Tx, c *Change) error {
+	res, err := s.apply(ctx, Change{Actor: by.Name, UserID: by.UserID, Action: "node.token", Target: name}, func(tx *store.MeshTx, c *Change) error {
 		n, err := nodeByName(tx, name, "node")
 		if err != nil {
 			return err
@@ -757,7 +851,7 @@ func (s *Nodes) Token(ctx context.Context, by Actor, name string) (NodeChange, e
 // answer is a NodeChange with the node as it is now.
 func (s *Nodes) answer(ctx context.Context, name string, res Result, enroll *Enrollment) (NodeChange, error) {
 	var info NodeInfo
-	err := s.db.Tx(ctx, func(tx *store.Tx) error {
+	err := s.tx(ctx, func(tx *store.MeshTx) error {
 		n, err := nodeByName(tx, name, "node")
 		if err != nil {
 			return err
@@ -910,7 +1004,7 @@ func containerSubnet6(mesh6 netip.Prefix, nodes []store.Node) (string, error) {
 
 // setContainers6 puts n's containers' IPv6 on the mesh or takes it off
 // (M8): it comes beside their IPv4 network, on a node with IPv6.
-func setContainers6(tx *store.Tx, n *store.Node, on bool) error {
+func setContainers6(tx *store.MeshTx, n *store.Node, on bool) error {
 	switch {
 	case !on:
 		n.ContainerSubnet6 = ""
@@ -933,7 +1027,7 @@ func setContainers6(tx *store.Tx, n *store.Node, on bool) error {
 
 // setContainers gives a host-mode node a container subnet (on) or takes it
 // away; a container-mode node keeps its own, and a phone has none.
-func setContainers(tx *store.Tx, n *store.Node, on bool) error {
+func setContainers(tx *store.MeshTx, n *store.Node, on bool) error {
 	switch {
 	case n.Role == string(proto.RolePhone):
 		return errorf(http.StatusBadRequest, proto.CodeBadRequest, "%s is a phone; a phone has no agent, so it has no container network", n.Name)
@@ -960,7 +1054,7 @@ func setContainers(tx *store.Tx, n *store.Node, on bool) error {
 	return err
 }
 
-func defaultMTU(tx *store.Tx) (int, error) {
+func defaultMTU(tx *store.MeshTx) (int, error) {
 	s, err := tx.Setting(store.SettingDefaultMTU)
 	if err != nil {
 		return 0, err
@@ -1047,7 +1141,7 @@ func checkGroups(in []string) ([]string, error) {
 
 // setGroups puts node id in exactly groups and checks the segmentation
 // still keeps its limits.
-func setGroups(tx *store.Tx, id int64, groups []string) error {
+func setGroups(tx *store.MeshTx, id int64, groups []string) error {
 	if err := tx.SetNodeGroups(id, groups); err != nil {
 		return err
 	}
@@ -1062,7 +1156,7 @@ func setGroups(tx *store.Tx, id int64, groups []string) error {
 }
 
 // withGroups fills in the node's groups.
-func withGroups(tx *store.Tx, info *NodeInfo) error {
+func withGroups(tx *store.MeshTx, info *NodeInfo) error {
 	groups, err := tx.NodeGroups()
 	info.Groups = groups[info.ID]
 	return err
@@ -1087,7 +1181,7 @@ func checkName(name string) (string, error) {
 
 // nodeByName reads a node, turning "not found" into a 404 that names what
 // was being looked up.
-func nodeByName(tx *store.Tx, name, what string) (store.Node, error) {
+func nodeByName(tx *store.MeshTx, name, what string) (store.Node, error) {
 	n, err := tx.NodeByName(name)
 	if errors.Is(err, store.ErrNotFound) {
 		return store.Node{}, errorf(http.StatusNotFound, proto.CodeNotFound, "%s %q does not exist; the node list shows every node", what, name)
@@ -1096,7 +1190,7 @@ func nodeByName(tx *store.Tx, name, what string) (store.Node, error) {
 }
 
 // refID resolves an optional reference by name; "" clears it.
-func refID(tx *store.Tx, name, what string) (int64, error) {
+func refID(tx *store.MeshTx, name, what string) (int64, error) {
 	if name == "" {
 		return 0, nil
 	}

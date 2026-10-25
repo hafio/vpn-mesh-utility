@@ -96,7 +96,7 @@ func TestPhoneProfile(t *testing.T) {
 	}
 
 	var audit []store.AuditEntry
-	if err := h.st.Tx(context.Background(), func(tx *store.Tx) error {
+	if err := h.st.MeshTx(context.Background(), store.FirstMesh, func(tx *store.MeshTx) error {
 		var err error
 		audit, err = tx.AuditLog(100, 0)
 		return err
@@ -122,7 +122,7 @@ func TestPhoneProfile(t *testing.T) {
 	}
 
 	// What the servers see of it.
-	if err := h.st.Tx(context.Background(), func(tx *store.Tx) error {
+	if err := h.st.MeshTx(context.Background(), store.FirstMesh, func(tx *store.MeshTx) error {
 		return tx.RecordStatus(testfix.VPS1.ID, store.StatusUpdate{Peers: []store.PeerStat{{PeerID: ch.Node.ID, LastHandshake: 1234}}})
 	}); err != nil {
 		t.Fatal(err)

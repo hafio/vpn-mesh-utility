@@ -20,6 +20,8 @@ type Hub struct {
 }
 
 type subscription struct {
+	// meshID is the node's mesh: a nudge reaches only that mesh's streams.
+	meshID int64
 	events chan proto.ConfigEvent
 	mesh   chan struct{}
 	done   chan struct{}
@@ -31,12 +33,12 @@ func (s *subscription) end() { s.once.Do(func() { close(s.done) }) }
 // NewHub returns an empty hub.
 func NewHub() *Hub { return &Hub{subs: map[int64]*subscription{}} }
 
-// Subscribe registers node's stream, ending any previous one. events delivers
-// config events, mesh a nudge when the mesh view changed; done closes when
-// the stream must end (replaced, kicked or shutdown). cancel unregisters and
-// must always be called.
-func (h *Hub) Subscribe(node int64) (events <-chan proto.ConfigEvent, mesh, done <-chan struct{}, cancel func()) {
-	s := &subscription{events: make(chan proto.ConfigEvent, 1), mesh: make(chan struct{}, 1), done: make(chan struct{})}
+// Subscribe registers the stream of node, of meshID, ending any previous
+// one. events delivers config events, mesh a nudge when its mesh's view
+// changed; done closes when the stream must end (replaced, kicked or
+// shutdown). cancel unregisters and must always be called.
+func (h *Hub) Subscribe(node, meshID int64) (events <-chan proto.ConfigEvent, mesh, done <-chan struct{}, cancel func()) {
+	s := &subscription{meshID: meshID, events: make(chan proto.ConfigEvent, 1), mesh: make(chan struct{}, 1), done: make(chan struct{})}
 	h.mu.Lock()
 	if h.closed {
 		s.end()
@@ -76,11 +78,15 @@ func (h *Hub) Notify(events map[int64]proto.ConfigEvent) {
 	}
 }
 
-// NotifyMesh nudges every stream: the mesh view changed (amendment A38).
-func (h *Hub) NotifyMesh() {
+// NotifyMesh nudges every stream of meshID: its mesh view changed
+// (amendment A38).
+func (h *Hub) NotifyMesh(meshID int64) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for _, s := range h.subs {
+		if s.meshID != meshID {
+			continue
+		}
 		select {
 		case s.mesh <- struct{}{}:
 		default: // a nudge is already pending

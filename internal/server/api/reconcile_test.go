@@ -18,18 +18,18 @@ func TestReconcilerVersionsOnlyRealChanges(t *testing.T) {
 	h.seedServers(t)
 	ctx := context.Background()
 	v := h.latestVersion(t)
-	if res, err := h.rec.Apply(ctx, Change{Actor: "test"}, nil); err != nil || res.Version != 0 || h.latestVersion(t) != v {
+	if res, err := h.rec.Apply(ctx, Change{Mesh: store.FirstMesh, Actor: "test"}, nil); err != nil || res.Version != 0 || h.latestVersion(t) != v {
 		t.Fatalf("no-op reconcile: %+v, %v", res, err)
 	}
 
 	subs := map[int64]<-chan proto.ConfigEvent{}
 	for _, f := range testfix.Servers {
-		ev, _, _, cancel := h.hub.Subscribe(f.ID)
+		ev, _, _, cancel := h.hub.Subscribe(f.ID, store.FirstMesh)
 		defer cancel()
 		subs[f.ID] = ev
 	}
 	// vps-3's endpoint is in the other servers' configs, not in its own.
-	res, err := h.rec.Apply(ctx, Change{Actor: "test", Action: "node.set", Target: "vps-3"}, func(tx *store.Tx, _ *Change) error {
+	res, err := h.rec.Apply(ctx, Change{Mesh: store.FirstMesh, Actor: "test", Action: "node.set", Target: "vps-3"}, func(tx *store.MeshTx, _ *Change) error {
 		n, err := tx.NodeByName("vps-3")
 		if err != nil {
 			return err
@@ -53,7 +53,7 @@ func TestReconcilerVersionsOnlyRealChanges(t *testing.T) {
 		}
 	}
 	var ver store.Version
-	if err := h.st.Tx(ctx, func(tx *store.Tx) error {
+	if err := h.st.MeshTx(ctx, store.FirstMesh, func(tx *store.MeshTx) error {
 		var err error
 		ver, err = tx.VersionByNumber(res.Version)
 		return err
@@ -70,7 +70,7 @@ func TestReconcilerRollsBackAFailedMutation(t *testing.T) {
 	h := newHarness(t)
 	h.seedServers(t)
 	boom := errors.New("boom")
-	_, err := h.rec.Apply(context.Background(), Change{Actor: "test", Action: "node.set"}, func(tx *store.Tx, _ *Change) error {
+	_, err := h.rec.Apply(context.Background(), Change{Mesh: store.FirstMesh, Actor: "test", Action: "node.set"}, func(tx *store.MeshTx, _ *Change) error {
 		n, err := tx.NodeByName("vps-1")
 		if err != nil {
 			return err
@@ -89,7 +89,7 @@ func TestReconcilerRollsBackAFailedMutation(t *testing.T) {
 func TestPlanErrorListsTheProblems(t *testing.T) {
 	h := newHarness(t)
 	h.seedServers(t)
-	_, err := h.rec.Apply(context.Background(), Change{Actor: "test"}, func(tx *store.Tx, _ *Change) error {
+	_, err := h.rec.Apply(context.Background(), Change{Mesh: store.FirstMesh, Actor: "test"}, func(tx *store.MeshTx, _ *Change) error {
 		n, err := tx.NodeByName("vps-2")
 		if err != nil {
 			return err
@@ -109,7 +109,7 @@ func TestPlanErrorListsTheProblems(t *testing.T) {
 func TestLoadInputRefusesBrokenSettings(t *testing.T) {
 	h := newHarness(t)
 	for key, value := range map[string]string{store.SettingMeshCIDR: "not-a-cidr", store.SettingDefaultHub: "vps-1"} {
-		err := h.st.Tx(context.Background(), func(tx *store.Tx) error {
+		err := h.st.MeshTx(context.Background(), store.FirstMesh, func(tx *store.MeshTx) error {
 			if err := tx.SetSetting(key, value); err != nil {
 				return err
 			}
@@ -130,7 +130,7 @@ func TestRollbackIsANewVersion(t *testing.T) {
 	h.seedServers(t)
 	ctx := context.Background()
 	v1 := h.latestVersion(t)
-	move := func(tx *store.Tx, _ *Change) error {
+	move := func(tx *store.MeshTx, _ *Change) error {
 		n, err := tx.NodeByName("vps-3")
 		if err != nil {
 			return err
@@ -138,13 +138,13 @@ func TestRollbackIsANewVersion(t *testing.T) {
 		n.Endpoint = "203.0.113.99:51820"
 		return tx.UpdateNode(n)
 	}
-	if _, err := h.rec.Apply(ctx, Change{Actor: "test", Action: "node.set"}, move); err != nil {
+	if _, err := h.rec.Apply(ctx, Change{Mesh: store.FirstMesh, Actor: "test", Action: "node.set"}, move); err != nil {
 		t.Fatal(err)
 	}
-	events, _, _, cancel := h.hub.Subscribe(testfix.VPS1.ID)
+	events, _, _, cancel := h.hub.Subscribe(testfix.VPS1.ID, store.FirstMesh)
 	defer cancel()
 
-	res, err := h.rec.Rollback(ctx, Change{Actor: "user:admin", UserID: 1}, v1)
+	res, err := h.rec.Rollback(ctx, Change{Mesh: store.FirstMesh, Actor: "user:admin", UserID: 1}, v1)
 	if err != nil || res.Version != v1+2 {
 		t.Fatalf("Rollback = %+v, %v; want version %d", res, err, v1+2)
 	}
@@ -160,7 +160,7 @@ func TestRollbackIsANewVersion(t *testing.T) {
 		t.Fatal("vps-1 was not told about the rollback")
 	}
 	var ver store.Version
-	if err := h.st.Tx(ctx, func(tx *store.Tx) error {
+	if err := h.st.MeshTx(ctx, store.FirstMesh, func(tx *store.MeshTx) error {
 		var err error
 		ver, err = tx.VersionByNumber(res.Version)
 		return err
@@ -172,10 +172,10 @@ func TestRollbackIsANewVersion(t *testing.T) {
 	}
 
 	// Rolling back to a state equal to the current one writes nothing.
-	if res, err := h.rec.Rollback(ctx, Change{Actor: "test"}, v1); err != nil || res.Version != 0 {
+	if res, err := h.rec.Rollback(ctx, Change{Mesh: store.FirstMesh, Actor: "test"}, v1); err != nil || res.Version != 0 {
 		t.Fatalf("no-op rollback = %+v, %v", res, err)
 	}
-	if _, err := h.rec.Rollback(ctx, Change{Actor: "test"}, 999); toAPIError(err).status != 404 {
+	if _, err := h.rec.Rollback(ctx, Change{Mesh: store.FirstMesh, Actor: "test"}, 999); toAPIError(err).status != 404 {
 		t.Fatalf("rollback to a missing version = %v", err)
 	}
 }

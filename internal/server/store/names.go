@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"fmt"
 	"slices"
 )
@@ -14,10 +15,11 @@ type ContainerName struct {
 	Kind   string
 }
 
-// ContainerNames lists every node's reported names by name, node and
-// address.
-func (t *Tx) ContainerNames() ([]ContainerName, error) {
-	rows, err := t.query(`SELECT node_id, name, ip, kind FROM container_names ORDER BY name, node_id, ip`)
+// ContainerNames lists the reported names of every node of the mesh by
+// name, node and address.
+func (t *MeshTx) ContainerNames() ([]ContainerName, error) {
+	rows, err := t.query(`SELECT c.node_id, c.name, c.ip, c.kind FROM container_names c JOIN nodes n ON n.id = c.node_id
+		WHERE n.mesh_id = ? ORDER BY c.name, c.node_id, c.ip`, t.mesh)
 	if err != nil {
 		return nil, fmt.Errorf("list container names: %w", err)
 	}
@@ -39,16 +41,21 @@ func (t *Tx) ContainerNames() ([]ContainerName, error) {
 // SetContainerNames replaces a node's names with names (their NodeID is
 // ignored) and reports whether they changed.
 func (t *Tx) SetContainerNames(nodeID int64, names []ContainerName) (bool, error) {
-	all, err := t.ContainerNames()
+	rows, err := t.query(`SELECT name, ip, kind FROM container_names WHERE node_id = ?`, nodeID)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("read the container names of node %d: %w", nodeID, err)
 	}
 	key := func(c ContainerName) string { return c.Name + "\x00" + c.IP + "\x00" + c.Kind }
 	var have, want []string
-	for _, c := range all {
-		if c.NodeID == nodeID {
-			have = append(have, key(c))
+	if err := scanAll(rows, "container names", func(r *sql.Rows) error {
+		var c ContainerName
+		if err := r.Scan(&c.Name, &c.IP, &c.Kind); err != nil {
+			return err
 		}
+		have = append(have, key(c))
+		return nil
+	}); err != nil {
+		return false, err
 	}
 	for _, c := range names {
 		want = append(want, key(c))

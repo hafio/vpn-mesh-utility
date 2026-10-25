@@ -11,9 +11,11 @@ import (
 // Node is one row of the nodes table. Optional references and keys use their
 // zero value for SQL NULL (0 for an id, "" for a key).
 type Node struct {
-	ID   int64
-	Name string
-	Role string
+	ID int64
+	// MeshID is the mesh the node belongs to (amendment A49).
+	MeshID int64
+	Name   string
+	Role   string
 
 	// Reported by the agent at join.
 	OS           string
@@ -77,7 +79,7 @@ const nodeCols = `id, name, role, os, arch, hostname, wg_backend, agent_version,
 	can_exit, exit_via, keepalive, mtu, enrolled, disabled, config_hash,
 	config_version, applied_version, applied_hash, last_seen, observed_ip,
 	status_json, created_at, mode, container_subnet, down_since, healthy_since,
-	mesh_ip6, ip_family, endpoint6, container_subnet6, host_families`
+	mesh_ip6, ip_family, endpoint6, container_subnet6, host_families, mesh_id`
 
 type scanner interface {
 	Scan(dest ...any) error
@@ -96,7 +98,7 @@ func scanNode(r scanner) (Node, error) {
 		&canExit, &exitVia, &n.Keepalive, &n.MTU, &enrolled, &disb, &n.ConfigHash,
 		&n.ConfigVersion, &n.AppliedVersion, &n.AppliedHash, &lastSeen, &n.ObservedIP,
 		&n.StatusJSON, &n.CreatedAt, &n.Mode, &n.ContainerSubnet, &n.DownSince, &n.HealthySince,
-		&meshIP6, &n.Family, &n.Endpoint6, &n.ContainerSubnet6, &n.HostFamilies)
+		&meshIP6, &n.Family, &n.Endpoint6, &n.ContainerSubnet6, &n.HostFamilies, &n.MeshID)
 	if err != nil {
 		return Node{}, err
 	}
@@ -107,9 +109,9 @@ func scanNode(r scanner) (Node, error) {
 	return n, nil
 }
 
-// Nodes returns every node, ordered by id.
-func (t *Tx) Nodes() ([]Node, error) {
-	rows, err := t.query(`SELECT ` + nodeCols + ` FROM nodes WHERE mesh_id = 1 ORDER BY id`)
+// Nodes returns the mesh's nodes, ordered by id.
+func (t *MeshTx) Nodes() ([]Node, error) {
+	rows, err := t.query(`SELECT `+nodeCols+` FROM nodes WHERE mesh_id = ? ORDER BY id`, t.mesh)
 	if err != nil {
 		return nil, fmt.Errorf("list nodes: %w", err)
 	}
@@ -128,7 +130,7 @@ func (t *Tx) Nodes() ([]Node, error) {
 	return out, nil
 }
 
-// NodeByID returns one node or ErrNotFound.
+// NodeByID returns one node of any mesh, or ErrNotFound.
 func (t *Tx) NodeByID(id int64) (Node, error) {
 	n, err := scanNode(t.queryRow(`SELECT `+nodeCols+` FROM nodes WHERE id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -140,9 +142,9 @@ func (t *Tx) NodeByID(id int64) (Node, error) {
 	return n, nil
 }
 
-// NodeByName returns one node or ErrNotFound.
-func (t *Tx) NodeByName(name string) (Node, error) {
-	n, err := scanNode(t.queryRow(`SELECT `+nodeCols+` FROM nodes WHERE mesh_id = 1 AND name = ?`, name))
+// NodeByName returns one node of the mesh, or ErrNotFound.
+func (t *MeshTx) NodeByName(name string) (Node, error) {
+	n, err := scanNode(t.queryRow(`SELECT `+nodeCols+` FROM nodes WHERE mesh_id = ? AND name = ?`, t.mesh, name))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Node{}, fmt.Errorf("node %q: %w", name, ErrNotFound)
 	}
@@ -152,22 +154,27 @@ func (t *Tx) NodeByName(name string) (Node, error) {
 	return n, nil
 }
 
-// InsertNode creates a node from its desired fields and sets n.ID and
-// n.CreatedAt. Operational fields start at their defaults.
-func (t *Tx) InsertNode(n *Node) error {
-	n.CreatedAt = t.now.Unix()
+// InsertNode creates a node of the mesh from its desired fields and sets
+// n.ID, n.MeshID and n.CreatedAt. Operational fields start at their
+// defaults.
+func (t *MeshTx) InsertNode(n *Node) error {
+	id, err := t.nextNodeID()
+	if err != nil {
+		return err
+	}
+	n.ID, n.MeshID, n.CreatedAt = id, t.mesh, t.now.Unix()
 	if n.Mode == "" {
 		n.Mode = proto.ModeHost
 	}
 	if n.Family == "" {
 		n.Family = proto.FamilyDual
 	}
-	res, err := t.exec(`INSERT INTO nodes (name, role, mesh_ip, wg_pubkey, identity_pubkey, endpoint,
+	_, err = t.exec(`INSERT INTO nodes (id, mesh_id, name, role, mesh_ip, wg_pubkey, identity_pubkey, endpoint,
 			listen_port, primary_hub_id, can_exit, exit_via, keepalive, mtu, enrolled, disabled,
 			os, arch, hostname, wg_backend, agent_version, created_at, mode, container_subnet,
 			mesh_ip6, ip_family, endpoint6, container_subnet6)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		n.Name, n.Role, nullStr(n.MeshIP), nullStr(n.WGPubKey), nullStr(n.IdentityPubKey), n.Endpoint,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		n.ID, n.MeshID, n.Name, n.Role, nullStr(n.MeshIP), nullStr(n.WGPubKey), nullStr(n.IdentityPubKey), n.Endpoint,
 		n.ListenPort, nullInt(n.PrimaryHubID), boolInt(n.CanExit), nullInt(n.ExitVia), n.Keepalive, n.MTU,
 		boolInt(n.Enrolled), boolInt(n.Disabled),
 		n.OS, n.Arch, n.Hostname, n.WGBackend, n.AgentVersion, n.CreatedAt, n.Mode, n.ContainerSubnet,
@@ -175,12 +182,19 @@ func (t *Tx) InsertNode(n *Node) error {
 	if err != nil {
 		return fmt.Errorf("insert node %q: %w", n.Name, err)
 	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		return fmt.Errorf("insert node %q: %w", n.Name, err)
-	}
-	n.ID = id
 	return nil
+}
+
+// nextNodeID is a node id no mesh has had: a rollback re-creates a removed
+// node with its old id, so no other node may have been given it since.
+func (t *Tx) nextNodeID() (int64, error) {
+	var id int64
+	err := t.queryRow(`UPDATE id_seq SET last = MAX(last, (SELECT COALESCE(MAX(id), 0) FROM nodes)) + 1
+		WHERE name = 'nodes' RETURNING last`).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("allocate a node id: %w", err)
+	}
+	return id, nil
 }
 
 // UpdateNode writes the desired fields of n (everything an operator or a join

@@ -63,7 +63,7 @@ func ULAPrefix(random func([]byte) (int, error)) (netip.Prefix, error) {
 // IPv6 returns the mesh's IPv6 prefix.
 func (s *Nodes) IPv6(ctx context.Context) (IPv6View, error) {
 	var out IPv6View
-	err := s.db.Tx(ctx, func(tx *store.Tx) error {
+	err := s.tx(ctx, func(tx *store.MeshTx) error {
 		v, err := ipv6View(tx)
 		out = v
 		return err
@@ -71,7 +71,7 @@ func (s *Nodes) IPv6(ctx context.Context) (IPv6View, error) {
 	return out, err
 }
 
-func ipv6View(tx *store.Tx) (IPv6View, error) {
+func ipv6View(tx *store.MeshTx) (IPv6View, error) {
 	var v IPv6View
 	cur, err := tx.Setting(store.SettingMeshCIDR6)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
@@ -110,7 +110,7 @@ func (s *Nodes) SetIPv6(ctx context.Context, by Actor, req IPv6Request) (IPv6Vie
 		}
 	}
 	var out IPv6View
-	res, err := s.rec.Apply(ctx, Change{Actor: by.Name, UserID: by.UserID, Action: "ipv6.set", Target: want}, func(tx *store.Tx, c *Change) error {
+	res, err := s.apply(ctx, Change{Actor: by.Name, UserID: by.UserID, Action: "ipv6.set", Target: want}, func(tx *store.MeshTx, c *Change) error {
 		cur, err := tx.Setting(store.SettingMeshCIDR6)
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			return err
@@ -163,7 +163,7 @@ func (s *Nodes) SetIPv6(ctx context.Context, by Actor, req IPv6Request) (IPv6Vie
 	if err != nil {
 		return IPv6View{}, err
 	}
-	err = s.db.Tx(ctx, func(tx *store.Tx) error {
+	err = s.tx(ctx, func(tx *store.MeshTx) error {
 		out, err = ipv6View(tx)
 		return err
 	})
@@ -174,7 +174,7 @@ func (s *Nodes) SetIPv6(ctx context.Context, by Actor, req IPv6Request) (IPv6Vie
 // giveUpIPv6 takes the mesh's IPv6 away: the prefix, every IPv6 mesh
 // address and container /112. An IPv6-only node would have no address
 // left, so it must change first.
-func giveUpIPv6(tx *store.Tx, nodes []store.Node, c *Change) error {
+func giveUpIPv6(tx *store.MeshTx, nodes []store.Node, c *Change) error {
 	for _, n := range nodes {
 		if n.Family == proto.FamilyIPv6 {
 			return errorf(http.StatusConflict, proto.CodeConflict,
@@ -205,7 +205,7 @@ func giveUpIPv6(tx *store.Tx, nodes []store.Node, c *Change) error {
 // calls it at every start; changed reports whether it set one.
 func (s *Nodes) DefaultIPv6(ctx context.Context) (v IPv6View, changed bool, err error) {
 	var cur string
-	err = s.db.Tx(ctx, func(tx *store.Tx) error {
+	err = s.tx(ctx, func(tx *store.MeshTx) error {
 		var err error
 		cur, err = tx.Setting(store.SettingMeshCIDR6)
 		if errors.Is(err, store.ErrNotFound) {

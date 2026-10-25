@@ -24,10 +24,9 @@ import (
 
 // Deps are the UI's dependencies.
 type Deps struct {
-	DB         api.DB
-	Nodes      *api.Nodes
-	Reconciler *api.Reconciler
-	Auth       *auth.Service
+	DB    api.DB
+	Nodes *api.Nodes
+	Auth  *auth.Service
 	// ServerURL is the public origin; POSTs from any other origin are
 	// refused.
 	ServerURL      string

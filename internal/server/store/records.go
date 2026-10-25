@@ -16,9 +16,9 @@ type DNSRecord struct {
 	CreatedAt int64  `json:"created_at"`
 }
 
-// DNSRecords lists custom records by name.
-func (t *Tx) DNSRecords() ([]DNSRecord, error) {
-	rows, err := t.query(`SELECT id, name, ip, ip6, node_id, created_at FROM dns_records ORDER BY name`)
+// DNSRecords lists the mesh's custom records by name.
+func (t *MeshTx) DNSRecords() ([]DNSRecord, error) {
+	rows, err := t.query(`SELECT id, name, ip, ip6, node_id, created_at FROM dns_records WHERE mesh_id = ? ORDER BY name`, t.mesh)
 	if err != nil {
 		return nil, fmt.Errorf("list dns records: %w", err)
 	}
@@ -42,8 +42,9 @@ func (t *Tx) DNSRecords() ([]DNSRecord, error) {
 	return out, nil
 }
 
-// InsertDNSRecord creates a record; r.ID 0 lets the database assign one.
-func (t *Tx) InsertDNSRecord(r *DNSRecord) error {
+// InsertDNSRecord creates a record of the mesh; r.ID 0 lets the database
+// assign one.
+func (t *MeshTx) InsertDNSRecord(r *DNSRecord) error {
 	if r.CreatedAt == 0 {
 		r.CreatedAt = t.now.Unix()
 	}
@@ -53,8 +54,8 @@ func (t *Tx) InsertDNSRecord(r *DNSRecord) error {
 	if r.NodeID == 0 && r.IP == "" && r.IP6 != "" {
 		ip = ""
 	}
-	res, err := t.exec(`INSERT INTO dns_records (id, name, ip, ip6, node_id, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		nullInt(r.ID), r.Name, ip, nullStr(r.IP6), nullInt(r.NodeID), r.CreatedAt)
+	res, err := t.exec(`INSERT INTO dns_records (id, mesh_id, name, ip, ip6, node_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		nullInt(r.ID), t.mesh, r.Name, ip, nullStr(r.IP6), nullInt(r.NodeID), r.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("insert dns record %q: %w", r.Name, err)
 	}
@@ -66,9 +67,9 @@ func (t *Tx) InsertDNSRecord(r *DNSRecord) error {
 	return nil
 }
 
-// DeleteDNSRecord removes a record by id.
-func (t *Tx) DeleteDNSRecord(id int64) error {
-	res, err := t.exec(`DELETE FROM dns_records WHERE id = ?`, id)
+// DeleteDNSRecord removes one of the mesh's records by id.
+func (t *MeshTx) DeleteDNSRecord(id int64) error {
+	res, err := t.exec(`DELETE FROM dns_records WHERE id = ? AND mesh_id = ?`, id, t.mesh)
 	if err != nil {
 		return fmt.Errorf("delete dns record %d: %w", id, err)
 	}

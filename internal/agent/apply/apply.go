@@ -118,6 +118,9 @@ type Deps struct {
 	Log *slog.Logger
 	// Now is the clock a policy's schedules are read on; nil is time.Now.
 	Now func() time.Time
+	// EndpointRetry is how long Failover waits for a first handshake on a
+	// peer's endpoint before it tries the other one; zero means 45 s.
+	EndpointRetry time.Duration
 }
 
 // Result is one successful apply.
@@ -152,7 +155,8 @@ func (e *StepError) Unwrap() error { return e.Err }
 // Endpoint failover (M8): how long a dialling peer may go without a
 // handshake on the endpoint it is on before Failover tries its other one --
 // staleAfter after the last handshake (a tunnel with keepalive renews it
-// every two minutes), retryAfter after the endpoint was set without one.
+// every two minutes), Deps.EndpointRetry (retryAfter by default) after the
+// endpoint was set without one.
 const (
 	staleAfter = 3 * time.Minute
 	retryAfter = 45 * time.Second
@@ -187,6 +191,9 @@ func New(d Deps) *Engine {
 	}
 	if d.Now == nil {
 		d.Now = time.Now
+	}
+	if d.EndpointRetry <= 0 {
+		d.EndpointRetry = retryAfter
 	}
 	return &Engine{d: d, dial: map[wg.Key]*dialing{}}
 }
@@ -511,7 +518,7 @@ func (e *Engine) keepEndpoints(cfg proto.NodeConfig, dev *wg.Device) {
 }
 
 // Failover moves each dialling peer whose endpoint has gone without a
-// handshake for too long (staleAfter, retryAfter) to its other endpoint
+// handshake for too long (staleAfter, EndpointRetry) to its other endpoint
 // (M8): a spoke whose IPv4 path to a server is broken tries the server's
 // IPv6 endpoint, and back. It returns what it moved, "<peer> to
 // <endpoint>", sorted.
@@ -539,7 +546,7 @@ func (e *Engine) Failover() ([]string, error) {
 		switch h := last[k]; {
 		case h.After(d.since) && now.Sub(h) < staleAfter:
 			continue // it answers on this endpoint
-		case !h.After(d.since) && now.Sub(d.since) < retryAfter:
+		case !h.After(d.since) && now.Sub(d.since) < e.d.EndpointRetry:
 			continue // not long enough on this endpoint to judge it
 		}
 		ep := d.fallback

@@ -209,7 +209,7 @@ func TestEditSegment(t *testing.T) {
 func (h *harness) segmentation(t *testing.T) store.Segmentation {
 	t.Helper()
 	var seg store.Segmentation
-	if err := h.st.Tx(context.Background(), func(tx *store.Tx) error {
+	if err := h.st.MeshTx(context.Background(), store.FirstMesh, func(tx *store.MeshTx) error {
 		var err error
 		seg, err = tx.Segmentation()
 		return err
@@ -375,7 +375,7 @@ func TestScheduledPolicies(t *testing.T) {
 	if v, err = s.Segment(ctx); err != nil || v.TimeZone != "UTC" || h.config(t, "vps-1").Policy.TZ != "UTC" {
 		t.Fatalf("without a zone: %q, %v", v.TimeZone, err)
 	}
-	if err := h.st.Tx(ctx, func(tx *store.Tx) error { return tx.SetSetting(store.SettingServerTZ, "Europe/Berlin") }); err != nil {
+	if err := h.st.MeshTx(ctx, store.FirstMesh, func(tx *store.MeshTx) error { return tx.SetServerSetting(store.SettingServerTZ, "Europe/Berlin") }); err != nil {
 		t.Fatal(err)
 	}
 	if v, err = s.Segment(ctx); err != nil || v.TimeZone != "Europe/Berlin" || v.Config.TimeZone != "" {

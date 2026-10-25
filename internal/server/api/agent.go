@@ -94,8 +94,17 @@ func (a *api) join(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var id int64
-	_, err = a.Reconciler.Apply(r.Context(), Change{Action: "node.join"}, func(tx *store.Tx, c *Change) error {
+	// The token's node says which mesh the join reconciles (amendment A49).
+	var mesh, id int64
+	if err := a.DB.Tx(r.Context(), func(tx *store.Tx) error {
+		var err error
+		mesh, err = tx.TokenMesh(req.Token)
+		return err
+	}); err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	_, err = a.Reconciler.Apply(r.Context(), Change{Mesh: mesh, Action: "node.join"}, func(tx *store.MeshTx, c *Change) error {
 		var err error
 		if id, err = tx.ConsumeToken(req.Token); err != nil {
 			return err
@@ -216,7 +225,7 @@ func (a *api) config(w http.ResponseWriter, r *http.Request) {
 	var cfg *proto.NodeConfig
 	if err := a.DB.Tx(r.Context(), func(tx *store.Tx) error {
 		var err error
-		_, cfg, err = configFor(tx, node.ID)
+		_, cfg, err = configFor(tx.In(node.MeshID), node.ID)
 		return err
 	}); err != nil {
 		a.fail(w, r, err)
@@ -253,7 +262,7 @@ func (a *api) events(w http.ResponseWriter, r *http.Request) {
 	}
 	// Subscribe before reading the current state: a change committed in
 	// between is then queued rather than lost.
-	events, mesh, done, cancel := a.Hub.Subscribe(node.ID)
+	events, mesh, done, cancel := a.Hub.Subscribe(node.ID, node.MeshID)
 	defer cancel()
 	if err := a.DB.Tx(r.Context(), func(tx *store.Tx) error {
 		var err error
@@ -341,8 +350,8 @@ func (a *api) status(w http.ResponseWriter, r *http.Request) {
 	// through the reconciler; the heartbeat itself does not.
 	if fams := hostFamilies(rep.Families); fams != node.HostFamilies {
 		actor := "node:" + strconv.FormatInt(node.ID, 10)
-		ch := Change{Actor: actor, Action: "node.families", Target: node.Name, Detail: map[string]any{"families": fams}}
-		set := func(tx *store.Tx, _ *Change) error { return tx.SetHostFamilies(node.ID, fams) }
+		ch := Change{Mesh: node.MeshID, Actor: actor, Action: "node.families", Target: node.Name, Detail: map[string]any{"families": fams}}
+		set := func(tx *store.MeshTx, _ *Change) error { return tx.SetHostFamilies(node.ID, fams) }
 		if _, err := a.Reconciler.Apply(r.Context(), ch, set); err != nil {
 			a.fail(w, r, err)
 			return
@@ -354,7 +363,8 @@ func (a *api) status(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var resp proto.StatusResponse
-	err = a.DB.Tx(r.Context(), func(tx *store.Tx) error {
+	err = a.DB.Tx(r.Context(), func(raw *store.Tx) error {
+		tx := raw.In(node.MeshID)
 		nodes, err := tx.Nodes()
 		if err != nil {
 			return err
@@ -437,7 +447,7 @@ func (a *api) prefs(w http.ResponseWriter, r *http.Request) {
 			"node %q is a %s; only spokes choose an exit or a keepalive", node.Name, node.Role))
 		return
 	}
-	ch, err := a.nodes.Set(r.Context(), Actor{Name: "node:" + strconv.FormatInt(node.ID, 10)}, node.Name,
+	ch, err := a.nodes.In(node.MeshID).Set(r.Context(), Actor{Name: "node:" + strconv.FormatInt(node.ID, 10)}, node.Name,
 		NodeSetRequest{Exit: req.Exit, Keepalive: req.Keepalive, MTU: req.MTU})
 	if err != nil {
 		a.fail(w, r, err)
@@ -459,13 +469,15 @@ func (a *api) prefs(w http.ResponseWriter, r *http.Request) {
 // the dashboard shows it, without keys, endpoints, hostnames or errors, and
 // the containers' published names, which every node's resolver answers.
 func (a *api) mesh(w http.ResponseWriter, r *http.Request) {
-	if _, _, err := a.authenticate(w, r); err != nil {
+	node, _, err := a.authenticate(w, r)
+	if err != nil {
 		a.fail(w, r, err)
 		return
 	}
 	now := a.Now()
 	view := proto.MeshView{ServerTime: now.Unix(), Nodes: []proto.MeshNode{}}
-	err := a.DB.Tx(r.Context(), func(tx *store.Tx) error {
+	err = a.DB.Tx(r.Context(), func(raw *store.Tx) error {
+		tx := raw.In(node.MeshID)
 		var err error
 		if view.Version, err = tx.LatestVersion(); err != nil {
 			return err

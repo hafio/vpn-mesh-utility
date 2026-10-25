@@ -50,7 +50,7 @@ func TestJudgeHubs(t *testing.T) {
 func (h *harness) heartbeat(t *testing.T, name string, peers ...store.PeerStat) {
 	t.Helper()
 	id := h.node(t, name).ID
-	if err := h.st.Tx(context.Background(), func(tx *store.Tx) error {
+	if err := h.st.MeshTx(context.Background(), store.FirstMesh, func(tx *store.MeshTx) error {
 		return tx.RecordStatus(id, store.StatusUpdate{AgentVersion: "v1.0.0", WGBackend: "kernel", Peers: peers})
 	}); err != nil {
 		t.Fatal(err)
@@ -83,11 +83,11 @@ func TestFailoverMovesRelays(t *testing.T) {
 		if n.Name == "laptop" {
 			n.PrimaryHubID = vps2.ID
 		}
-		if err := h.st.Tx(context.Background(), func(tx *store.Tx) error { return tx.UpdateNode(n) }); err != nil {
+		if err := h.st.MeshTx(context.Background(), store.FirstMesh, func(tx *store.MeshTx) error { return tx.UpdateNode(n) }); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := h.rec.Apply(context.Background(), Change{Actor: "test"}, nil); err != nil {
+	if _, err := h.rec.Apply(context.Background(), Change{Mesh: store.FirstMesh, Actor: "test"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := h.relayOf(t, "nas"); got != "vps-1" {
@@ -134,7 +134,7 @@ func TestFailoverMovesRelays(t *testing.T) {
 
 	// A server that is no longer a hub loses its state; the plan does not
 	// care about it.
-	if err := h.st.Tx(context.Background(), func(tx *store.Tx) error { return tx.SetHubState(vps2.ID, 1, 0) }); err != nil {
+	if err := h.st.MeshTx(context.Background(), store.FirstMesh, func(tx *store.MeshTx) error { return tx.SetHubState(vps2.ID, 1, 0) }); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := h.nodes().SetDisabled(context.Background(), cli(), "vps-2", true); err != nil {

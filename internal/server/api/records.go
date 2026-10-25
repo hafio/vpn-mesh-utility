@@ -67,7 +67,7 @@ type RecordRequest struct {
 // DNS returns the mesh zone.
 func (s *Nodes) DNS(ctx context.Context) (DNSView, error) {
 	v := DNSView{Records: []DNSEntry{}, Upstream: []string{}, Domains: []string{}, Nodes: []string{}}
-	err := s.db.Tx(ctx, func(tx *store.Tx) error {
+	err := s.tx(ctx, func(tx *store.MeshTx) error {
 		in, nodes, err := LoadInput(tx)
 		if err != nil {
 			return err
@@ -138,8 +138,8 @@ func (s *Nodes) AddRecord(ctx context.Context, by Actor, req RecordRequest) (Mes
 		}
 		rec.IP6, detail["ip6"] = ip.String(), ip.String()
 	}
-	res, err := s.rec.Apply(ctx, Change{Actor: by.Name, UserID: by.UserID, Action: "dns.add", Target: name, Detail: detail},
-		func(tx *store.Tx, _ *Change) error {
+	res, err := s.apply(ctx, Change{Actor: by.Name, UserID: by.UserID, Action: "dns.add", Target: name, Detail: detail},
+		func(tx *store.MeshTx, _ *Change) error {
 			if req.Node != "" {
 				n, err := nodeByName(tx, req.Node, "node")
 				if err != nil {
@@ -162,8 +162,8 @@ func (s *Nodes) RemoveRecord(ctx context.Context, by Actor, name string) (MeshCh
 	if err != nil {
 		return MeshChange{}, invalid(err)
 	}
-	res, err := s.rec.Apply(ctx, Change{Actor: by.Name, UserID: by.UserID, Action: "dns.rm", Target: name},
-		func(tx *store.Tx, _ *Change) error {
+	res, err := s.apply(ctx, Change{Actor: by.Name, UserID: by.UserID, Action: "dns.rm", Target: name},
+		func(tx *store.MeshTx, _ *Change) error {
 			records, err := tx.DNSRecords()
 			if err != nil {
 				return err

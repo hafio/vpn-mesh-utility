@@ -310,15 +310,15 @@ func (s Segmentation) Validate() error {
 	return errors.Join(errs...)
 }
 
-// Segmentation reads the document: groups (with their nodes), objects and
-// zones by name, policies in order.
-func (t *Tx) Segmentation() (Segmentation, error) {
+// Segmentation reads the mesh's document: groups (with their nodes),
+// objects and zones by name, policies in order.
+func (t *MeshTx) Segmentation() (Segmentation, error) {
 	var s Segmentation
 	members, err := t.groupMembers()
 	if err != nil {
 		return Segmentation{}, err
 	}
-	rows, err := t.query(`SELECT id, name, description FROM seg_groups ORDER BY name`)
+	rows, err := t.query(`SELECT id, name, description FROM seg_groups WHERE mesh_id = ? ORDER BY name`, t.mesh)
 	if err != nil {
 		return Segmentation{}, fmt.Errorf("read groups: %w", err)
 	}
@@ -336,7 +336,7 @@ func (t *Tx) Segmentation() (Segmentation, error) {
 	}); err != nil {
 		return Segmentation{}, err
 	}
-	rows, err = t.query(`SELECT kind, name, description, entries FROM seg_objects ORDER BY kind, name`)
+	rows, err = t.query(`SELECT kind, name, description, entries FROM seg_objects WHERE mesh_id = ? ORDER BY kind, name`, t.mesh)
 	if err != nil {
 		return Segmentation{}, fmt.Errorf("read objects: %w", err)
 	}
@@ -358,7 +358,7 @@ func (t *Tx) Segmentation() (Segmentation, error) {
 	}); err != nil {
 		return Segmentation{}, err
 	}
-	rows, err = t.query(`SELECT name, description, intra, members FROM seg_zones ORDER BY name`)
+	rows, err = t.query(`SELECT name, description, intra, members FROM seg_zones WHERE mesh_id = ? ORDER BY name`, t.mesh)
 	if err != nil {
 		return Segmentation{}, fmt.Errorf("read zones: %w", err)
 	}
@@ -377,7 +377,7 @@ func (t *Tx) Segmentation() (Segmentation, error) {
 		return Segmentation{}, err
 	}
 	rows, err = t.query(`SELECT name, description, disabled, from_refs, to_refs, services, action, days, start_time, end_time
-		FROM seg_policies ORDER BY position`)
+		FROM seg_policies WHERE mesh_id = ? ORDER BY position`, t.mesh)
 	if err != nil {
 		return Segmentation{}, fmt.Errorf("read policies: %w", err)
 	}
@@ -410,9 +410,10 @@ func (t *Tx) Segmentation() (Segmentation, error) {
 	return s, nil
 }
 
-// groupMembers is each group's nodes, by name.
-func (t *Tx) groupMembers() (map[int64][]string, error) {
-	rows, err := t.query(`SELECT ng.group_id, n.name FROM node_groups ng JOIN nodes n ON n.id = ng.node_id ORDER BY n.name`)
+// groupMembers is each of the mesh's groups' nodes, by name.
+func (t *MeshTx) groupMembers() (map[int64][]string, error) {
+	rows, err := t.query(`SELECT ng.group_id, n.name FROM node_groups ng JOIN nodes n ON n.id = ng.node_id
+		WHERE n.mesh_id = ? ORDER BY n.name`, t.mesh)
 	if err != nil {
 		return nil, fmt.Errorf("read group members: %w", err)
 	}
@@ -431,9 +432,11 @@ func (t *Tx) groupMembers() (map[int64][]string, error) {
 	return out, err
 }
 
-// NodeGroups is the groups of every node in one, by node id, each sorted.
-func (t *Tx) NodeGroups() (map[int64][]string, error) {
-	rows, err := t.query(`SELECT ng.node_id, g.name FROM node_groups ng JOIN seg_groups g ON g.id = ng.group_id ORDER BY g.name`)
+// NodeGroups is the groups of every node of the mesh in one, by node id,
+// each sorted.
+func (t *MeshTx) NodeGroups() (map[int64][]string, error) {
+	rows, err := t.query(`SELECT ng.node_id, g.name FROM node_groups ng JOIN seg_groups g ON g.id = ng.group_id
+		WHERE g.mesh_id = ? ORDER BY g.name`, t.mesh)
 	if err != nil {
 		return nil, fmt.Errorf("read node groups: %w", err)
 	}
@@ -452,11 +455,12 @@ func (t *Tx) NodeGroups() (map[int64][]string, error) {
 	return out, err
 }
 
-// SetSegmentation replaces the whole document. A group's node that does not
-// exist is ErrNotFound; s is validated by the caller.
-func (t *Tx) SetSegmentation(s Segmentation) error {
-	for _, table := range []string{"node_groups", "seg_groups", "seg_objects", "seg_zones", "seg_policies"} {
-		if _, err := t.exec(`DELETE FROM ` + table); err != nil {
+// SetSegmentation replaces the mesh's whole document. A group's node that
+// is not in the mesh is ErrNotFound; s is validated by the caller.
+func (t *MeshTx) SetSegmentation(s Segmentation) error {
+	// node_groups goes with its groups (ON DELETE CASCADE).
+	for _, table := range []string{"seg_groups", "seg_objects", "seg_zones", "seg_policies"} {
+		if _, err := t.exec(`DELETE FROM `+table+` WHERE mesh_id = ?`, t.mesh); err != nil {
 			return fmt.Errorf("replace segmentation: clear %s: %w", table, err)
 		}
 	}
@@ -480,15 +484,15 @@ func (t *Tx) SetSegmentation(s Segmentation) error {
 		objs []SegObject
 	}{{"address", s.Addresses}, {"service", s.Services}} {
 		for _, o := range kind.objs {
-			if _, err := t.exec(`INSERT INTO seg_objects (kind, name, description, entries) VALUES (?, ?, ?, ?)`,
-				kind.kind, o.Name, o.Description, joinList(o.Entries)); err != nil {
+			if _, err := t.exec(`INSERT INTO seg_objects (mesh_id, kind, name, description, entries) VALUES (?, ?, ?, ?, ?)`,
+				t.mesh, kind.kind, o.Name, o.Description, joinList(o.Entries)); err != nil {
 				return fmt.Errorf("insert %s object %q: %w", kind.kind, o.Name, err)
 			}
 		}
 	}
 	for _, z := range s.Zones {
-		if _, err := t.exec(`INSERT INTO seg_zones (name, description, intra, members) VALUES (?, ?, ?, ?)`,
-			z.Name, z.Description, z.Intra, joinList(z.Members)); err != nil {
+		if _, err := t.exec(`INSERT INTO seg_zones (mesh_id, name, description, intra, members) VALUES (?, ?, ?, ?, ?)`,
+			t.mesh, z.Name, z.Description, z.Intra, joinList(z.Members)); err != nil {
 			return fmt.Errorf("insert zone %q: %w", z.Name, err)
 		}
 	}
@@ -497,8 +501,8 @@ func (t *Tx) SetSegmentation(s Segmentation) error {
 		if p.Schedule != nil {
 			when = *p.Schedule
 		}
-		if _, err := t.exec(`INSERT INTO seg_policies (position, name, description, disabled, from_refs, to_refs, services, action,
-			days, start_time, end_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, i+1, p.Name, p.Description, boolInt(p.Disabled),
+		if _, err := t.exec(`INSERT INTO seg_policies (mesh_id, position, name, description, disabled, from_refs, to_refs, services,
+			action, days, start_time, end_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, t.mesh, i+1, p.Name, p.Description, boolInt(p.Disabled),
 			joinList(p.From), joinList(p.To), joinList(p.Services), p.Action, joinList(when.Days), when.Start, when.End); err != nil {
 			return fmt.Errorf("insert policy %q: %w", p.Name, err)
 		}
@@ -509,8 +513,8 @@ func (t *Tx) SetSegmentation(s Segmentation) error {
 	return t.SetSetting(SettingPolicyTZ, s.TimeZone)
 }
 
-func (t *Tx) insertGroup(name, description string) (int64, error) {
-	res, err := t.exec(`INSERT INTO seg_groups (name, description) VALUES (?, ?)`, name, description)
+func (t *MeshTx) insertGroup(name, description string) (int64, error) {
+	res, err := t.exec(`INSERT INTO seg_groups (mesh_id, name, description) VALUES (?, ?, ?)`, t.mesh, name, description)
 	if err != nil {
 		return 0, fmt.Errorf("insert group %q: %w", name, err)
 	}
@@ -521,15 +525,16 @@ func (t *Tx) insertGroup(name, description string) (int64, error) {
 	return id, nil
 }
 
-// SetNodeGroups makes groups exactly the groups node id is in, creating a
-// group that does not exist yet; names are validated by the caller.
-func (t *Tx) SetNodeGroups(id int64, groups []string) error {
+// SetNodeGroups makes groups exactly the groups node id (of the mesh) is
+// in, creating a group that does not exist yet; names are validated by the
+// caller.
+func (t *MeshTx) SetNodeGroups(id int64, groups []string) error {
 	if _, err := t.exec(`DELETE FROM node_groups WHERE node_id = ?`, id); err != nil {
 		return fmt.Errorf("set the groups of node %d: %w", id, err)
 	}
 	for _, name := range groups {
 		var gid int64
-		err := t.queryRow(`SELECT id FROM seg_groups WHERE name = ?`, name).Scan(&gid)
+		err := t.queryRow(`SELECT id FROM seg_groups WHERE mesh_id = ? AND name = ?`, t.mesh, name).Scan(&gid)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			if gid, err = t.insertGroup(name, ""); err != nil {

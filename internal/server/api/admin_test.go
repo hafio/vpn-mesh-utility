@@ -52,7 +52,7 @@ func TestAdminAddIssuesAToken(t *testing.T) {
 		t.Fatalf("enrollment %+v", en)
 	}
 	var audit []store.AuditEntry
-	if err := h.st.Tx(context.Background(), func(tx *store.Tx) error {
+	if err := h.st.MeshTx(context.Background(), store.FirstMesh, func(tx *store.MeshTx) error {
 		var err error
 		audit, err = tx.AuditLog(1, 0)
 		return err
@@ -111,7 +111,7 @@ func TestAdminSetDisableEnableRemove(t *testing.T) {
 		t.Fatalf("bad mtu: %d", code)
 	}
 
-	_, _, done, cancel := h.hub.Subscribe(testfix.VPS3.ID)
+	_, _, done, cancel := h.hub.Subscribe(testfix.VPS3.ID, store.FirstMesh)
 	defer cancel()
 	if code, _ := adminCall(t, h, http.MethodPost, AdminNodes+"/vps-3/disable", nil, &ch); code != 200 || !ch.Node.Disabled {
 		t.Fatalf("disable: %d %+v", code, ch.Node)
@@ -276,7 +276,7 @@ func TestAdminContainerMode(t *testing.T) {
 func TestContainerNetworksNeedRoom(t *testing.T) {
 	h := newHarness(t)
 	h.seedServers(t)
-	if err := h.st.Tx(context.Background(), func(tx *store.Tx) error { return tx.SetSetting(store.SettingMeshCIDR, "10.77.0.0/22") }); err != nil {
+	if err := h.st.MeshTx(context.Background(), store.FirstMesh, func(tx *store.MeshTx) error { return tx.SetSetting(store.SettingMeshCIDR, "10.77.0.0/22") }); err != nil {
 		t.Fatal(err)
 	}
 	for _, req := range []NodeAddRequest{{Name: "box", Role: "spoke", Mode: proto.ModeContainer}, {Name: "pc", Role: "spoke", Containers: true}} {
@@ -450,7 +450,7 @@ func TestMoveMeshIP(t *testing.T) {
 	nas.ContainerSubnet = testfix.ContainerSubnet
 	h.seed(t, storeNode(testfix.VPS1, true), storeNode(testfix.VPS2, true), storeNode(testfix.VPS3, true), nas,
 		storeNode(testfix.Laptop, true), storeNode(testfix.Phone, true))
-	if err := h.st.Tx(context.Background(), func(tx *store.Tx) error {
+	if err := h.st.MeshTx(context.Background(), store.FirstMesh, func(tx *store.MeshTx) error {
 		return tx.SetSegmentation(store.LegacySegmentation([]store.FirewallRule{
 			{ID: 1, NodeID: testfix.VPS1.ID, Proto: "tcp", Port: 5432, SourceCIDR: testfix.Laptop.MeshIP + "/32"}}, map[int64]string{testfix.VPS1.ID: "vps-1"}))
 	}); err != nil {

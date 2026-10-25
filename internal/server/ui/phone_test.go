@@ -116,7 +116,7 @@ func TestPhonePage(t *testing.T) {
 	}
 
 	var audit []store.AuditEntry
-	if err := r.st.Tx(context.Background(), func(tx *store.Tx) error {
+	if err := r.st.MeshTx(context.Background(), store.FirstMesh, func(tx *store.MeshTx) error {
 		var err error
 		audit, err = tx.AuditLog(10, 0)
 		return err

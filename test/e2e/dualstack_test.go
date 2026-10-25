@@ -19,7 +19,9 @@ import (
 // server's IPv6 endpoint.
 func TestDualStack(t *testing.T) {
 	l := newLab(t)
-	l.agentArgs = []string{"--status-every", "1s"} // the failover is judged at each heartbeat
+	// The failover is judged at each heartbeat, 10 s into an endpoint
+	// without a handshake.
+	l.agentArgs = []string{"--status-every", "1s", "--endpoint-retry", "10s"}
 	pad := host{"h", "pad", "192.0.2.7", ""}
 	for _, h := range []host{laptop, nas, pad} {
 		l.addHost(h)

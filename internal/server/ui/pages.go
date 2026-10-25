@@ -513,7 +513,7 @@ func before(r *http.Request) int64 {
 
 func (u *ui) versionsPage(w http.ResponseWriter, r *http.Request, s auth.Session) {
 	var vs []store.Version
-	err := u.DB.Tx(r.Context(), func(tx *store.Tx) error {
+	err := u.Nodes.Tx(r.Context(), func(tx *store.MeshTx) error {
 		var err error
 		vs, err = tx.Versions(versionsPerPage, before(r))
 		return err
@@ -543,7 +543,7 @@ type versionData struct {
 
 func (u *ui) versionView(r *http.Request, n int64) (versionData, error) {
 	var d versionData
-	err := u.DB.Tx(r.Context(), func(tx *store.Tx) error {
+	err := u.Nodes.Tx(r.Context(), func(tx *store.MeshTx) error {
 		v, err := tx.VersionByNumber(n)
 		if err != nil {
 			return err
@@ -614,7 +614,7 @@ func (u *ui) rollback(w http.ResponseWriter, r *http.Request, s auth.Session) {
 		u.renderVersion(w, r, s, http.StatusConflict, page{Error: "this rollback adds or removes nodes; tick the box to confirm it"})
 		return
 	}
-	res, err := u.Reconciler.Rollback(r.Context(), api.Change{Actor: actor(s).Name, UserID: s.UserID}, n)
+	res, err := u.Nodes.Rollback(r.Context(), api.Change{Actor: actor(s).Name, UserID: s.UserID}, n)
 	if err != nil {
 		status, msg := message(err)
 		u.renderVersion(w, r, s, status, page{Error: msg})
@@ -640,7 +640,7 @@ const auditPerPage = 100
 
 func (u *ui) auditPage(w http.ResponseWriter, r *http.Request, s auth.Session) {
 	var es []store.AuditEntry
-	err := u.DB.Tx(r.Context(), func(tx *store.Tx) error {
+	err := u.Nodes.Tx(r.Context(), func(tx *store.MeshTx) error {
 		var err error
 		es, err = tx.AuditLog(auditPerPage, before(r))
 		return err
@@ -677,7 +677,7 @@ type settingsData struct {
 
 func (u *ui) settingsView(r *http.Request) (settingsData, error) {
 	var d settingsData
-	err := u.DB.Tx(r.Context(), func(tx *store.Tx) error {
+	err := u.Nodes.Tx(r.Context(), func(tx *store.MeshTx) error {
 		all, err := tx.Settings()
 		if err != nil {
 			return err
@@ -765,8 +765,8 @@ func (u *ui) saveSettings(w http.ResponseWriter, r *http.Request, s auth.Session
 		u.renderSettings(w, r, s, status, page{Error: msg})
 		return
 	}
-	res, err := u.Reconciler.Apply(r.Context(), api.Change{Actor: actor(s).Name, UserID: s.UserID, Action: "settings.set"},
-		func(tx *store.Tx, c *api.Change) error {
+	res, err := u.Nodes.Apply(r.Context(), api.Change{Actor: actor(s).Name, UserID: s.UserID, Action: "settings.set"},
+		func(tx *store.MeshTx, c *api.Change) error {
 			values := map[string]string{store.SettingDefaultMTU: strconv.Itoa(mtu), store.SettingUpstreamDNS: strings.Join(upstream, ",")}
 			if zone != "" {
 				values[store.SettingDNSZone] = zone
@@ -942,7 +942,7 @@ func (u *ui) changePassword(w http.ResponseWriter, r *http.Request, s auth.Sessi
 // exportYAML downloads the desired state, as `meshctl export` writes it.
 func (u *ui) exportYAML(w http.ResponseWriter, r *http.Request, s auth.Session) {
 	var snap store.Snapshot
-	if err := u.DB.Tx(r.Context(), func(tx *store.Tx) error {
+	if err := u.Nodes.Tx(r.Context(), func(tx *store.MeshTx) error {
 		var err error
 		snap, err = tx.Snapshot()
 		return err

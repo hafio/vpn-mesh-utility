@@ -108,17 +108,25 @@ type hubMove struct {
 	lastSeen int64
 }
 
-// Check judges every planned hub once: a hub that goes down or comes back
-// is one reconciler write; one that only starts or stops looking healthy
-// again is recorded as it is.
+// Check judges every planned hub of every mesh once: a hub that goes down
+// or comes back is one reconciler write in its mesh; one that only starts
+// or stops looking healthy again is recorded as it is.
 func (f *Failover) Check(ctx context.Context) error {
 	f.defaults()
 	now := f.Now()
 	var moves []hubMove
 	err := f.DB.Tx(ctx, func(tx *store.Tx) error {
-		nodes, err := tx.Nodes()
+		meshes, err := tx.Meshes()
 		if err != nil {
 			return err
+		}
+		var nodes []store.Node
+		for _, m := range meshes {
+			in, err := tx.In(m.ID).Nodes()
+			if err != nil {
+				return err
+			}
+			nodes = append(nodes, in...)
 		}
 		for _, n := range nodes {
 			cur := hubState{down: n.DownSince, healthy: n.HealthySince}
@@ -156,8 +164,10 @@ func (f *Failover) Check(ctx context.Context) error {
 		if m.next.down != 0 {
 			action, detail = "relay.failover", map[string]any{"last_seen": m.lastSeen}
 		}
-		res, err := f.Reconciler.Apply(ctx, Change{Actor: "system", Action: action, Target: m.node.Name, Detail: detail},
-			func(tx *store.Tx, _ *Change) error { return tx.SetHubState(m.node.ID, m.next.down, m.next.healthy) })
+		res, err := f.Reconciler.Apply(ctx, Change{Mesh: m.node.MeshID, Actor: "system", Action: action, Target: m.node.Name, Detail: detail},
+			func(tx *store.MeshTx, _ *Change) error {
+				return tx.SetHubState(m.node.ID, m.next.down, m.next.healthy)
+			})
 		if err != nil {
 			return err
 		}

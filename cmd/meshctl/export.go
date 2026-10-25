@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/hafio/vpn-mesh-utility/internal/server"
+	"github.com/hafio/vpn-mesh-utility/internal/server/api"
 	"github.com/hafio/vpn-mesh-utility/internal/server/export"
 	"github.com/hafio/vpn-mesh-utility/internal/server/store"
 	"github.com/hafio/vpn-mesh-utility/internal/validate"
@@ -35,8 +36,11 @@ func setupExport(fs *flag.FlagSet, e *env) action {
 		defer st.Close()
 		var snap store.Snapshot
 		if err := st.Tx(ctx, func(tx *store.Tx) error {
-			var err error
-			snap, err = tx.Snapshot()
+			m, err := api.SoleMesh(tx)
+			if err != nil {
+				return err
+			}
+			snap, err = tx.In(m.ID).Snapshot()
 			return err
 		}); err != nil {
 			return err

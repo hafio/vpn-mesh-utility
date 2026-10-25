@@ -23,6 +23,12 @@ func TestAgentRunRuntimeSocket(t *testing.T) {
 			t.Errorf("--status-every %s = %d %q", bad, code, errOut)
 		}
 	}
+	for _, bad := range []string{"4s", "6m", "soon"} {
+		if code, _, errOut := runArgs("agent", "run", "--data", data, "--ui-listen", "off", "--endpoint-retry", bad); code != exitUsage ||
+			!strings.Contains(errOut, "endpoint-retry") {
+			t.Errorf("--endpoint-retry %s = %d %q", bad, code, errOut)
+		}
+	}
 	for _, good := range []string{"auto", "off", "/run/user/1000/podman/podman.sock"} {
 		if code, _, errOut := runArgs("agent", "run", "--data", data, "--ui-listen", "off", "--runtime-socket", good); code != exitFailure ||
 			!strings.Contains(errOut, "meshctl agent join") {

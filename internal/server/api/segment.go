@@ -126,7 +126,7 @@ func activeAt(pol *proto.Policy, at time.Time) []bool {
 // Segment returns the mesh firewall.
 func (s *Nodes) Segment(ctx context.Context) (SegmentView, error) {
 	v := SegmentView{Rules: []proto.PolicyRule{}, Zones: []ZoneView{}, Nodes: []string{}, Inactive: []int{}}
-	err := s.db.Tx(ctx, func(tx *store.Tx) error {
+	err := s.tx(ctx, func(tx *store.MeshTx) error {
 		in, nodes, err := LoadInput(tx)
 		if err != nil {
 			return err
@@ -171,10 +171,10 @@ func (s *Nodes) SetSegment(ctx context.Context, by Actor, doc store.Segmentation
 	if err := doc.Validate(); err != nil {
 		return MeshChange{}, invalid(err)
 	}
-	res, err := s.rec.Apply(ctx, Change{Actor: by.Name, UserID: by.UserID, Action: "segmentation.set", Target: "mesh firewall",
+	res, err := s.apply(ctx, Change{Actor: by.Name, UserID: by.UserID, Action: "segmentation.set", Target: "mesh firewall",
 		Detail: map[string]any{"groups": len(doc.Groups), "addresses": len(doc.Addresses), "services": len(doc.Services),
 			"zones": len(doc.Zones), "policies": len(doc.Policies)}},
-		func(tx *store.Tx, _ *Change) error { return setSegmentation(tx, doc) })
+		func(tx *store.MeshTx, _ *Change) error { return setSegmentation(tx, doc) })
 	return meshChange(res, err)
 }
 
@@ -182,8 +182,8 @@ func (s *Nodes) SetSegment(ctx context.Context, by Actor, doc store.Segmentation
 // editors never overwrite each other's change; action and target are the
 // audit's.
 func (s *Nodes) EditSegment(ctx context.Context, by Actor, action, target string, edit func(*store.Segmentation) error) (MeshChange, error) {
-	res, err := s.rec.Apply(ctx, Change{Actor: by.Name, UserID: by.UserID, Action: action, Target: target},
-		func(tx *store.Tx, _ *Change) error {
+	res, err := s.apply(ctx, Change{Actor: by.Name, UserID: by.UserID, Action: action, Target: target},
+		func(tx *store.MeshTx, _ *Change) error {
 			seg, err := tx.Segmentation()
 			if err != nil {
 				return err
@@ -199,7 +199,7 @@ func (s *Nodes) EditSegment(ctx context.Context, by Actor, action, target string
 	return meshChange(res, err)
 }
 
-func setSegmentation(tx *store.Tx, seg store.Segmentation) error {
+func setSegmentation(tx *store.MeshTx, seg store.Segmentation) error {
 	err := tx.SetSegmentation(seg)
 	if errors.Is(err, store.ErrNotFound) {
 		return errorf(http.StatusBadRequest, proto.CodeBadRequest, "%v: a group may only list nodes of this mesh", err)
@@ -412,7 +412,7 @@ func (s *Nodes) Reach(ctx context.Context, req ReachRequest) (ReachResult, error
 		}
 	}
 	out := ReachResult{Service: svc.String(), Index: -1}
-	err = s.db.Tx(ctx, func(tx *store.Tx) error {
+	err = s.tx(ctx, func(tx *store.MeshTx) error {
 		in, nodes, err := LoadInput(tx)
 		if err != nil {
 			return err
@@ -498,7 +498,7 @@ func flowEnd(field, v string, nodes []store.Node) ([]netip.Addr, error) {
 // Matrix is how every zone reaches every other.
 func (s *Nodes) Matrix(ctx context.Context) (Matrix, error) {
 	out := Matrix{Zones: []string{}, Cells: [][]MatrixCell{}}
-	err := s.db.Tx(ctx, func(tx *store.Tx) error {
+	err := s.tx(ctx, func(tx *store.MeshTx) error {
 		in, _, err := LoadInput(tx)
 		if err != nil {
 			return err

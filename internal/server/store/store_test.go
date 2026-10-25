@@ -27,9 +27,9 @@ func openTest(t *testing.T) (*Store, *testfix.Clock, string) {
 	return s, clock, path
 }
 
-func tx(t *testing.T, s *Store, fn func(*Tx) error) {
+func tx(t *testing.T, s *Store, fn func(*MeshTx) error) {
 	t.Helper()
-	if err := s.Tx(context.Background(), fn); err != nil {
+	if err := s.MeshTx(context.Background(), FirstMesh, fn); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -48,7 +48,7 @@ func node(f testfix.Node) Node {
 func insertTopology(t *testing.T, s *Store) map[string]Node {
 	t.Helper()
 	out := map[string]Node{}
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		for _, f := range []testfix.Node{testfix.VPS1, testfix.VPS2, testfix.VPS3, testfix.NAS, testfix.Laptop} {
 			n := node(f)
 			if f.Role != "server" {
@@ -72,13 +72,13 @@ func insertTopology(t *testing.T, s *Store) map[string]Node {
 
 func TestOpenAppliesMigrations(t *testing.T) {
 	s, _, _ := openTest(t)
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		v, err := t2.SchemaVersion()
 		if err != nil {
 			return err
 		}
-		if v != 8 {
-			t.Errorf("schema version = %d, want 8", v)
+		if v != 9 {
+			t.Errorf("schema version = %d, want 9", v)
 		}
 		cidr, err := t2.Setting(SettingMeshCIDR)
 		if err != nil {
@@ -102,7 +102,7 @@ func TestOpenAppliesMigrations(t *testing.T) {
 func TestNodeContainerColumns(t *testing.T) {
 	s, _, _ := openTest(t)
 	insertTopology(t, s)
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		nas, err := t2.NodeByName("nas")
 		if err != nil {
 			return err
@@ -154,7 +154,7 @@ func TestNodeDualStackColumns(t *testing.T) {
 	s, _, _ := openTest(t)
 	insertTopology(t, s)
 	var snap Snapshot
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		vps2, err := t2.NodeByName("vps-2")
 		if err != nil {
 			return err
@@ -221,7 +221,7 @@ func TestNodeDualStackColumns(t *testing.T) {
 		}
 		return nil
 	})
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		if err := t2.DeleteNode(mustNode(t, t2, "six").ID); err != nil {
 			return err
 		}
@@ -236,7 +236,7 @@ func TestNodeDualStackColumns(t *testing.T) {
 	})
 }
 
-func mustNode(t *testing.T, t2 *Tx, name string) Node {
+func mustNode(t *testing.T, t2 *MeshTx, name string) Node {
 	t.Helper()
 	n, err := t2.NodeByName(name)
 	if err != nil {
@@ -255,10 +255,10 @@ func TestOpenIsIdempotent(t *testing.T) {
 		t.Fatalf("reopen: %v", err)
 	}
 	defer s2.Close()
-	tx(t, s2, func(t2 *Tx) error {
+	tx(t, s2, func(t2 *MeshTx) error {
 		v, err := t2.SchemaVersion()
-		if v != 8 {
-			t.Errorf("schema version after reopen = %d, want 8", v)
+		if v != 9 {
+			t.Errorf("schema version after reopen = %d, want 9", v)
 		}
 		return err
 	})
@@ -266,7 +266,7 @@ func TestOpenIsIdempotent(t *testing.T) {
 
 func TestOpenRefusesNewerSchema(t *testing.T) {
 	s, clock, path := openTest(t)
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		_, err := t2.exec(`INSERT INTO schema_version (version, applied_at) VALUES (99, 0)`)
 		return err
 	})
@@ -308,7 +308,7 @@ func TestLoadMigrationsValidatesNames(t *testing.T) {
 func TestNodeCRUD(t *testing.T) {
 	s, _, _ := openTest(t)
 	nodes := insertTopology(t, s)
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		got, err := t2.NodeByName("nas")
 		if err != nil {
 			return err
@@ -351,7 +351,7 @@ func TestNodeUniquenessIsAConflict(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			n := node(testfix.Phone)
 			mutate(&n)
-			err := s.Tx(context.Background(), func(t2 *Tx) error { return t2.InsertNode(&n) })
+			err := s.MeshTx(context.Background(), FirstMesh, func(t2 *MeshTx) error { return t2.InsertNode(&n) })
 			if !errors.Is(err, ErrConflict) {
 				t.Fatalf("duplicate %s: err = %v, want ErrConflict", name, err)
 			}
@@ -361,14 +361,14 @@ func TestNodeUniquenessIsAConflict(t *testing.T) {
 
 func TestNotFound(t *testing.T) {
 	s, _, _ := openTest(t)
-	err := s.Tx(context.Background(), func(t2 *Tx) error {
+	err := s.MeshTx(context.Background(), FirstMesh, func(t2 *MeshTx) error {
 		_, err := t2.NodeByName("ghost")
 		return err
 	})
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("NodeByName(ghost) = %v, want ErrNotFound", err)
 	}
-	err = s.Tx(context.Background(), func(t2 *Tx) error { return t2.DeleteNode(999) })
+	err = s.MeshTx(context.Background(), FirstMesh, func(t2 *MeshTx) error { return t2.DeleteNode(999) })
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("DeleteNode(999) = %v, want ErrNotFound", err)
 	}
@@ -378,7 +378,7 @@ func TestDeleteNodeCascades(t *testing.T) {
 	s, _, _ := openTest(t)
 	nodes := insertTopology(t, s)
 	vps1, vps2, nas := nodes["vps-1"], nodes["vps-2"], nodes["nas"]
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		if _, _, err := t2.IssueToken(vps1.ID, TokenTTL); err != nil {
 			return err
 		}
@@ -397,7 +397,7 @@ func TestDeleteNodeCascades(t *testing.T) {
 		}
 		return t2.DeleteNode(vps1.ID)
 	})
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		got, err := t2.NodeByID(nas.ID)
 		if err != nil {
 			return err
@@ -430,7 +430,7 @@ func TestTokenLifecycle(t *testing.T) {
 	id := nodes["nas"].ID
 
 	var tok string
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		var err error
 		tok, _, err = t2.IssueToken(id, TokenTTL)
 		return err
@@ -440,7 +440,7 @@ func TestTokenLifecycle(t *testing.T) {
 	}
 	consume := func(token string) (int64, error) {
 		var got int64
-		err := s.Tx(context.Background(), func(t2 *Tx) error {
+		err := s.MeshTx(context.Background(), FirstMesh, func(t2 *MeshTx) error {
 			var err error
 			got, err = t2.ConsumeToken(token)
 			return err
@@ -458,7 +458,7 @@ func TestTokenLifecycle(t *testing.T) {
 	}
 
 	var fresh, newer string
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		var err error
 		if fresh, _, err = t2.IssueToken(id, TokenTTL); err != nil {
 			return err
@@ -474,7 +474,7 @@ func TestTokenLifecycle(t *testing.T) {
 		t.Fatalf("expired token = %v, want ErrTokenExpired", err)
 	}
 	// The stored form is the hash, never the token.
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		var n int
 		err := t2.queryRow(`SELECT COUNT(*) FROM join_tokens WHERE token_hash = ?`, newer).Scan(&n)
 		if n != 0 {
@@ -488,7 +488,7 @@ func TestTokenConcurrentConsume(t *testing.T) {
 	s, _, _ := openTest(t)
 	nodes := insertTopology(t, s)
 	var tok string
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		var err error
 		tok, _, err = t2.IssueToken(nodes["laptop"].ID, TokenTTL)
 		return err
@@ -503,7 +503,7 @@ func TestTokenConcurrentConsume(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := s.Tx(context.Background(), func(t2 *Tx) error {
+			err := s.MeshTx(context.Background(), FirstMesh, func(t2 *MeshTx) error {
 				_, err := t2.ConsumeToken(tok)
 				return err
 			})
@@ -524,7 +524,7 @@ func TestTokenConcurrentConsume(t *testing.T) {
 
 func TestVersions(t *testing.T) {
 	s, _, _ := openTest(t)
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		for i, summary := range []string{"add vps-1", "add vps-2", "disable laptop"} {
 			n, err := t2.InsertVersion(Version{Actor: "cli", Summary: summary, Snapshot: []byte(`{"n":` + string(rune('1'+i)) + `}`)})
 			if err != nil {
@@ -561,7 +561,7 @@ func TestVersions(t *testing.T) {
 
 func TestAudit(t *testing.T) {
 	s, _, _ := openTest(t)
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		if err := t2.Audit("cli", 0, "node.add", "nas", map[string]string{"role": "spoke"}); err != nil {
 			return err
 		}
@@ -586,7 +586,7 @@ func TestSnapshotRestoreRoundTrip(t *testing.T) {
 	s, _, _ := openTest(t)
 	nodes := insertTopology(t, s)
 	var before []byte
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		if err := t2.InsertDNSRecord(&DNSRecord{Name: "immich", NodeID: nodes["nas"].ID}); err != nil {
 			return err
 		}
@@ -610,7 +610,7 @@ func TestSnapshotRestoreRoundTrip(t *testing.T) {
 
 	// Drift: remove two nodes (one with its record, one in container
 	// mode), add one, edit one, change a setting and the mesh firewall.
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		if err := t2.DeleteNode(nodes["laptop"].ID); err != nil {
 			return err
 		}
@@ -639,7 +639,7 @@ func TestSnapshotRestoreRoundTrip(t *testing.T) {
 		return t2.SetSetting(SettingDefaultMTU, "1380")
 	})
 
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		snap, err := DecodeSnapshot(before)
 		if err != nil {
 			return err
@@ -673,7 +673,7 @@ func TestSnapshotRestoreRoundTrip(t *testing.T) {
 // back: rolling back past the DNS zone setting serves mesh again.
 func TestRestoreOfAnOlderSnapshot(t *testing.T) {
 	s, _, _ := openTest(t)
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		snap, err := t2.Snapshot()
 		if err != nil {
 			return err
@@ -692,7 +692,7 @@ func TestRestoreOfAnOlderSnapshot(t *testing.T) {
 		return err
 	})
 	// The extra domains (amendment A39) came later still: none.
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		snap, err := t2.Snapshot()
 		if err != nil {
 			return err
@@ -743,12 +743,12 @@ func TestRecordStatus(t *testing.T) {
 		ObservedIP: "203.0.113.10", StatusJSON: `{"degraded":["firewall"]}`,
 		Peers: []PeerStat{{PeerID: vps2.ID, LastHandshake: 100, RxBytes: 5, TxBytes: 6, Endpoint: "203.0.113.11:51820"}, {PeerID: nas.ID}},
 	}
-	tx(t, s, func(t2 *Tx) error { return t2.RecordStatus(vps1.ID, update) })
+	tx(t, s, func(t2 *MeshTx) error { return t2.RecordStatus(vps1.ID, update) })
 	clock.Advance(time.Minute)
 	update.Peers = update.Peers[:1]
-	tx(t, s, func(t2 *Tx) error { return t2.RecordStatus(vps1.ID, update) })
+	tx(t, s, func(t2 *MeshTx) error { return t2.RecordStatus(vps1.ID, update) })
 
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		n, err := t2.NodeByID(vps1.ID)
 		if err != nil {
 			return err
@@ -778,7 +778,7 @@ func TestContainerNames(t *testing.T) {
 	nodes := insertTopology(t, s)
 	nas, laptop := nodes["nas"].ID, nodes["laptop"].ID
 	web := func(ip string) ContainerName { return ContainerName{Name: "web", IP: ip, Kind: "service"} }
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		for _, c := range []struct {
 			node    int64
 			names   []ContainerName
@@ -826,7 +826,7 @@ func TestContainerNames(t *testing.T) {
 func TestHubState(t *testing.T) {
 	s, _, _ := openTest(t)
 	vps1 := insertTopology(t, s)["vps-1"]
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		if err := t2.SetHubState(vps1.ID, 100, 160); err != nil {
 			return err
 		}
@@ -862,11 +862,11 @@ func TestPhoneState(t *testing.T) {
 	nodes := insertTopology(t, s)
 	vps1, vps2, nas := nodes["vps-1"], nodes["vps-2"], nodes["nas"]
 	beat := func(from Node, at int64) {
-		tx(t, s, func(t2 *Tx) error {
+		tx(t, s, func(t2 *MeshTx) error {
 			return t2.RecordStatus(from.ID, StatusUpdate{Peers: []PeerStat{{PeerID: nas.ID, LastHandshake: at}}})
 		})
 	}
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		if at, err := t2.LastHandshakeWith(nas.ID); err != nil || at != 0 {
 			t.Errorf("before any report: %d, %v", at, err)
 		}
@@ -874,7 +874,7 @@ func TestPhoneState(t *testing.T) {
 	})
 	beat(vps1, 300)
 	beat(vps2, 200)
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		if at, err := t2.LastHandshakeWith(nas.ID); err != nil || at != 300 {
 			t.Errorf("LastHandshakeWith = %d, %v; want the latest report, 300", at, err)
 		}
@@ -903,7 +903,7 @@ func TestOpenReadOnly(t *testing.T) {
 		t.Fatalf("Open read-only: %v", err)
 	}
 	defer ro.Close()
-	err = ro.Tx(context.Background(), func(t2 *Tx) error {
+	err = ro.MeshTx(context.Background(), FirstMesh, func(t2 *MeshTx) error {
 		nodes, err := t2.Nodes()
 		if err != nil || len(nodes) != 5 {
 			t.Errorf("read-only Nodes = %d, %v", len(nodes), err)
@@ -919,7 +919,7 @@ func TestOpenReadOnly(t *testing.T) {
 		t.Fatalf("read-only Open of a missing file = %v, want a pointer at --data", err)
 	}
 
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		_, err := t2.exec(`INSERT INTO schema_version (version, applied_at) VALUES (99, 0)`)
 		return err
 	})
@@ -930,7 +930,7 @@ func TestOpenReadOnly(t *testing.T) {
 
 func TestUsers(t *testing.T) {
 	s, _, _ := openTest(t)
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		u := User{Username: "admin", PasswordHash: "$argon2id$x"}
 		if err := t2.InsertUser(&u); err != nil {
 			return err
@@ -990,7 +990,7 @@ func TestUsers(t *testing.T) {
 func TestSessions(t *testing.T) {
 	s, clock, _ := openTest(t)
 	now := clock.Now().Unix()
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		u := User{Username: "admin", PasswordHash: "x"}
 		if err := t2.InsertUser(&u); err != nil {
 			return err

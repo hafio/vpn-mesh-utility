@@ -565,8 +565,9 @@ out for 15 minutes; twenty for one username within an hour lock the username.
 
 ## 10. Backups
 
-The server writes a nightly export at 03:00 (container time) to `/data/exports/mesh-YYYY-MM-DD.yaml`,
-skipping nights when nothing changed and keeping the newest 14. For an export on demand:
+The server writes a nightly export of each mesh at 03:00 (container time) to
+`/data/exports/<mesh>/mesh-YYYY-MM-DD.yaml`, skipping nights when nothing changed and keeping the
+newest 14 of each mesh. For an export on demand:
 
 ```
 docker exec <container> /app/meshctl export > mesh.yaml
@@ -583,7 +584,7 @@ ids are kept, so the agents keep working without re-joining:
 
 ```
 docker compose stop meshctl
-docker compose run --rm meshctl import /data/exports/mesh-2026-10-12.yaml
+docker compose run --rm meshctl import /data/exports/default/mesh-2026-10-12.yaml
 docker compose start meshctl
 ```
 

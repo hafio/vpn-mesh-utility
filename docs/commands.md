@@ -51,6 +51,7 @@ meshctl agent run [flags]
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--data` | `/var/lib/meshctl` | agent data directory |
+| `--endpoint-retry` | `45s` | how long a spoke waits for a first handshake on a server's endpoint before it dials the server's other-family one |
 | `--log-level` | `info` | debug, info, warn or error |
 | `--no-firewall` | `false` | leave the host firewall alone (you open udp/51820 and the Swarm ports yourself) |
 | `--runtime-socket` | `auto` | the container runtime's API socket the containers' names are read from (GET only): auto (Docker's, then Podman's), off, or a path |

@@ -227,6 +227,22 @@ func TestEndpointFailover(t *testing.T) {
 	if moved, err := e.Failover(); err != nil || moved != nil || endpoint() != testfix.VPS2.Endpoint {
 		t.Fatalf("without a fallback = %v, %v, endpoint %s", moved, err, endpoint())
 	}
+
+	// A shorter wait for a first handshake (`agent run --endpoint-retry`).
+	r = newRig(t)
+	e = apply.New(apply.Deps{Host: r.h, Routes: r.r, Exit: r.p, Sysctl: r.s, Iface: "wg0", Key: r.key, Now: func() time.Time { return now },
+		EndpointRetry: 10 * time.Second})
+	if _, err := e.Apply(ctx, testfix.DualSpokeConfig("")); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(9 * time.Second)
+	if moved, _ := e.Failover(); moved != nil {
+		t.Fatalf("9 s into a 10 s retry = %v", moved)
+	}
+	now = now.Add(2 * time.Second)
+	if moved, _ := e.Failover(); !slices.Equal(moved, []string{"vps-2 to " + testfix.VPS2.Endpoint6}) || endpoint() != testfix.VPS2.Endpoint6 {
+		t.Fatalf("11 s into a 10 s retry = %v, endpoint %s", moved, endpoint())
+	}
 }
 
 func TestDNSFailureOnlyDegrades(t *testing.T) {

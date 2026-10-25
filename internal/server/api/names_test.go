@@ -172,7 +172,7 @@ func (h *harness) putNames(t *testing.T, f testfix.Node, at time.Time, names ...
 func (h *harness) storedNames(t *testing.T) []store.ContainerName {
 	t.Helper()
 	var out []store.ContainerName
-	if err := h.st.Tx(context.Background(), func(tx *store.Tx) error {
+	if err := h.st.MeshTx(context.Background(), store.FirstMesh, func(tx *store.MeshTx) error {
 		var err error
 		out, err = tx.ContainerNames()
 		return err
@@ -194,7 +194,7 @@ func containerNAS() store.Node {
 func TestNamesEndpoint(t *testing.T) {
 	h := newHarness(t)
 	h.seed(t, storeNode(testfix.VPS1, true), storeNode(testfix.VPS2, true), storeNode(testfix.VPS3, true), containerNAS())
-	_, mesh, _, cancel := h.hub.Subscribe(testfix.VPS1.ID)
+	_, mesh, _, cancel := h.hub.Subscribe(testfix.VPS1.ID, store.FirstMesh)
 	defer cancel()
 	web := proto.ContainerName{Name: "web", Kind: proto.NameService, IP: "10.77.128.129"}
 	names := []proto.ContainerName{web, {Name: "vps-2", Kind: proto.NameAlias, IP: "10.77.128.129"},
@@ -251,7 +251,7 @@ func TestNamesEndpoint(t *testing.T) {
 // dropped, saying why.
 func TestNamesEndpointWithIPv6(t *testing.T) {
 	h := newHarness(t)
-	if err := h.st.Tx(context.Background(), func(tx *store.Tx) error { return tx.SetSetting(store.SettingMeshCIDR6, testfix.MeshCIDR6) }); err != nil {
+	if err := h.st.MeshTx(context.Background(), store.FirstMesh, func(tx *store.MeshTx) error { return tx.SetSetting(store.SettingMeshCIDR6, testfix.MeshCIDR6) }); err != nil {
 		t.Fatal(err)
 	}
 	nas := containerNAS()

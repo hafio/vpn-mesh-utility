@@ -81,7 +81,7 @@ func storeNode(f testfix.Node, enrolled bool) store.Node {
 // transaction count.
 func (h *harness) seed(t *testing.T, nodes ...store.Node) {
 	t.Helper()
-	err := h.st.Tx(context.Background(), func(tx *store.Tx) error {
+	err := h.st.MeshTx(context.Background(), store.FirstMesh, func(tx *store.MeshTx) error {
 		for i := range nodes {
 			if err := tx.InsertNode(&nodes[i]); err != nil {
 				return err
@@ -92,7 +92,7 @@ func (h *harness) seed(t *testing.T, nodes ...store.Node) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.rec.Apply(context.Background(), Change{Actor: "test"}, nil); err != nil {
+	if _, err := h.rec.Apply(context.Background(), Change{Mesh: store.FirstMesh, Actor: "test"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	h.db.n.Store(0)
@@ -106,7 +106,7 @@ func (h *harness) seedServers(t *testing.T) {
 func (h *harness) node(t *testing.T, name string) store.Node {
 	t.Helper()
 	var n store.Node
-	if err := h.st.Tx(context.Background(), func(tx *store.Tx) error {
+	if err := h.st.MeshTx(context.Background(), store.FirstMesh, func(tx *store.MeshTx) error {
 		var err error
 		n, err = tx.NodeByName(name)
 		return err
@@ -119,7 +119,7 @@ func (h *harness) node(t *testing.T, name string) store.Node {
 func (h *harness) latestVersion(t *testing.T) int64 {
 	t.Helper()
 	var v int64
-	if err := h.st.Tx(context.Background(), func(tx *store.Tx) error {
+	if err := h.st.MeshTx(context.Background(), store.FirstMesh, func(tx *store.MeshTx) error {
 		var err error
 		v, err = tx.LatestVersion()
 		return err
@@ -251,7 +251,7 @@ func joinBody(t *testing.T, token string, f testfix.Node, edit func(*proto.JoinR
 func (h *harness) issue(t *testing.T, name string) string {
 	t.Helper()
 	var tok string
-	if err := h.st.Tx(context.Background(), func(tx *store.Tx) error {
+	if err := h.st.MeshTx(context.Background(), store.FirstMesh, func(tx *store.MeshTx) error {
 		n, err := tx.NodeByName(name)
 		if err != nil {
 			return err
@@ -273,7 +273,7 @@ func TestJoinEnrollsAndConsumesTheToken(t *testing.T) {
 	h := newHarness(t)
 	h.seed(t, storeNode(testfix.VPS1, true), storeNode(testfix.VPS2, false))
 	tok := h.issue(t, "vps-2")
-	events, _, _, cancel := h.hub.Subscribe(testfix.VPS1.ID)
+	events, _, _, cancel := h.hub.Subscribe(testfix.VPS1.ID, store.FirstMesh)
 	defer cancel()
 
 	w, eb := postJoin(h, joinBody(t, tok, testfix.VPS2, func(r *proto.JoinRequest) { r.PublicIP = "198.51.100.7" }))
@@ -520,7 +520,7 @@ func TestStatusRecordsTheHeartbeat(t *testing.T) {
 	}
 	var peers []store.PeerStat
 	var audit []store.AuditEntry
-	if err := h.st.Tx(context.Background(), func(tx *store.Tx) error {
+	if err := h.st.MeshTx(context.Background(), store.FirstMesh, func(tx *store.MeshTx) error {
 		var err error
 		if peers, err = tx.PeerStats(n.ID); err != nil {
 			return err
@@ -559,7 +559,7 @@ func TestStatusRecordsTheHeartbeat(t *testing.T) {
 func (h *harness) audits(t *testing.T, action string) int {
 	t.Helper()
 	var audit []store.AuditEntry
-	if err := h.st.Tx(context.Background(), func(tx *store.Tx) error {
+	if err := h.st.MeshTx(context.Background(), store.FirstMesh, func(tx *store.MeshTx) error {
 		var err error
 		audit, err = tx.AuditLog(1000, 0)
 		return err
@@ -603,7 +603,7 @@ func TestPrefsChangeTheNodesOwnSettings(t *testing.T) {
 		t.Fatalf("after prefs %+v", nas)
 	}
 	var audit []store.AuditEntry
-	if err := h.st.Tx(context.Background(), func(tx *store.Tx) error {
+	if err := h.st.MeshTx(context.Background(), store.FirstMesh, func(tx *store.MeshTx) error {
 		var err error
 		audit, err = tx.AuditLog(1, 0)
 		return err
@@ -787,11 +787,17 @@ func TestStoreFailuresAreInternalErrors(t *testing.T) {
 		}
 	}
 
-	// A join that committed but cannot read the node back.
+	// A join that cannot find its token's mesh, and one that committed but
+	// cannot read the node back.
 	h.db.fail.Store(0)
 	tok := h.issue(t, "laptop")
 	h.db.n.Store(0)
-	h.db.fail.Store(2)
+	h.db.fail.Store(1)
+	if w, eb := postJoin(h, joinBody(t, tok, testfix.Laptop, nil)); w.Code != 500 || strings.Contains(eb.Message, "disk") {
+		t.Fatalf("join, token's mesh: %d %q", w.Code, eb.Message)
+	}
+	h.db.n.Store(0)
+	h.db.fail.Store(3)
 	if w, eb := postJoin(h, joinBody(t, tok, testfix.Laptop, nil)); w.Code != 500 || strings.Contains(eb.Message, "disk") {
 		t.Fatalf("join: %d %q", w.Code, eb.Message)
 	}

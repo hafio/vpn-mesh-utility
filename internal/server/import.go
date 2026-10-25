@@ -30,7 +30,8 @@ type ImportConfig struct {
 	Now     func() time.Time
 }
 
-// Import replaces the desired state with an export (`meshctl import`). It
+// Import replaces the sole mesh's desired state with an export (`meshctl
+// import`). It
 // takes the data dir's lock, so it refuses to run beside a server; checks
 // every value of the document; and applies it through the reconciler, as an
 // audited config version that keeps every node id (agents sign with theirs).
@@ -58,8 +59,16 @@ func Import(ctx context.Context, c ImportConfig) (api.Result, error) {
 		return api.Result{}, err
 	}
 	defer st.Close()
+	var mesh store.Mesh
+	if err := st.Tx(ctx, func(tx *store.Tx) error {
+		var err error
+		mesh, err = api.SoleMesh(tx)
+		return err
+	}); err != nil {
+		return api.Result{}, err
+	}
 	rec := api.NewReconciler(st, api.NewHub(), c.Log)
-	return rec.Apply(ctx, api.Change{Actor: "cli", Action: "mesh.import", Summary: "import",
+	return rec.Apply(ctx, api.Change{Mesh: mesh.ID, Actor: "cli", Action: "mesh.import", Summary: "import",
 		Detail: map[string]any{"nodes": len(snap.Nodes), "dns_records": len(snap.DNS), "policies": len(snap.EffectiveSegmentation().Policies)}},
-		func(tx *store.Tx, _ *api.Change) error { return tx.Restore(snap) })
+		func(tx *store.MeshTx, _ *api.Change) error { return tx.Restore(snap) })
 }

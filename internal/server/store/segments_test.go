@@ -35,7 +35,7 @@ func testSegmentation() Segmentation {
 func TestSegmentationRoundTrip(t *testing.T) {
 	s, _, _ := openTest(t)
 	insertTopology(t, s)
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		got, err := t2.Segmentation()
 		if err != nil {
 			return err
@@ -93,11 +93,11 @@ func TestSetSegmentationRefusesAStranger(t *testing.T) {
 	insertTopology(t, s)
 	seg := testSegmentation()
 	seg.Groups[0].Nodes = []string{"ghost"}
-	err := s.Tx(context.Background(), func(t2 *Tx) error { return t2.SetSegmentation(seg) })
+	err := s.MeshTx(context.Background(), FirstMesh, func(t2 *MeshTx) error { return t2.SetSegmentation(seg) })
 	if !errors.Is(err, ErrNotFound) || !strings.Contains(err.Error(), "ghost") {
 		t.Fatalf("SetSegmentation with a stranger = %v", err)
 	}
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		got, err := t2.Segmentation()
 		if err == nil && len(got.Policies) != 1 {
 			t.Errorf("the refused change stayed: %+v", got)
@@ -110,7 +110,7 @@ func TestSetNodeGroups(t *testing.T) {
 	s, _, _ := openTest(t)
 	nodes := insertTopology(t, s)
 	nas := nodes["nas"].ID
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		if err := t2.SetNodeGroups(nas, []string{"storage", "backups"}); err != nil {
 			return err
 		}
@@ -215,7 +215,7 @@ func openAt(t *testing.T, version int) *Store {
 func insertAt5(t *testing.T, s *Store) map[string]int64 {
 	t.Helper()
 	ids := map[string]int64{}
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		for _, f := range []testfix.Node{testfix.VPS1, testfix.VPS2, testfix.VPS3, testfix.NAS, testfix.Laptop} {
 			res, err := t2.exec(`INSERT INTO nodes (name, role, mesh_ip, wg_pubkey, identity_pubkey, endpoint, listen_port,
 					keepalive, mtu, enrolled, created_at) VALUES (?, ?, ?, ?, ?, ?, 51820, 25, 1420, 1, ?)`,
@@ -241,7 +241,7 @@ func TestMigrationTurnsRulesIntoPolicies(t *testing.T) {
 		{ID: 1, NodeID: nodes["vps-1"], Proto: "tcp", Port: 9000, SourceCIDR: "10.77.1.0/24", Note: "backup"},
 		{ID: 2, Proto: "udp", Port: 161, SourceCIDR: "0.0.0.0/0"},
 	}
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		for _, r := range rules {
 			if _, err := t2.exec(`INSERT INTO firewall_rules (id, node_id, proto, port, source_cidr, note) VALUES (?, ?, ?, ?, ?, ?)`,
 				r.ID, nullInt(r.NodeID), r.Proto, r.Port, r.SourceCIDR, r.Note); err != nil {
@@ -258,7 +258,7 @@ func TestMigrationTurnsRulesIntoPolicies(t *testing.T) {
 	if want.Policies[0].To[0] != "node:vps-1" || want.Policies[1].To[0] != "role:server" || want.Policies[2].Name != "allow-all" {
 		t.Fatalf("LegacySegmentation = %+v", want)
 	}
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		got, err := t2.Segmentation()
 		if err != nil {
 			return err
@@ -280,7 +280,7 @@ func TestMigrationTurnsRulesIntoPolicies(t *testing.T) {
 func TestRestoreOfASnapshotWithFirewallRules(t *testing.T) {
 	s, _, _ := openTest(t)
 	nodes := insertTopology(t, s)
-	tx(t, s, func(t2 *Tx) error {
+	tx(t, s, func(t2 *MeshTx) error {
 		snap, err := t2.Snapshot()
 		if err != nil {
 			return err

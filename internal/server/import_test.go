@@ -48,7 +48,7 @@ func TestImportRestoresAnExport(t *testing.T) {
 	defer st.Close()
 	var snap store.Snapshot
 	var audit []store.AuditEntry
-	if err := st.Tx(context.Background(), func(tx *store.Tx) error {
+	if err := st.MeshTx(context.Background(), store.FirstMesh, func(tx *store.MeshTx) error {
 		var err error
 		if snap, err = tx.Snapshot(); err != nil {
 			return err
@@ -104,7 +104,7 @@ func TestImportRefusesInvalidDocumentsUntouched(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer st.Close()
-			if err := st.Tx(context.Background(), func(tx *store.Tx) error {
+			if err := st.MeshTx(context.Background(), store.FirstMesh, func(tx *store.MeshTx) error {
 				nodes, err := tx.Nodes()
 				if err == nil && len(nodes) != 0 {
 					t.Errorf("a refused import wrote %d nodes", len(nodes))

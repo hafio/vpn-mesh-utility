@@ -146,9 +146,9 @@ func compareAddr(a, b string) int {
 	return x.Compare(y)
 }
 
-// LoadNames reads the reported names and decides what is published;
+// LoadNames reads a mesh's reported names and decides what is published;
 // serverURL is the server's validated origin.
-func LoadNames(tx *store.Tx, serverURL string) (NameSet, error) {
+func LoadNames(tx *store.MeshTx, serverURL string) (NameSet, error) {
 	settings, err := tx.Settings()
 	if err != nil {
 		return NameSet{}, err
@@ -173,7 +173,7 @@ func LoadNames(tx *store.Tx, serverURL string) (NameSet, error) {
 	return PublishNames(zone, store.SplitDomains(settings[store.SettingDNSExtraDomains]), host, nodes, records, names), nil
 }
 
-func (a *api) publishedNames(tx *store.Tx) (NameSet, error) { return LoadNames(tx, a.ServerURL) }
+func (a *api) publishedNames(tx *store.MeshTx) (NameSet, error) { return LoadNames(tx, a.ServerURL) }
 
 // CheckServerDomains refuses extra domains (amendment A39) that hold the
 // server's own address: every host would send it to the mesh's resolvers,
@@ -221,7 +221,8 @@ func (a *api) names(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := proto.NamesResponse{Dropped: []proto.DroppedName{}}
 	changed := false
-	err = a.DB.Tx(r.Context(), func(tx *store.Tx) error {
+	err = a.DB.Tx(r.Context(), func(raw *store.Tx) error {
+		tx := raw.In(node.MeshID)
 		var keep []store.ContainerName
 		for _, n := range req.Names {
 			if ip, _ := netip.ParseAddr(n.IP); !containerAddr(node, ip) {
@@ -248,7 +249,7 @@ func (a *api) names(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if changed {
-		a.Hub.NotifyMesh()
+		a.Hub.NotifyMesh(node.MeshID)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

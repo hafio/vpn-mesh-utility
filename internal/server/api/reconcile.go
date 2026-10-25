@@ -17,6 +17,8 @@ import (
 
 // Change describes one write, for the version history and the audit log.
 type Change struct {
+	// Mesh is the mesh the change is in (amendment A49); required.
+	Mesh int64
 	// Actor is who made the change: "cli", "node:<id>", "system".
 	Actor  string
 	UserID int64
@@ -76,15 +78,20 @@ func NewReconciler(db DB, hub *Hub, log *slog.Logger) *Reconciler {
 	return &Reconciler{db: db, hub: hub, log: log}
 }
 
-// Apply runs mutate (nil recomputes only) and reconciles. mutate may fill in
-// c's Target, Detail and Summary once it knows them. A mutation error or a
-// plan with errors rolls everything back, so a half-valid plan never lands.
-func (r *Reconciler) Apply(ctx context.Context, c Change, mutate func(*store.Tx, *Change) error) (Result, error) {
+// Apply runs mutate (nil recomputes only) in c's mesh and reconciles that
+// mesh. mutate may fill in c's Target, Detail and Summary once it knows
+// them. A mutation error or a plan with errors rolls everything back, so a
+// half-valid plan never lands.
+func (r *Reconciler) Apply(ctx context.Context, c Change, mutate func(*store.MeshTx, *Change) error) (Result, error) {
+	if c.Mesh == 0 {
+		return Result{}, fmt.Errorf("reconcile: change %q names no mesh", c.Action)
+	}
 	var (
 		res    Result
 		events map[int64]proto.ConfigEvent
 	)
-	err := r.db.Tx(ctx, func(tx *store.Tx) error {
+	err := r.db.Tx(ctx, func(raw *store.Tx) error {
+		tx := raw.In(c.Mesh)
 		res, events = Result{}, map[int64]proto.ConfigEvent{}
 		if mutate != nil {
 			if err := mutate(tx, &c); err != nil {
@@ -170,7 +177,7 @@ func (r *Reconciler) Apply(ctx context.Context, c Change, mutate func(*store.Tx,
 	}
 	r.hub.Notify(events)
 	if res.Version != 0 {
-		r.log.Info("new config version", "version", res.Version, "actor", c.Actor, "action", c.Action,
+		r.log.Info("new config version", "mesh", c.Mesh, "version", res.Version, "actor", c.Actor, "action", c.Action,
 			"target", c.Target, "nodes_changed", len(res.Changed))
 	}
 	return res, nil
@@ -188,7 +195,7 @@ func (r *Reconciler) Rollback(ctx context.Context, c Change, n int64) (Result, e
 	if c.Summary == "" {
 		c.Summary = fmt.Sprintf("rollback to v%d", n)
 	}
-	return r.Apply(ctx, c, func(tx *store.Tx, _ *Change) error {
+	return r.Apply(ctx, c, func(tx *store.MeshTx, _ *Change) error {
 		v, err := tx.VersionByNumber(n)
 		if err != nil {
 			return err
@@ -201,11 +208,15 @@ func (r *Reconciler) Rollback(ctx context.Context, c Change, n int64) (Result, e
 	})
 }
 
-// LoadInput reads the desired state as the planner's input. Stored values
-// were validated on the way in; one that still does not parse becomes a zero
-// value, which planner.Check reports against its node.
-func LoadInput(tx *store.Tx) (planner.Input, []store.Node, error) {
+// LoadInput reads a mesh's desired state as the planner's input. Stored
+// values were validated on the way in; one that still does not parse
+// becomes a zero value, which planner.Check reports against its node.
+func LoadInput(tx *store.MeshTx) (planner.Input, []store.Node, error) {
 	settings, err := tx.Settings()
+	if err != nil {
+		return planner.Input{}, nil, err
+	}
+	serverTZ, err := tx.ServerSetting(store.SettingServerTZ)
 	if err != nil {
 		return planner.Input{}, nil, err
 	}
@@ -256,14 +267,14 @@ func LoadInput(tx *store.Tx) (planner.Input, []store.Node, error) {
 		return planner.Input{}, nil, err
 	}
 	in.Segmentation = plannerSegmentation(seg)
-	in.Segmentation.TimeZone = PolicyZone(seg, settings)
+	in.Segmentation.TimeZone = PolicyZone(seg, serverTZ)
 	return in, nodes, nil
 }
 
 // PolicyZone is the time zone the policies' schedules are read in: the
 // document's, else the server's (written at every start), else UTC.
-func PolicyZone(seg store.Segmentation, settings map[string]string) string {
-	return cmp.Or(seg.TimeZone, settings[store.SettingServerTZ], "UTC")
+func PolicyZone(seg store.Segmentation, serverTZ string) string {
+	return cmp.Or(seg.TimeZone, serverTZ, "UTC")
 }
 
 // plannerSegmentation is the stored segmentation as the planner takes it.
@@ -325,7 +336,7 @@ func plannerNode(n store.Node) planner.Node {
 // configFor computes one node's current config, stamped with its stored
 // config version. cfg is nil when the node gets no config (not enrolled,
 // disabled).
-func configFor(tx *store.Tx, id int64) (store.Node, *proto.NodeConfig, error) {
+func configFor(tx *store.MeshTx, id int64) (store.Node, *proto.NodeConfig, error) {
 	in, nodes, err := LoadInput(tx)
 	if err != nil {
 		return store.Node{}, nil, err

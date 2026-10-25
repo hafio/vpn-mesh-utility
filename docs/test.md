@@ -102,7 +102,7 @@ one sanctioned exec site) so a checker that matched nothing cannot pass.
 
 | Test | Pins |
 | --- | --- |
-| `TestOpenAppliesMigrations`, `TestOpenIsIdempotent` | schema v2 and default settings (`dns_zone` = mesh); reopening is a no-op |
+| `TestOpenAppliesMigrations`, `TestOpenIsIdempotent` | schema v9 and the first mesh's default settings (`dns_zone` = mesh); reopening is a no-op |
 | `TestOpenRefusesNewerSchema` | a database newer than the binary is refused with an upgrade hint |
 | `TestOpenRejectsDSNInjection` | a path carrying `?` cannot rewrite the driver DSN |
 | `TestLoadMigrationsValidatesNames` | gaps, zero and malformed migration names fail at startup |
@@ -128,6 +128,10 @@ one sanctioned exec site) so a checker that matched nothing cannot pass.
 | `TestMigrationTurnsRulesIntoPolicies` | migration 0006 on a v5 database turns each custom firewall rule into the same policies `LegacySegmentation` makes (to its server, or `role:server`), `allow-all` last, and drops the table |
 | `TestRestoreOfASnapshotWithFirewallRules` | a snapshot from before the mesh firewall restores its rules as policies |
 | `TestUsers`, `TestSessions` | account and session accessors; `UseTOTPStep` refuses a step at or before the last one (replay), and a new secret starts the counter over |
+| `TestMeshes` (`meshes_test.go`) | amendment A49: the first mesh is `default` in slot 0; a new one gets a v4 uuid and the transaction clock; a taken name or slot is `ErrConflict`; lookups by id and name, `ErrNotFound` for none |
+| `TestMeshesAreApart` | two meshes with the same node name: each mesh's nodes, settings, records (same name), versions (numbered per mesh), groups, container names and audit entries stay in it, users' entries in every mesh's log; a mesh with a node cannot be removed, one without goes with all its rows |
+| `TestNodeIDsAreNeverReused`, `TestTokenMesh`, `TestServerSettings`, `TestRecordsStayInTheirMesh` | a removed node's id is not given to another mesh's node, so restoring a snapshot re-creates it; a token leads to its node's mesh (unknown: `ErrTokenUnknown`); the control plane's own settings are no mesh's; another mesh's record id is not found, and the record stays |
+| `TestMigrationMakesMeshOne` | migration 0009 on a v8 database: mesh 1 keeps its settings, records, versions, groups and policies, `server_tz` stays the control plane's, users' audit entries belong to no mesh, and a new node's id follows the old ones |
 
 ## `internal/server/auth`
 
@@ -213,7 +217,7 @@ and counts transactions, so a refusal can be shown to happen before any database
 | | `TestPrefsChangeTheNodesOwnSettings` | a spoke's exit, keepalive and a server's MTU through the reconciler, audited as `node:<id>`; no version for no change; a server's exit or keepalive, a non-exit-capable or unknown exit, a metacharacter, an empty or foreign-field request: refused with the right code and nothing changed |
 | | `TestHealth`, `TestHealthFailsWithoutTheDatabase` | `/healthz`, security headers, 405 for other methods; a dead database is a 500 that leaks nothing |
 | | `TestJoinRefusesAPhone` | phones cannot join with an agent, and the refusal keeps the token |
-| | `TestStoreFailuresAreInternalErrors`, `TestEventsEndAtAFailedSend` | a store failure at each step of config, events, status (its host families too), prefs, mesh and join is a 500 that leaks nothing; an event stream ends at the first send that fails (retry hint, current version, keepalive) |
+| | `TestStoreFailuresAreInternalErrors`, `TestEventsEndAtAFailedSend` | a store failure at each step of config, events, status (its host families too), prefs, mesh and join (finding its token's mesh, reading the node back) is a 500 that leaks nothing; an event stream ends at the first send that fails (retry hint, current version, keepalive) |
 | `admin_test.go` | `TestAdminAddIssuesAToken` | allocation, token and commands in the answer, audited without the token |
 | | `TestAdminAddRefusesBadInput`, `TestAdminPlanErrorsChangeNothing` | every refusal is a 4xx; a change that breaks the plan writes nothing |
 | | `TestAdminSetDisableEnableRemove`, `TestAdminTokenAndShow` | each write; disable closes the node's stream and drops it from peers |
@@ -244,7 +248,8 @@ and counts transactions, so a refusal can be shown to happen before any database
 | | `TestReconcilerRollsBackAFailedMutation`, `TestPlanErrorListsTheProblems`, `TestLoadInputRefusesBrokenSettings` | rollback, the 409 mapping, broken settings |
 | | `TestRollbackIsANewVersion` | restoring version N writes a new version recording N, notifies the changed nodes, writes nothing when the state already matches, 404 for an unknown N |
 | `guard_test.go` | `TestReplayCache`, `TestReplayCacheRefusesWhenFullOfLiveEntries` | the replay window, refusing rather than evicting |
-| `hub_test.go` | `TestHubLatestWins`, `TestHubReplacesKicksAndCloses`, `TestHubNudgesEveryStream` | latest-wins delivery; one stream per node; kick and shutdown; a mesh nudge reaches every stream and nudges collapse into one |
+| `hub_test.go` | `TestHubLatestWins`, `TestHubReplacesKicksAndCloses`, `TestHubNudgesEveryStream` | latest-wins delivery; one stream per node; kick and shutdown; a mesh nudge reaches every stream of its mesh and no other, and nudges collapse into one |
+| `meshes_test.go` | `TestSoleMesh`, `TestMeshesAreApartOnTheAgentAPI`, `TestNodesServiceInAMesh` | amendment A49: a request naming no mesh works on the only one, is refused with two (400, the names, `--mesh`) and with none (404), and a change without a mesh is an error; a node of a second mesh with a first-mesh node's name joins through its token's mesh, gets a config and a mesh view of its mesh only, versioned from v1 there and audited there, and the first mesh's nodes get no event and no peer; the service's `Tx`, `Apply` and `Rollback` (the web UI's) work in its mesh and leave the other's settings alone, and refuse to guess between two |
 | `failover_test.go` | `TestJudgeHubs`, `TestFailoverMovesRelays`, `TestFailoverRun` | relay failover (amendment A40): a hub is down only when its heartbeat AND its handshakes are stale (never heard of counts; silence before the server started does not), back after a steady heartbeat of 2.5 times the threshold; vps-1 silent moves the NAS <-> laptop pair to vps-2 in a new version audited `relay.failover`, the node list shows it down and warns, a second check changes nothing, healthy-since is recorded without a version, and after 5 minutes the pair returns (`relay.restore`); a disabled server loses its state; a failing store is an error; `Run` judges on its own and does nothing with the threshold 0; `Check` alone takes the wall clock |
 | `names_test.go` | `TestContainerAddr`, `TestPublishNames` | a container's address is in the node's /24 and not .0, .1, .2 or .255, or (M8) in its /112 and not ::0, ::1 or ::2, never in the other family's network; why not, an IPv6 address of a node without the containers' IPv6 included; what is published (amendment A38): one label in the zone (`web.mesh` is `web`), once per node and address, by name, node and address; a node's name, a custom record's, the zone's and the server URL's host refused, as are dotted names outside an extra domain, an extra domain itself, an address the node's network no longer holds and a disabled node's names; a name inside an extra domain published as it is (amendment A39); what each published name resolves as |
 | | `TestCheckServerDomains` | an extra domain may not hold the server URL's host (any case, any port); a server known by its address has none |
@@ -263,7 +268,10 @@ to: TZ's name, else where `/etc/localtime` links, else UTC for no link, a link o
 database or to an unknown zone). `import_test.go` (Linux only, flock): `TestImportRestoresAnExport`,
 `TestImportRefusesWhileTheServerRuns` (nothing created), `TestImportRefusesInvalidDocumentsUntouched`,
 `TestLockIsExclusive`. `exporter_test.go`: `TestNextExport`, `TestExportOnceSkipsUnchangedAndKeepsFourteen`
-(0600 files, no file for an unchanged night, the newest 14 kept), `TestExporterRunStopsWithItsContext`.
+(0600 files, no file for an unchanged night, the newest 14 kept), `TestExportOnceWritesEachMesh` (one directory per
+mesh, each with its own state), `TestExportOnceFails` (a failing store, a directory that cannot be made),
+`TestExporterRunExportsAtNight` (at the export hour the file is written and logged; a failed export is logged and
+Run goes on), `TestExporterRunStopsWithItsContext`.
 `export_test.go`: `TestExportIsDeterministicAndByName` (same state, same bytes; references by name;
 a schedule and its zone; no secrets), `TestReadRoundTripsAndRefusesUnknownShapes`, `TestToSnapshotRoundTrips`,
 `TestToSnapshotRefusesHostileDocuments` (every field validated before an import may restore it, the extra domains and the
@@ -321,7 +329,7 @@ and `Policy.Fail`/`FailOn` inject a failure into one method, also while an agent
 | | `TestSafeApplyConfirmsWhenTheServerAnswers`, `TestSafeApplyRollsBackWithoutAnAnswer`, `TestSafeApplyRecoversAPendingConfigAtBoot`, `TestSpokesDoNotArmSafeApply`, `TestSafeApplyDisarmsWhenTheServerGoesBack`, `TestSafeApplyReportsAFailedRollback` | the runner with a 1 s window on a fake clock: confirm moves the cache; no answer puts the previous config back, reports the rollback and never re-applies the rejected version, while the next version is applied and confirmed; a pending config found at boot is rolled back the same way; spokes cache at once; the server going back to the confirmed config disarms without a rollback; a rollback that fails too is reported as an error with the rollback |
 | `apply` | `TestApplyIsIdempotent` | the second apply of the same config changes nothing on the host |
 | | `TestDualStack` | M8: both addresses, both families' routes but ::/0, the IPv6 sysctls, idempotent, families reported; on a host without IPv6 the IPv4 side alone (no IPv6 address, route, allowed IP or endpoint, an IPv6-first server dialled on its IPv4 fallback, no IPv6 sysctl), the hash of the config as sent, the caller's config untouched; an IPv6-only node refused there before the host is touched |
-| | `TestEndpointFailover` | M8: a server silent on its endpoint for 45 s is dialled on its other-family one, kept there by a re-apply, left while it answers, moved back when it goes quiet for 3 minutes; a failed move reported and not recorded; no fallback, nothing to move |
+| | `TestEndpointFailover` | M8: a server silent on its endpoint for 45 s is dialled on its other-family one, kept there by a re-apply, left while it answers, moved back when it goes quiet for 3 minutes; a failed move reported and not recorded; no fallback, nothing to move; a 10 s `EndpointRetry` moves after 10 s, not before |
 | | `TestForHostWithoutIPv6` (`forhost_test.go`) | the IPv6 side left out of a config on a host without IPv6: the address, a peer's IPv6 allowed IP, an IPv6 endpoint given up for the IPv4 fallback, IPv6 fallbacks, the IPv6 sysctls, the exit's IPv6 masquerade and the containers' IPv6; a host with IPv6 keeps all of it; the caller's config untouched |
 | | `TestExitModeWithoutIPv6PolicyRouting` | on a kernel with IPv6 but no IPv6 policy routing a spoke without an exit applies cleanly; with one, IPv4 exit rules only and a degraded `exit` step (amendment A45) |
 | | `TestScheduledPolicy` | a scheduled rule in the table for the time of the apply, `PolicyNext` its end; applied then, the rule is out and `PolicyNext` the next start; none without a schedule (amendment A44) |
@@ -400,7 +408,7 @@ and `Policy.Fail`/`FailOn` inject a failure into one method, also while an agent
 | `TestStartMode`, `TestStartControl`, `TestStartNodeJoin`, `TestStartNodeRuns`, `TestHealthcheckStart`, `TestStartVarsNameRealFlags` (`start_test.go`) | `meshctl start` (amendments A47, A48): an unset mode is a node, and one that never joined says the control plane sets `MESHCTL_MODE=control`; an unknown mode and the old `server` and `agent` refused; the control plane's and a node's variables reach `control`'s and `agent run`'s flags (`MESHCTL_URL` only the control plane's), an error naming the variable; the port, data dir, token and token file (absolute, capped, its grammar) checked before anything is asked and the token never shown; both token sources refused; a joined node runs with no token; `healthcheck start` finds the port or the socket as start does, a node when the mode is unset; every variable start hands on is a real flag of one of its modes' commands |
 | `TestExportCommand`, `TestControlFlagErrors`, `TestAgentJoinTakesTheTokenFromTheEnvironment`, `TestHealthcheckControl`, `TestStatusAndAgentHealthcheck`, `TestPrintStatusOfALaptop`, `TestBytesize` | the other commands; the token never echoed, `agent join --endpoint6` sent; `status` of a laptop with nothing applied, an exit and errors; `control --hub-down-after` only 0 or 1s to 1h |
 | `TestNodeShowAnEnrolledServer` | `node show` of a joined server: rows, peers, the computed config, a reported rollback; `node list` shows it rolled back |
-| `TestAgentRunRuntimeSocket` (`agent_test.go`) | `agent run --runtime-socket` takes auto, off or a clean absolute path; a relative path, `..`, a metacharacter and an empty value are usage errors before the agent starts; `--status-every` only from 1s to 5m |
+| `TestAgentRunRuntimeSocket` (`agent_test.go`) | `agent run --runtime-socket` takes auto, off or a clean absolute path; a relative path, `..`, a metacharacter and an empty value are usage errors before the agent starts; `--status-every` only from 1s to 5m, `--endpoint-retry` only from 5s to 5m |
 | `TestUICommand`, `TestAgentRunUIListen` (`ui_test.go`) | `meshctl ui` prints the link alone on stdout and its lifetime and the ssh hint on stderr; a refusal is exit 1; `agent run --ui-listen` refuses addresses off loopback before the agent starts and takes `off` |
 | `TestAgentRunNeedsAJoin`, `TestAgentInstallIsForWindows`, `TestAgentLog` | `agent run` before a join says to join first and a bad `--log-level` is a usage error, neither touching the host; off Windows, `agent install` and `agent uninstall` point to install.sh and systemctl and touch nothing (on Windows they would change the host's real service, so the test skips there); the agent logs to stderr, or as the Windows service to `agent.log` in its data dir; an unusable data dir or a directory in the log's place refused |
 | `TestLogsCommand` | `meshctl logs` prints the agent's ring as it holds it; an argument is a usage error; no agent is exit 1 |
@@ -445,7 +453,8 @@ with the containers. pc's agent reads a fake runtime too, whose container is `db
 `web.mesh`'s AAAA, and box's and pc's containers reach each other over IPv6 by the proxy entries
 their names' addresses give.
 
-`TestDualStack` (`dualstack_test.go`, M8) gives the mesh `fd10:77::/64`, vps-2 an IPv6 endpoint,
+`TestDualStack` (`dualstack_test.go`, M8) runs the agents with `--status-every 1s` and
+`--endpoint-retry 10s`, gives the mesh `fd10:77::/64`, vps-2 an IPv6 endpoint,
 the NAS a host with IPv6 off, and the laptop a network that cannot reach vps-2 over IPv4: the
 laptop reaches vps-1 and vps-3 over IPv6 inside IPv4 tunnels, through the servers' `inet meshctl`
 table (which holds IPv6 rules); the server plans the NAS on IPv4 alone (`node show` names what its
@@ -459,7 +468,8 @@ vps-2; its agent stops and its wg0 goes, and the pair moves to vps-3 and keeps t
 node list shows vps-2 down; its agent comes back, the spokes re-handshake with its new wg0 (their data
 to it unanswered for 15 s), and the pair returns to vps-2 and talks through it.
 
-`TestSpokesAndExit` adds a laptop (hub vps-1), a NAS (hub vps-3) and an "internet" namespace that
+`TestSpokesAndExit` runs the agents with `--status-every 1s` and adds a laptop (hub vps-1), a NAS
+(hub vps-3) and an "internet" namespace that
 routes for every node and runs an echo service answering the caller's address; vps-2 and vps-3
 are made exit-capable and get the masquerade firewalld would add (`nft`, since the firewall is off
 in e2e). It checks: the two spokes ping each other across their different hubs; with exit off the

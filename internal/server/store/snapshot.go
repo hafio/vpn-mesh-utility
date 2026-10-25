@@ -12,7 +12,7 @@ import (
 // instead of mis-restored.
 const SnapshotFormat = "meshctl-snapshot/1"
 
-// Snapshot is the desired state of the whole mesh: what a config version
+// Snapshot is the desired state of one mesh: what a config version
 // records and what a rollback restores. It never holds users, sessions,
 // tokens, heartbeat state or reconciler bookkeeping.
 type Snapshot struct {
@@ -93,8 +93,8 @@ func snapNode(n Node) SnapNode {
 	return s
 }
 
-// Snapshot reads the current desired state.
-func (t *Tx) Snapshot() (Snapshot, error) {
+// Snapshot reads the mesh's current desired state.
+func (t *MeshTx) Snapshot() (Snapshot, error) {
 	s := Snapshot{Format: SnapshotFormat, Settings: map[string]string{}, Nodes: []SnapNode{}, DNS: []DNSRecord{}}
 	all, err := t.Settings()
 	if err != nil {
@@ -151,12 +151,12 @@ func DecodeSnapshot(b []byte) (Snapshot, error) {
 	return s, nil
 }
 
-// Restore replaces the desired state with s: nodes absent from s are
+// Restore replaces the mesh's desired state with s: nodes absent from s are
 // deleted, nodes in s are re-created or updated (keeping their ids, so
 // references stay valid), and custom DNS records, segmentation and desired
 // settings are replaced. Heartbeat and reconciler fields of surviving nodes
 // are left alone; the caller recomputes configs afterwards.
-func (t *Tx) Restore(s Snapshot) error {
+func (t *MeshTx) Restore(s Snapshot) error {
 	if s.Format != SnapshotFormat {
 		return fmt.Errorf("restore: snapshot format %q is not %q", s.Format, SnapshotFormat)
 	}
@@ -202,8 +202,8 @@ func (t *Tx) Restore(s Snapshot) error {
 		} else {
 			_, err = t.exec(`INSERT INTO nodes (name, role, mesh_ip, wg_pubkey, identity_pubkey, endpoint,
 					listen_port, can_exit, keepalive, mtu, enrolled, disabled, os, arch, hostname, wg_backend,
-					mode, container_subnet, mesh_ip6, ip_family, endpoint6, container_subnet6, id, created_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, append(args, n.ID, n.CreatedAt)...)
+					mode, container_subnet, mesh_ip6, ip_family, endpoint6, container_subnet6, id, created_at, mesh_id)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, append(args, n.ID, n.CreatedAt, t.mesh)...)
 		}
 		if err != nil {
 			return fmt.Errorf("restore node %q: %w", n.Name, err)
@@ -219,7 +219,7 @@ func (t *Tx) Restore(s Snapshot) error {
 			return fmt.Errorf("restore references of node %q: %w", n.Name, err)
 		}
 	}
-	if _, err := t.exec(`DELETE FROM dns_records`); err != nil {
+	if _, err := t.exec(`DELETE FROM dns_records WHERE mesh_id = ?`, t.mesh); err != nil {
 		return fmt.Errorf("restore dns records: %w", err)
 	}
 	for _, r := range s.DNS {

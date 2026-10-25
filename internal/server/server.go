@@ -104,22 +104,35 @@ func Run(ctx context.Context, c Config) error {
 
 	hub := api.NewHub()
 	rec := api.NewReconciler(st, hub, c.Log)
-	// A new release may compute configs differently; reconcile once so the
-	// stored hashes, and the agents, follow this binary -- and the server's
-	// time zone, which the mesh firewall's schedules default to.
+	// A new release may compute configs differently; reconcile every mesh
+	// once so the stored hashes, and the agents, follow this binary -- and
+	// the server's time zone, which the mesh firewall's schedules default
+	// to.
 	zone := serverZone(c.Now().Location(), os.Readlink)
-	recordZone := func(tx *store.Tx, _ *api.Change) error { return tx.SetSetting(store.SettingServerTZ, zone) }
-	res, err := rec.Apply(ctx, api.Change{Actor: "system", Action: "server.start", Summary: "recomputed by meshctl " + c.Version,
-		Detail: map[string]any{"version": c.Version}}, recordZone)
-	var pe *api.PlanError
-	switch {
-	case errors.As(err, &pe):
-		c.Log.Error("the stored mesh plan has errors; agents keep their last config until it is fixed with `meshctl node set`", "err", err)
-	case err != nil:
+	var meshes []store.Mesh
+	if err := st.Tx(ctx, func(tx *store.Tx) error {
+		var err error
+		if meshes, err = tx.Meshes(); err != nil {
+			return err
+		}
+		return tx.SetServerSetting(store.SettingServerTZ, zone)
+	}); err != nil {
 		return fmt.Errorf("reconcile at startup: %w", err)
 	}
-	for _, w := range res.Warnings {
-		c.Log.Warn("mesh plan", "problem", w.String())
+	for _, m := range meshes {
+		res, err := rec.Apply(ctx, api.Change{Mesh: m.ID, Actor: "system", Action: "server.start", Summary: "recomputed by meshctl " + c.Version,
+			Detail: map[string]any{"version": c.Version}}, nil)
+		var pe *api.PlanError
+		switch {
+		case errors.As(err, &pe):
+			c.Log.Error("the stored mesh plan has errors; agents keep their last config until it is fixed with `meshctl node set`",
+				"mesh", m.Name, "err", err)
+		case err != nil:
+			return fmt.Errorf("reconcile mesh %s at startup: %w", m.Name, err)
+		}
+		for _, w := range res.Warnings {
+			c.Log.Warn("mesh plan", "mesh", m.Name, "problem", w.String())
+		}
 	}
 
 	deps := api.Deps{
@@ -129,14 +142,16 @@ func Run(ctx context.Context, c Config) error {
 	nodes := api.NewNodes(deps)
 	// Both families by default (M8): a mesh whose IPv6 was never chosen gets
 	// a random unique local prefix; one given up stays IPv4 only.
-	switch v, set, err := nodes.DefaultIPv6(ctx); {
-	case err != nil:
-		c.Log.Error("the mesh got no IPv6 prefix; it runs IPv4 only until `meshctl ipv6 auto`", "err", err)
-	case set:
-		c.Log.Info("the mesh's IPv6 prefix", "prefix", v.Prefix, "nodes", v.Addressed)
+	for _, m := range meshes {
+		switch v, set, err := nodes.In(m.ID).DefaultIPv6(ctx); {
+		case err != nil:
+			c.Log.Error("the mesh got no IPv6 prefix; it runs IPv4 only until `meshctl ipv6 auto`", "mesh", m.Name, "err", err)
+		case set:
+			c.Log.Info("the mesh's IPv6 prefix", "mesh", m.Name, "prefix", v.Prefix, "nodes", v.Addressed)
+		}
 	}
 	web, err := ui.New(ui.Deps{
-		DB: st, Nodes: nodes, Reconciler: rec, ServerURL: origin, Version: c.Version,
+		DB: st, Nodes: nodes, ServerURL: origin, Version: c.Version,
 		TrustedProxies: c.TrustedProxies, Now: c.Now, Log: c.Log,
 		// The issuer names the mesh in authenticator apps; no ':' (it
 		// separates issuer and account in the otpauth label).

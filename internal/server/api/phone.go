@@ -54,7 +54,7 @@ func (s *Nodes) Phone(ctx context.Context, by Actor, name string, req PhoneReque
 		return PhoneProfile{}, err
 	}
 	var id int64
-	res, err := s.rec.Apply(ctx, Change{Actor: by.Name, UserID: by.UserID, Action: "phone.profile", Target: name}, func(tx *store.Tx, c *Change) error {
+	res, err := s.apply(ctx, Change{Actor: by.Name, UserID: by.UserID, Action: "phone.profile", Target: name}, func(tx *store.MeshTx, c *Change) error {
 		n, err := nodeByName(tx, name, "node")
 		if err != nil {
 			return err
@@ -94,7 +94,7 @@ func (s *Nodes) Phone(ctx context.Context, by Actor, name string, req PhoneReque
 	}
 
 	out := PhoneProfile{Version: res.Version, Exit: req.Exit, Warnings: problemStrings(res.Warnings)}
-	err = s.db.Tx(ctx, func(tx *store.Tx) error {
+	err = s.tx(ctx, func(tx *store.MeshTx) error {
 		self, cfg, err := configFor(tx, id)
 		if err != nil {
 			return err
@@ -145,7 +145,7 @@ func (s *Nodes) Phone(ctx context.Context, by Actor, name string, req PhoneReque
 
 // withHandshake fills in, for a phone, the latest handshake its servers
 // reported.
-func withHandshake(tx *store.Tx, info *NodeInfo) error {
+func withHandshake(tx *store.MeshTx, info *NodeInfo) error {
 	if info.Role != string(proto.RolePhone) {
 		return nil
 	}

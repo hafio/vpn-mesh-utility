@@ -86,3 +86,19 @@ func (t *Tx) ConsumeToken(token string) (int64, error) {
 		return 0, fmt.Errorf("%w at %s", ErrTokenExpired, time.Unix(expires, 0).In(t.now.Location()).Format(time.RFC3339))
 	}
 }
+
+// TokenMesh is the mesh of the node a token belongs to, used or not, so a
+// join knows which mesh to reconcile before ConsumeToken checks the token.
+// An unknown token is ErrTokenUnknown.
+func (t *Tx) TokenMesh(token string) (int64, error) {
+	var mesh int64
+	err := t.queryRow(`SELECT n.mesh_id FROM join_tokens j JOIN nodes n ON n.id = j.node_id WHERE j.token_hash = ?`,
+		HashToken(token)).Scan(&mesh)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return 0, ErrTokenUnknown
+	case err != nil:
+		return 0, fmt.Errorf("look up join token: %w", err)
+	}
+	return mesh, nil
+}

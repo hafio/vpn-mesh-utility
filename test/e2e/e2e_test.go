@@ -901,6 +901,7 @@ func (l *lab) exit(space, via string) {
 // (spec S10 acceptance), shows its cached mesh view and serves its log.
 func TestSpokesAndExit(t *testing.T) {
 	l := newLab(t)
+	l.agentArgs = []string{"--status-every", "1s"} // a server reports the phone's handshake within a second
 	l.addHost(laptop)
 	l.addHost(nas)
 	l.addInternet(append(slices.Clone(nodes), laptop, nas)...)

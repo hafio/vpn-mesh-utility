@@ -148,7 +148,7 @@ func TestNodePhone(t *testing.T) {
 		t.Fatalf("add vps-1: %d %s%s", code, out, errOut)
 	}
 	// vps-1 joins.
-	if err := st.Tx(context.Background(), func(tx *store.Tx) error {
+	if err := st.MeshTx(context.Background(), store.FirstMesh, func(tx *store.MeshTx) error {
 		n, err := tx.NodeByName("vps-1")
 		if err != nil {
 			return err
@@ -447,7 +447,7 @@ func TestBytesize(t *testing.T) {
 func TestNodeShowAnEnrolledServer(t *testing.T) {
 	const rollback = `{"rollback":{"from":5,"to":4,"reason":"no answer from the server"}}`
 	data, st := startAdmin(t)
-	err := st.Tx(context.Background(), func(tx *store.Tx) error {
+	err := st.MeshTx(context.Background(), store.FirstMesh, func(tx *store.MeshTx) error {
 		ids := map[string]int64{}
 		for _, f := range []testfix.Node{testfix.VPS1, testfix.VPS2} {
 			n := store.Node{Name: f.Name, Role: "server", MeshIP: f.MeshIP, Endpoint: f.Endpoint, ListenPort: 51820, Keepalive: 25,
