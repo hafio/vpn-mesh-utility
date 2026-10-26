@@ -16,11 +16,12 @@ import (
 func setupDNS(fs *flag.FlagSet, e *env) action {
 	_, sock := socketFlags(fs, e)
 	return func(ctx context.Context, args []string) error {
-		c := localapi.NewClient(sock())
-		var (
-			st  proto.LocalStatus
-			err error
-		)
+		path, err := sock()
+		if err != nil {
+			return err
+		}
+		c := localapi.NewClient(path)
+		var st proto.LocalStatus
 		switch {
 		case len(args) == 0:
 			st, err = c.Status(ctx)

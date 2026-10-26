@@ -19,7 +19,7 @@ import (
 const PipeSDDL = "D:P(A;;GA;;;BA)(A;;GA;;;SY)"
 
 // reachHint is what to check when the agent does not answer.
-const reachHint = "is the meshctl-agent service running, and is this prompt elevated (Run as administrator)?"
+const reachHint = "is the mesh's meshctl-agent-<mesh> service running, and is this prompt elevated (Run as administrator)?"
 
 // Listen opens the local API at path: a named pipe (\\.\pipe\...) only
 // Administrators and SYSTEM can open, refusing to start when another agent

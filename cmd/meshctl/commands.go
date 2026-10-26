@@ -214,8 +214,9 @@ func parsePrefixes(flagName, s string) ([]netip.Prefix, error) {
 	return out, nil
 }
 
-// defaultAgentData is the agent's data dir for goos.
-func defaultAgentData(e *env) string {
+// agentRoot is where each mesh's agent has its data dir on e's platform
+// (amendment A51): /var/lib/meshctl/<mesh>, %ProgramData%\meshctl\<mesh>.
+func agentRoot(e *env) string {
 	if e.goos == "windows" {
 		pd := e.getenv("ProgramData")
 		if pd == "" {

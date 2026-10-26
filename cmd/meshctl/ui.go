@@ -18,7 +18,11 @@ func setupUI(fs *flag.FlagSet, e *env) action {
 		if err := wantArgs(args, 0, ""); err != nil {
 			return err
 		}
-		tok, err := localapi.NewClient(sock()).UIToken(ctx)
+		path, err := sock()
+		if err != nil {
+			return err
+		}
+		tok, err := localapi.NewClient(path).UIToken(ctx)
 		if err != nil {
 			return err
 		}

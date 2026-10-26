@@ -97,7 +97,7 @@ func TestJoinOnStart(t *testing.T) {
 			called := false
 			join := func(_ context.Context, o JoinOptions) (proto.JoinResponse, error) {
 				called = true
-				if o.Token != c.token || !o.NoService || o.Service != nil || o.Out != io.Discard {
+				if o.Token != c.token || o.Out != io.Discard {
 					t.Errorf("join options %+v", o)
 				}
 				if c.joinErr != nil {

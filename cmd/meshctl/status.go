@@ -20,7 +20,11 @@ func setupStatus(fs *flag.FlagSet, e *env) action {
 		if err := wantArgs(args, 0, ""); err != nil {
 			return err
 		}
-		st, err := localapi.NewClient(sock()).Status(ctx)
+		path, err := sock()
+		if err != nil {
+			return err
+		}
+		st, err := localapi.NewClient(path).Status(ctx)
 		if err != nil {
 			return err
 		}

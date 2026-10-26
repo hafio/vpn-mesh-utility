@@ -48,12 +48,16 @@ The web UI (internal/server/ui) and the `meshctl user` commands share these acco
 
 Every value from outside the process passes `internal/validate` before it is stored, rendered
 into an artifact or handed to a command; validators accept a positive grammar. The agent runs
-programs only through `internal/agent/execrun`: an allowlist (`firewall-cmd`, `systemctl`), no
-shell, and every argv element re-checked against `[A-Za-z0-9 ._/:=,"-]`. `TestModuleBoundaries`
+programs only through `internal/agent/execrun`: an allowlist (`firewall-cmd` alone; the install
+scripts set up the service, amendment A51), no shell, and every argv element re-checked against
+`[A-Za-z0-9 ._/:=,"-]`. `TestModuleBoundaries`
 fails if any other package imports `os/exec`. firewall-cmd arguments are built only from
 validated zone, protocol, port and prefix values; `TestHostileRulesNeverReachFirewallCmd` proves a
 hostile rule never runs a command. install.sh substitutes four markers, each validated
-(`TestInstallRefusesHostileValues`) and placed inside single quotes.
+(`TestInstallRefusesHostileValues`) and placed inside single quotes, and the static unit as a
+quoted here-document; install.ps1 three, the same way. Both scripts check the mesh name they are
+given against the name grammar before it names a unit, a service or a directory, and neither puts
+the join token on a command line (`MESHCTL_TOKEN`).
 
 ## Control plane container
 
@@ -78,24 +82,26 @@ The image is distroless static, built `CGO_ENABLED=0` from pinned base-image dig
 
 ## Agent service (systemd)
 
-`deploy/meshctl-agent.service` is installed unchanged by `agent join`; `TestUnitPosture` pins
-its `[Service]` section exactly. The agent owns `wg0`, its routes, two sysctls and (on servers)
-firewalld, so it runs as root -- but bounded:
+`deploy/meshctl-agent@.service` is installed unchanged by install.sh (amendment A51), one
+instance per mesh (`meshctl-agent@<mesh>`, data in `/var/lib/meshctl/<mesh>`); `TestUnitPosture`
+pins its `[Service]` section exactly. The agent owns its interface, its routes, two sysctls and
+(on servers) firewalld, so it runs as root -- but bounded:
 
 | Setting | Why |
 | --- | --- |
 | `CapabilityBoundingSet=` / `AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE` | the only capabilities: links, addresses, routes, WireGuard, the resolver on :53, and DNS registration with systemd-resolved (which asks for CAP_NET_ADMIN). Root without `CAP_DAC_OVERRIDE`, `CAP_SYS_ADMIN` and the rest. |
 | `NoNewPrivileges=yes`, `RestrictSUIDSGID=yes` | nothing it starts can gain privileges |
 | `ProtectSystem=strict`, `ReadWritePaths=/var/lib/meshctl` | the file system is read-only except the data dir and the two runtime dirs below |
-| `RuntimeDirectory=meshctl wireguard`, `RuntimeDirectoryPreserve=yes` | `/run/meshctl` holds the local API socket, `/run/wireguard` the userspace backend's UAPI socket that `wg show` reads; both are kept across restarts, so another WireGuard daemon's socket in `/run/wireguard` is never removed with the agent's |
+| `RuntimeDirectory=meshctl wireguard`, `RuntimeDirectoryPreserve=yes` | `/run/meshctl` holds every mesh's local API socket (`<mesh>.sock`), `/run/wireguard` the userspace backend's UAPI socket that `wg show` reads; both are kept across restarts, so another WireGuard daemon's socket in `/run/wireguard` is never removed with the agent's |
 | no `ProtectKernelTunables` | deliberate: relay and exit servers need `net.ipv4.ip_forward` written to `/proc/sys` |
 | `ProtectHome`, `PrivateTmp`, `ProtectKernelModules`, `ProtectKernelLogs`, `ProtectControlGroups`, `ProtectClock`, `ProtectHostname`, `RestrictNamespaces`, `RestrictRealtime`, `LockPersonality`, `MemoryDenyWriteExecute`, `SystemCallArchitectures=native` | standard hardening; none of it is needed by the agent |
 | `DevicePolicy=closed`, `DeviceAllow=/dev/net/tun rw` | only the tun device, for the userspace backend |
 | `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK` | sockets, D-Bus to firewalld, and netlink for links and routes |
-| `UMask=0077`, `StateDirectoryMode=0700` | everything it writes is private |
+| `UMask=0077`, `StateDirectory=meshctl/%i`, `StateDirectoryMode=0700` | each mesh's data dir, and everything it writes, is private |
 | `RestartPreventExitStatus=3` | an agent the control plane refused (exit 3, amendment A50) stays stopped until an operator acts; every other exit is restarted |
 
-`systemd-analyze security --offline=true deploy/meshctl-agent.service` rated the unit 4.3, "OK",
+`systemd-analyze security --offline=true deploy/meshctl-agent.service` (the unit before it became
+a template) rated it 4.3, "OK",
 on EL10 before `ProtectKernelLogs=yes` was added (2026-10-16). What it still counts is what the
 agent is for -- root with network capabilities, netlink and IP sockets, the host's network, the
 tun device, writable kernel tunables -- plus `SystemCallFilter`, the one large step left. A
@@ -355,12 +361,14 @@ machine other people log in to, run the agent with `--ui-listen off`.
 
 ## Windows (M5, in progress)
 
-- **The service** `meshctl-agent` runs `meshctl agent run --data C:\ProgramData\meshctl` as
-  LocalSystem, started with Windows and restarted on failure. Installing, changing or removing
-  it takes an elevated prompt.
+- **The service** `meshctl-agent-<mesh>` (amendment A51), which install.ps1 creates, runs
+  `meshctl agent run --mesh <mesh>` (data in `C:\ProgramData\meshctl\<mesh>`) as LocalSystem,
+  started with Windows and restarted on failure. install.ps1 checks the binary against the
+  SHA-256 the control plane baked into it before it copies it to Program Files; installing,
+  changing or removing the service takes an elevated prompt.
 - **The data dir** gets a protected ACL that every file in it inherits: SYSTEM and Administrators
   only (`D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)`), the Windows form of mode 0700, since file modes
-  mean nothing there. An unelevated process that opens a data dir (a test, `--no-service`) is
+  mean nothing there. An unelevated process that opens a data dir (a test) is
   added too, so it keeps access to what it made. The keys, the cached config and the service's
   `agent.log` live there.
 - **The local API** is the named pipe `\\.\pipe\meshctl-agent`, which only Administrators and

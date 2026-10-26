@@ -29,7 +29,6 @@ func TestCheckAllowsFirewallArgv(t *testing.T) {
 	for _, argv := range [][]string{
 		{"firewall-cmd", "--permanent", "--zone=mesh", "--add-port=51820/udp"},
 		{"firewall-cmd", "--zone=mesh", `--add-rich-rule=rule family="ipv4" source address="10.77.0.2/32" port port="2377" protocol="tcp" accept`},
-		{"systemctl", "enable", "meshctl-agent.service"},
 	} {
 		if err := Check(argv); err != nil {
 			t.Errorf("Check(%q) = %v", argv, err)
@@ -41,12 +40,13 @@ func TestCheckRefuses(t *testing.T) {
 	cases := map[string][]string{
 		"empty":           nil,
 		"unlisted":        {"sh", "-c", "id"},
+		"systemctl":       {"systemctl", "enable", "meshctl-agent@default.service"},
 		"path to program": {"/usr/bin/firewall-cmd", "--state"},
 		"semicolon":       {"firewall-cmd", "--zone=mesh; rm -rf /"},
 		"substitution":    {"firewall-cmd", "--zone=$(id)"},
 		"newline":         {"firewall-cmd", "--zone=mesh\n--reload"},
 		"single quote":    {"firewall-cmd", "--zone='mesh'"},
-		"empty argument":  {"systemctl", ""},
+		"empty argument":  {"firewall-cmd", ""},
 	}
 	for name, argv := range cases {
 		if err := Check(argv); err == nil {
@@ -89,10 +89,10 @@ func TestRunCapturesOutputWithAMinimalEnvironment(t *testing.T) {
 }
 
 func TestRunFoldsStderrIntoTheError(t *testing.T) {
-	fakeProgram(t, "systemctl", `echo "Unit meshctl-agent.service not found." >&2; exit 5`)
-	_, err := Exec{}.Run(context.Background(), []string{"systemctl", "restart", "meshctl-agent.service"})
-	if err == nil || !strings.Contains(err.Error(), "systemctl restart meshctl-agent.service") ||
-		!strings.Contains(err.Error(), "exit status 5") || !strings.Contains(err.Error(), "not found") {
+	fakeProgram(t, "firewall-cmd", `echo "Error: INVALID_ZONE: mesh9" >&2; exit 5`)
+	_, err := Exec{}.Run(context.Background(), []string{"firewall-cmd", "--zone=mesh9", "--list-ports"})
+	if err == nil || !strings.Contains(err.Error(), "firewall-cmd --zone=mesh9 --list-ports") ||
+		!strings.Contains(err.Error(), "exit status 5") || !strings.Contains(err.Error(), "INVALID_ZONE") {
 		t.Fatalf("Run = %v; want the argv, the exit status and stderr", err)
 	}
 }

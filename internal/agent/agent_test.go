@@ -835,8 +835,9 @@ func TestReportKeepsToTheServersLimits(t *testing.T) {
 }
 
 func TestDefaultSocket(t *testing.T) {
-	if got := DefaultSocket("linux", "/var/lib/meshctl"); got != "/run/meshctl/agent.sock" {
-		t.Fatalf("standard data dir: %s", got)
+	// A mesh's data dir under the standard root (amendment A51).
+	if got := DefaultSocket("linux", "/var/lib/meshctl/lab"); got != "/run/meshctl/lab.sock" {
+		t.Fatalf("a mesh's data dir: %s", got)
 	}
 	if got, want := DefaultSocket("linux", filepath.Join("data", "mesh")), filepath.Join("data", "mesh", "agent.sock"); got != want {
 		t.Fatalf("custom data dir: %s, want %s", got, want)
@@ -879,17 +880,6 @@ func TestRunNeedsAnEnrollment(t *testing.T) {
 	}
 }
 
-type fakeService struct {
-	ok        bool
-	installed bool
-}
-
-func (s *fakeService) Available() (bool, string) { return s.ok, "no systemd here" }
-func (s *fakeService) Install(context.Context) error {
-	s.installed = true
-	return nil
-}
-
 func TestJoin(t *testing.T) {
 	var got proto.JoinRequest
 	nodeID, mesh, slot, configKey := int64(7), "", 0, testfix.ConfigKeyB64()
@@ -904,9 +894,8 @@ func TestJoin(t *testing.T) {
 	}))
 	defer srv.Close()
 	data := filepath.Join(t.TempDir(), "data")
-	svc := &fakeService{ok: true}
 	var out strings.Builder
-	opts := JoinOptions{DataDir: data, Server: srv.URL, Token: testfix.Token, Version: "v1.0.0", Service: svc, Out: &out,
+	opts := JoinOptions{DataDir: data, Server: srv.URL, Token: testfix.Token, Version: "v1.0.0", Mesh: "default", Out: &out,
 		Hostname: func() (string, error) { return "My_VPS.Example.COM", nil }, Backend: func() string { return "kernel" },
 		PublicIPv4: func() (netip.Addr, bool) { return netip.MustParseAddr("198.51.100.7"), true },
 		PublicIPv6: func() (netip.Addr, bool) { return netip.MustParseAddr("2001:db8::7"), true }, Endpoint6: "[2001:db8::70]:51820",
@@ -936,8 +925,9 @@ func TestJoin(t *testing.T) {
 	if _, ok, _ := dir.Session(); ok {
 		t.Fatal("a join kept a session")
 	}
-	if !svc.installed || !strings.Contains(out.String(), "installed and started") || !strings.Contains(out.String(), "(server, mesh IP 10.77.0.1, node id 7)") {
-		t.Fatalf("service not installed: %s", out.String())
+	if !strings.Contains(out.String(), "start the agent with: meshctl agent run --data "+data) || !strings.Contains(out.String(), "(server, mesh IP 10.77.0.1, node id 7)") ||
+		got.Mesh != "default" {
+		t.Fatalf("join output: %s; the request's mesh %q", out.String(), got.Mesh)
 	}
 
 	// A host without a machine id cannot join: nothing is sent.
@@ -953,16 +943,12 @@ func TestJoin(t *testing.T) {
 		t.Fatal(err)
 	}
 	nodeID = 8
-	opts.Service, opts.NoService = &fakeService{ok: false}, false
 	out.Reset()
 	if _, err := Join(context.Background(), opts); err != nil {
 		t.Fatal(err)
 	}
 	if c, _ := dir.Config(vps1); c != nil {
 		t.Fatal("the old node's cached config survived a re-join as another node")
-	}
-	if !strings.Contains(out.String(), "no systemd here") {
-		t.Fatalf("the reason for skipping the service must be printed: %s", out.String())
 	}
 	// Every join makes fresh keys (amendment A50), the ones it sent.
 	again, _ := dir.LoadKeys()
@@ -1032,7 +1018,7 @@ func TestJoinValidatesBeforeCallingTheServer(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
 	defer srv.Close()
 	base := JoinOptions{DataDir: filepath.Join(t.TempDir(), "data"), Server: srv.URL, Token: testfix.Token, Version: "v1",
-		NoService: true, Backend: func() string { return "kernel" }, PublicIPv4: func() (netip.Addr, bool) { return netip.Addr{}, false },
+		Backend: func() string { return "kernel" }, PublicIPv4: func() (netip.Addr, bool) { return netip.Addr{}, false },
 		PublicIPv6: func() (netip.Addr, bool) { return netip.Addr{}, false }, MachineID: testMachineID}
 	for name, edit := range map[string]func(*JoinOptions){
 		"http to a public server": func(o *JoinOptions) { o.Server = "http://mesh.example.com" },

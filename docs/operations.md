@@ -45,7 +45,7 @@ curl -fsS https://mesh.example.com/healthz          # ok
 docker exec <container> /app/meshctl node list      # empty table
 ```
 
-If a GeoIP allowlist fronts the domain, `/api/v1/agent/*`, `/install.sh` and `/dl/*` must stay
+If a GeoIP allowlist fronts the domain, `/api/v1/agent/*`, `/install.sh`, `/install.ps1` and `/dl/*` must stay
 reachable from every node's country.
 
 ## 2. Enroll the server nodes
@@ -60,17 +60,23 @@ It prints a join token (valid for an hour, shown once) and the command to run on
 root:
 
 ```
-curl -fsSL https://mesh.example.com/install.sh | sudo sh -s -- --token <token>
+curl -fsSL https://mesh.example.com/install.sh | sudo sh -s -- --mesh default --token <token>
 ```
 
 install.sh downloads meshctl from your server, checks its SHA-256 against the value baked into
-the script, installs it to `/usr/local/bin`, joins, and installs and starts
-`meshctl-agent.service`. The agent creates `wg0` with the node's mesh IP, opens udp/51820 in
+the script, installs it to `/usr/local/bin`, installs the systemd unit `meshctl-agent@.service`,
+joins, and enables and starts the mesh's instance, `meshctl-agent@default` (amendment A51). The
+agent's data dir is the mesh's, `/var/lib/meshctl/default`, and its local API socket
+`/run/meshctl/default.sock`; `meshctl status`, `exit`, `dns`, `logs`, `ui` and `agent reset`
+find it by themselves while the host has one mesh's agent (`--mesh <mesh>` with several). A join
+whose token belongs to another mesh's node is refused before the token is used, saying which.
+Without systemd (in a container) install.sh joins and says to run `meshctl agent run --mesh
+<mesh>`. The agent creates `wg0` with the node's mesh IP, opens udp/51820 in
 firewalld's public zone, the Swarm ports from the other servers and DNS from the mesh in the
 `mesh` zone, and answers `.mesh` names on its mesh IP (section 6).
 
 The server's public endpoint is detected from the VPS's own interfaces. When that is wrong (a
-NAT'd VPS), pass it: `sudo sh -s -- --token <token> --endpoint 203.0.113.10:51820`, or set it on
+NAT'd VPS), pass it: `sudo sh -s -- --mesh default --token <token> --endpoint 203.0.113.10:51820`, or set it on
 the server with `meshctl node set vps-1 --endpoint 203.0.113.10:51820`.
 
 Within a minute `meshctl node list` shows the node `in sync` and `wg show` on the other servers
@@ -156,22 +162,24 @@ restarts (a kernel interface stays up). The agent changes no firewall on a spoke
 app ports from 10.77.0.0/16 in its own firewall (spec S7.5).
 
 **A Windows laptop** (M5: everything below works; it has yet to pass the live test on a real
-laptop). Add it as a spoke on the server, then in an elevated PowerShell
-(Run as administrator) on the laptop, with `meshctl-windows-amd64.exe` downloaded from the
-server's `/dl/`:
+laptop). Add it as a spoke on the server, which prints, beside install.sh, the command for an
+elevated PowerShell (Run as administrator) on the laptop:
 
 ```
-$env:MESHCTL_TOKEN = '<token>'
-.\meshctl-windows-amd64.exe agent install --server https://mesh.example.com --name laptop2
+$env:MESHCTL_TOKEN = '<token>'; $env:MESHCTL_MESH = 'default'
+irm https://mesh.example.com/install.ps1 | iex
 ```
 
-That copies meshctl to `C:\Program Files\meshctl\meshctl.exe`, joins, and installs and starts
-the `meshctl-agent` service, which Windows starts at boot and restarts when it fails. Its data
-is in `C:\ProgramData\meshctl` (SYSTEM and Administrators only), its log in `agent.log` there
-(10 MiB, plus one older file). `meshctl status`, `exit`, `dns`, `logs` and `ui` reach it over the
-named pipe `\\.\pipe\meshctl-agent`, from an elevated prompt only. `meshctl agent uninstall` stops
-and removes the service (`--purge` removes the data dir too, so the node must join again); the
-binary stays in Program Files.
+install.ps1 (amendment A51) downloads meshctl for Windows from your server, checks its SHA-256
+against the value baked into the script, copies it to `C:\Program Files\meshctl\meshctl.exe`,
+joins, and installs and starts the mesh's service `meshctl-agent-default`, which Windows starts at
+boot and restarts when it fails (`MESHCTL_NAME`, when set, must be the token's node). Its data is
+in `C:\ProgramData\meshctl\default` (SYSTEM and Administrators only), its log in `agent.log`
+there (10 MiB, plus one older file). `meshctl status`, `exit`, `dns`, `logs` and `ui` reach it over
+the named pipe `\\.\pipe\meshctl-agent`, from an elevated prompt only. To remove it:
+`Stop-Service meshctl-agent-default; meshctl agent reset --mesh default; sc.exe delete
+meshctl-agent-default`, and delete `C:\ProgramData\meshctl\default` for good (the node must then
+join again); the binary stays in Program Files.
 
 The agent runs WireGuard itself (wireguard-go) on a wintun adapter named `wg0`, which exists while
 the service runs. meshctl carries the wintun driver and writes `wintun.dll` beside
@@ -182,9 +190,10 @@ resolver (`Get-DnsClientNrptPolicy` lists them); `meshctl dns off` removes them.
 on Linux: the laptop routes everything but the mesh through vps-2, IPv6 is blocked meanwhile, and
 the tunnel follows the laptop from one network to the next.
 
-A Windows laptop in a second mesh (amendment A49) runs a second agent with its own data dir
-(`--data C:\ProgramData\meshctl\lab`) on its slot's adapter (`wg1`, a GUID of its own), its local UI
-on 7443 plus the slot and its pipe `\\.\pipe\meshctl-agent-<slot>` (the CLI finds it from `--data`);
+A Windows laptop in a second mesh (amendment A49) runs a second agent -- install.ps1 again with
+that mesh's token and name -- as the service `meshctl-agent-lab`, with its own data dir
+(`C:\ProgramData\meshctl\lab`) on its slot's adapter (`wg1`, a GUID of its own), its local UI
+on 7443 plus the slot and its pipe `\\.\pipe\meshctl-agent-<slot>` (the CLI finds it from `--mesh`);
 its NRPT rules sit under keys of its own slot. One mesh's exit at a time: a second one stays off
 (degraded `exit`), and while an exit is on, the other meshes' tunnels run through it.
 
@@ -328,7 +337,7 @@ node ...`. Each change is versioned, audited and pushed to the affected agents a
 | put it back | `node enable vps-3` |
 | re-install a node from scratch | `node token vps-3`, then the install command again |
 | a phone's new profile (a new key) | `node phone <name>`, `--exit vps-2` for all its traffic |
-| remove a node | `node rm vps-3`; on its host, `systemctl stop meshctl-agent` and then `meshctl agent reset` take its tunnel, routes, rules, firewalld zone and DNS registration off the host (the data dir stays) |
+| remove a node | `node rm vps-3`; on its host, `systemctl disable --now meshctl-agent@default` and then `meshctl agent reset` take its tunnel, routes, rules, firewalld zone and DNS registration off the host (the data dir `/var/lib/meshctl/default` stays until you delete it) |
 | move a node to another mesh IP | `node set laptop --mesh-ip 10.77.2.9`, or Mesh IP on its page: peers, its DNS name and its agent follow; the answer lists what does not (a server's Swarm advertise address, a phone's profile, a firewall zone, object or policy naming the old address) |
 | put a node in firewall groups | `node add laptop --role spoke --groups laptops,office`, `node set laptop --groups laptops`, or Groups on its page |
 
@@ -378,9 +387,11 @@ or extra domains equal, sit inside or hold another's, since agents of two meshes
 host. On the web UI each mesh's pages are under `/m/<mesh>/`; its Meshes page lists, adds,
 renames and removes them.
 
-A host in two meshes runs one agent per mesh, each with its own data dir (`agent join --data
-/var/lib/meshctl/lab ...`, then `agent run --data /var/lib/meshctl/lab`). Every name an agent
-makes on the host comes from its mesh's slot (`mesh show` prints it), so the agents never meet:
+A host in two meshes runs one agent per mesh (amendment A51): install.sh with each mesh's token
+and `--mesh` installs `meshctl-agent@<mesh>`, with the data dir `/var/lib/meshctl/<mesh>` and the
+socket `/run/meshctl/<mesh>.sock`; the host's commands then take `--mesh` (`meshctl status --mesh
+lab`). Every name an agent makes on the host comes from its mesh's slot (`mesh show` prints it), so
+the agents never meet:
 
 | Slot | 0 (`default`) | s (e.g. 1) |
 | --- | --- | --- |
@@ -452,7 +463,7 @@ AlmaLinux does not run systemd-resolved by default. To use mesh names on a VPS:
 dnf install systemd-resolved && systemctl enable --now systemd-resolved
 printf '[main]\ndns=systemd-resolved\n' > /etc/NetworkManager/conf.d/dns.conf
 ln -sf ../run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
-systemctl reload NetworkManager && systemctl restart meshctl-agent
+systemctl reload NetworkManager && systemctl restart 'meshctl-agent@*'
 ```
 
 In exit mode every lookup goes through the tunnel: resolved sends all of them to the node's
@@ -673,7 +684,7 @@ it joined since.
 
 ## 11. When the control plane is down
 
-Agents keep their last config (`/var/lib/meshctl/config.json`) and re-apply it at boot without
+Agents keep their last config (`/var/lib/meshctl/<mesh>/config.json`) and re-apply it at boot without
 the server, so the mesh survives a server outage and reboots, and every node keeps answering
 `.mesh` names -- on the machine the data dir last ran on (`host.json`), never on another
 (amendment A50). Each node also keeps the last view of the mesh it fetched (`mesh.json`, at most
@@ -683,7 +694,7 @@ server is back. When it is, agents reconnect within a minute.
 
 ## 12. Troubleshooting
 
-`journalctl -u meshctl-agent` or `meshctl logs` on a node, `docker logs <container>` on the control plane.
+`journalctl -u meshctl-agent@<mesh>` or `meshctl logs` on a node, `docker logs <container>` on the control plane.
 
 | Symptom | Cause and fix |
 | --- | --- |
@@ -692,7 +703,9 @@ server is back. When it is, agents reconnect within a minute.
 | `token_invalid ... already used` / `expired` | tokens are single-use and live an hour: `node token <name>` |
 | `interface wg0 exists but was not created by meshctl` | a wg-quick setup owns wg0: `wg-quick down wg0` and disable it, then restart the agent |
 | `the agent could not take everything it made off this host` | a refused agent's teardown failed at the step the error names (firewalld stopped, say): fix that, then `meshctl agent reset` |
-| `another meshctl process uses this data dir ... stop the agent first` | `agent reset` needs the agent stopped: `systemctl stop meshctl-agent` (Windows: `Stop-Service meshctl-agent`) |
+| `another meshctl process uses this data dir ... stop the agent first` | `agent reset` and `agent join` need the agent stopped: `systemctl stop meshctl-agent@<mesh>` (Windows: `Stop-Service meshctl-agent-<mesh>`) |
+| `no node has joined a mesh on this host` / `this host runs the agents of several meshes` | the host's commands find the agent by its mesh: pass `--mesh <mesh>` (or `--data`) |
+| `this token belongs to a node of the mesh "lab", not "default"` | the install command names the token's mesh: run the one `node add` or `node token` printed (`--mesh lab`, `MESHCTL_MESH=lab`) |
 | `this host has no machine id` | a container without the host's `/etc/machine-id` mounted (`/etc/machine-id:/etc/machine-id:ro`), or a host without one (`systemd-machine-id-setup`); `--machine-id-file` (`MESHCTL_MACHINE_ID_FILE`) names another file |
 | `another copy of this node holds its session; waiting` | another agent of this node runs on this machine: stop one of them. Within 90 s this one is refused (`duplicate`) if the other answers, or takes over if it is gone |
 | `node ... runs on another machine` (`foreign`) | the data dir came from another machine: this copy wiped itself. Issue a token (`meshctl node token <name>`) and join here |
@@ -706,7 +719,7 @@ server is back. When it is, agents reconnect within a minute.
 | `the server refused this join token on an earlier start` | the token was spent (used or expired) before the node joined: issue a new one with `meshctl node token <name>` and start with it |
 | `userspace WireGuard needs /dev/net/tun` | the container has no tun device: map it (`devices: ["/dev/net/tun:/dev/net/tun"]`), or set `MESHCTL_WG_BACKEND=kernel` if the host has the module |
 | `wg show` does not list a userspace wg0 | the agent could not create `/var/run/wireguard/wg0.sock` (its log says why; a container has no `wg` anyway): use `meshctl status` |
-| `another node already uses this WireGuard or identity key` | a data dir was copied between hosts; remove `/var/lib/meshctl` on the copy and join it with its own token |
+| `another node already uses this WireGuard or identity key` | a data dir was copied between hosts; remove `/var/lib/meshctl/<mesh>` on the copy and join it with its own token |
 | a node stays `applying` | it applied an older version and is failing the new one; `meshctl status` on it shows the error |
 | `exit "vps-3" is not exit-capable` | allow it first: `node set vps-3 --can-exit` |
 | `only spokes choose an exit or a keepalive` | `meshctl exit` ran on a server; exits are for spokes |
@@ -732,10 +745,10 @@ server is back. When it is, agents reconnect within a minute.
 | `This is meshctl's local UI; open it at http://127.0.0.1:7443/` | the browser used another name for it (a forward to another local port, the host's name): forward to local port 7443 and open the link as printed |
 | `This change did not come from the local UI's own page` | something other than the UI's page posted to it (or a browser extension strips Origin); use the page itself |
 | `... is this prompt elevated (Run as administrator)?` on Windows | the local API pipe is for Administrators and SYSTEM: open the prompt with "Run as administrator" |
-| `installing the Windows service needs an elevated prompt` | `agent install`, `agent join` and `agent uninstall` change services: run them elevated |
+| `install.ps1: run it from an elevated PowerShell` | install.ps1 installs a service and writes to Program Files: run it as administrator |
 | `this meshctl was built without wintun.dll` | a binary from `go build` without `-tags wintun`: use the release binary from `/dl/`, or `./scripts/dev.ps1 build` |
 | `the wintun.dll in this build is not the pinned 0.14.1` | the binary was built from a DLL that is not the release: rebuild with `./scripts/dev.ps1 build`, which fetches and checks it |
-| the Windows service stops and starts again every few seconds | read `C:\ProgramData\meshctl\agent.log`; the agent exits with what failed and the service manager restarts it |
+| the Windows service stops and starts again every few seconds | read `C:\ProgramData\meshctl\<mesh>\agent.log`; the agent exits with what failed and the service manager restarts it |
 | `drift check: put back what changed` every few minutes | something keeps changing the host's mesh setup, usually NetworkManager managing wg0: `nmcli device set wg0 managed no` |
 
 ## 13. Upgrading
@@ -744,7 +757,7 @@ Server: bump `MESHCTL_VERSION` and redeploy. At start the server recomputes ever
 if the new release computes differently, the agents receive the change like any other.
 
 Agents: replace `/usr/local/bin/meshctl` with the new release and `systemctl restart
-meshctl-agent`, or run the install command again with a fresh token (`node token <name>`) -- the
+'meshctl-agent@*'` (Windows: `Restart-Service 'meshctl-agent-*'`), or run the install command again with a fresh token (`node token <name>`) -- the
 token cuts the node off until the new join (below).
 
 **A new token cuts the node off** (amendment A50). `meshctl node token <name>` (or the node page)

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,7 +16,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hafio/vpn-mesh-utility/internal/agent"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/localapi"
+	"github.com/hafio/vpn-mesh-utility/internal/agent/state"
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
 	"github.com/hafio/vpn-mesh-utility/internal/server"
 	"github.com/hafio/vpn-mesh-utility/internal/server/api"
@@ -60,7 +63,8 @@ func TestNodeLifecycle(t *testing.T) {
 	data, _ := startAdmin(t)
 	code, out, errOut := runArgs("node", "add", "vps-1", "--role", "server", "--endpoint", "203.0.113.10:51820", "--data", data)
 	if code != exitOK || !strings.Contains(out, "added vps-1 (server, mesh IP 10.77.0.1)") ||
-		!strings.Contains(out, "curl -fsSL https://mesh.example.com/install.sh | sudo sh -s -- --token ") {
+		!strings.Contains(out, "curl -fsSL https://mesh.example.com/install.sh | sudo sh -s -- --mesh default --token ") ||
+		!strings.Contains(out, "$env:MESHCTL_MESH = 'default'; irm https://mesh.example.com/install.ps1 | iex") {
 		t.Fatalf("add: %d\n%s%s", code, out, errOut)
 	}
 	code, out, _ = runArgs("node", "add", "laptop", "--role", "spoke", "--data", data, "--json")
@@ -254,7 +258,7 @@ func TestAgentJoinTakesTheTokenFromTheEnvironment(t *testing.T) {
 		t.Fatalf("no token: %d %s", code, errOut)
 	}
 	e, out, errb := testEnv(map[string]string{"MESHCTL_TOKEN": testfix.Token})
-	code := run(context.Background(), e, []string{"agent", "join", "--server", srv.URL, "--data", t.TempDir(), "--no-service",
+	code := run(context.Background(), e, []string{"agent", "join", "--server", srv.URL, "--data", t.TempDir(),
 		"--endpoint6", "[2001:db8::10]:51820"})
 	if code != exitOK || got.Token != testfix.Token || !strings.Contains(out.String(), "joined") || got.Endpoint6 != "[2001:db8::10]:51820" {
 		t.Fatalf("join: %d %q\n%s%s", code, got.Token, out, errb)
@@ -277,7 +281,7 @@ func TestAgentRunNeedsAJoin(t *testing.T) {
 	}
 	// The machine id file (amendment A50) is a path, checked before use.
 	for _, args := range [][]string{{"agent", "run", "--data", data}, {"agent", "join", "--server", "https://mesh.example.com", "--token", testfix.Token,
-		"--data", data, "--no-service"}} {
+		"--data", data}} {
 		if code, _, errOut := runArgs(append(args, "--machine-id-file", "/etc/machine-id?x")...); code != exitUsage || !strings.Contains(errOut, "--machine-id-file") {
 			t.Errorf("%v --machine-id-file with '?' = %d %q", args[:2], code, errOut)
 		}
@@ -297,26 +301,104 @@ func TestAgentReset(t *testing.T) {
 	}
 }
 
-// `agent install` and `agent uninstall` are Windows commands; elsewhere they
-// say what to use instead and touch nothing. (On Windows they would install
-// or remove the host's real service, so the tests leave them alone there.)
-func TestAgentInstallIsForWindows(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("installs the real service on Windows")
+// `agent install` and `agent uninstall` are gone (amendment A51): the
+// install scripts set up the service.
+func TestNoInstallCommands(t *testing.T) {
+	for _, cmd := range []string{"install", "uninstall"} {
+		if code, _, _ := runArgs("agent", cmd); code != exitUsage {
+			t.Errorf("agent %s = %d", cmd, code)
+		}
 	}
-	data := filepath.Join(shortDir(t), "data")
-	if code, _, errOut := runArgs("agent", "install", "--server", "https://mesh.example.com", "--token", testfix.Token, "--data", data); code != exitUsage ||
-		!strings.Contains(errOut, "install.sh") {
-		t.Fatalf("agent install on %s = %d %q", runtime.GOOS, code, errOut)
+}
+
+// Every command that reaches the local agent refuses a bad --mesh before it
+// dials anything.
+func TestLocalCommandsCheckTheMesh(t *testing.T) {
+	for _, args := range [][]string{
+		{"status"}, {"exit"}, {"dns"}, {"logs"}, {"ui"}, {"healthcheck", "agent"}, {"agent", "run"},
+	} {
+		code, _, stderr := runArgs(append(args, "--mesh", "lab;reboot")...)
+		if code != exitUsage || !strings.Contains(stderr, "--mesh") {
+			t.Errorf("%v --mesh lab;reboot = %d, %q", args, code, stderr)
+		}
 	}
-	if code, _, errOut := runArgs("agent", "uninstall", "--data", data, "--purge"); code != exitUsage || !strings.Contains(errOut, "systemctl disable") {
-		t.Fatalf("agent uninstall on %s = %d %q", runtime.GOOS, code, errOut)
+}
+
+// Each mesh's agent has its data dir under the agent root (amendment A51):
+// --data wins, then --mesh, then the one mesh that has joined; none, or
+// several, says what to do. join names the mesh's dir, default for none,
+// and sends the mesh only when it chose the dir.
+func TestMeshFlags(t *testing.T) {
+	e, _, _ := testEnv(nil)
+	root := agentRoot(e)
+	parse := func(args ...string) (string, error) {
+		fs := flag.NewFlagSet("t", flag.ContinueOnError)
+		data := meshFlags(fs, e)
+		if err := fs.Parse(args); err != nil {
+			return "", err
+		}
+		return data()
 	}
-	if _, err := os.Stat(data); err == nil {
-		t.Fatal("a refused install or uninstall touched the data dir")
+	if dir, err := parse("--mesh", "lab"); err != nil || dir != meshDir(e, root, "lab") {
+		t.Fatalf("--mesh lab = %q, %v", dir, err)
 	}
-	if code, _, _ := runArgs("agent", "install", "--data", data); code != exitUsage {
-		t.Fatalf("agent install without a token = %d", code)
+	if dir, err := parse("--mesh", "lab", "--data", "/srv/x"); err != nil || dir != "/srv/x" {
+		t.Fatalf("--data wins: %q, %v", dir, err)
+	}
+	if _, err := parse("--mesh", "Lab;x"); err == nil || !strings.Contains(err.Error(), "--mesh") {
+		t.Fatalf("a bad mesh name = %v", err)
+	}
+
+	tmp := t.TempDir()
+	if _, err := onlyMesh(e, tmp); err == nil || !strings.Contains(err.Error(), "agent join --mesh") {
+		t.Fatalf("no mesh = %v", err)
+	}
+	for _, m := range []string{"lab", "default", "empty"} {
+		if err := os.MkdirAll(filepath.Join(tmp, m), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "lab", state.EnrollmentFile), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if dir, err := onlyMesh(e, tmp); err != nil || dir != meshDir(e, tmp, "lab") {
+		t.Fatalf("the one mesh = %q, %v", dir, err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "default", state.EnrollmentFile), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := onlyMesh(e, tmp); err == nil || !strings.Contains(err.Error(), "default, lab") {
+		t.Fatalf("several meshes = %v", err)
+	}
+
+	join := func(args ...string) (agent.JoinOptions, error) {
+		fs := flag.NewFlagSet("t", flag.ContinueOnError)
+		opts := joinFlags(fs, e)
+		if err := fs.Parse(append([]string{"--server", "https://mesh.example.com", "--token", testfix.Token}, args...)); err != nil {
+			return agent.JoinOptions{}, err
+		}
+		return opts()
+	}
+	for _, c := range []struct {
+		args       []string
+		dir, mesh  string
+		wantErrMsg string
+	}{
+		{nil, meshDir(e, root, "default"), "default", ""},
+		{[]string{"--mesh", "lab"}, meshDir(e, root, "lab"), "lab", ""},
+		{[]string{"--data", "/srv/x"}, "/srv/x", "", ""},
+		{[]string{"--mesh", "-x"}, "", "", "--mesh"},
+	} {
+		o, err := join(c.args...)
+		switch {
+		case c.wantErrMsg != "" && (err == nil || !strings.Contains(err.Error(), c.wantErrMsg)):
+			t.Errorf("join %v = %v", c.args, err)
+		case c.wantErrMsg == "" && (err != nil || o.DataDir != c.dir || o.Mesh != c.mesh):
+			t.Errorf("join %v = %q in %q, %v", c.args, o.Mesh, o.DataDir, err)
+		}
+	}
+	if w := meshDir(&env{goos: "windows"}, `C:\ProgramData\meshctl`, "lab"); w != `C:\ProgramData\meshctl\lab` {
+		t.Fatal(w)
 	}
 }
 

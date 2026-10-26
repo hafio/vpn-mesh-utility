@@ -476,7 +476,9 @@ func (s *Nodes) Add(ctx context.Context, by Actor, req NodeAddRequest) (NodeChan
 		if err != nil {
 			return err
 		}
-		enroll = s.enrollment(token, exp.Unix())
+		if enroll, err = s.enrollment(tx, token, exp.Unix()); err != nil {
+			return err
+		}
 		return nil
 	})
 	if err != nil {
@@ -887,7 +889,9 @@ func (s *Nodes) Token(ctx context.Context, by Actor, name string) (NodeChange, e
 		if err := tx.DeleteAgentSession(n.ID); err != nil {
 			return err
 		}
-		enroll = s.enrollment(token, exp.Unix())
+		if enroll, err = s.enrollment(tx, token, exp.Unix()); err != nil {
+			return err
+		}
 		c.Detail = map[string]any{"cut_off": cutOff, "expires_at": exp.Unix()}
 		return nil
 	})
@@ -1225,13 +1229,22 @@ func withGroups(tx *store.MeshTx, info *NodeInfo) error {
 	return err
 }
 
-func (s *Nodes) enrollment(token string, expires int64) *Enrollment {
+// enrollment is how a host joins with token: the install commands name the
+// node's mesh, after which its data dir and service are named (amendment
+// A51).
+func (s *Nodes) enrollment(tx *store.MeshTx, token string, expires int64) (*Enrollment, error) {
+	m, err := tx.MeshByID(tx.MeshID())
+	if err != nil {
+		return nil, err
+	}
 	return &Enrollment{
 		Token:     token,
 		ExpiresAt: expires,
-		Install:   fmt.Sprintf("curl -fsSL %s%s | sudo sh -s -- --token %s", s.serverURL, proto.PathInstall, token),
-		Join:      fmt.Sprintf("meshctl agent join --server %s --token %s", s.serverURL, token),
-	}
+		Install:   fmt.Sprintf("curl -fsSL %s%s | sudo sh -s -- --mesh %s --token %s", s.serverURL, proto.PathInstall, m.Name, token),
+		InstallWindows: fmt.Sprintf("$env:MESHCTL_TOKEN = '%s'; $env:MESHCTL_MESH = '%s'; irm %s%s | iex", token, m.Name, s.serverURL,
+			proto.PathInstallPS1),
+		Join: fmt.Sprintf("meshctl agent join --server %s --mesh %s --token %s", s.serverURL, m.Name, token),
+	}, nil
 }
 
 func checkName(name string) (string, error) {

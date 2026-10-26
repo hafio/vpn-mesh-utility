@@ -34,7 +34,7 @@ that applies) and continue from the output reported back.
   stdlib.**
 - **`internal/testfix` is for tests only** and imports only `internal/proto`, so both sides'
   tests can share it. `internal/agent/agentfake` (in-memory host fakes) is test-only too.
-- `deploy` (unit, install.sh, the control plane's compose files) imports only `internal/validate` and yaml.v3; both sides use it.
+- `deploy` (unit, install.sh, install.ps1, the control plane's compose files) imports only `internal/validate` and yaml.v3; both sides use it.
 - `internal/fsutil` (atomic file writes) is stdlib-only; both sides use it.
 - The server never imports data-plane libraries (wgctrl, wireguard-go, netlink, nftables,
   miekg/dns, godbus, x/sys/windows, go-winio); the agent never imports server ones (sqlite,
@@ -47,10 +47,10 @@ test files included. Change the rules there and here together.
 ## Security invariants
 
 - **Every external value passes `internal/validate`** before it is stored, rendered into an
-  artifact (compose file, systemd unit, install.sh, firewall rule) or handed to a command. Add a
+  artifact (compose file, systemd unit, install script, firewall rule) or handed to a command. Add a
   validator there rather than parsing ad hoc; validators accept a positive grammar.
 - **Commands are never run through a shell.** The agent has exactly one `exec` call site,
-  `internal/agent/execrun` (allowlist: `firewall-cmd`, `systemctl`), and it re-checks every argv
+  `internal/agent/execrun` (allowlist: `firewall-cmd`), and it re-checks every argv
   element with `validate.Arg`. Nothing else under `internal/` or `cmd/` imports `os/exec`.
 - **Secrets never reach logs, errors, audit details or exports**: join tokens and session
   cookies are stored as sha256 and masked in errors; passwords are argon2id hashes read from a

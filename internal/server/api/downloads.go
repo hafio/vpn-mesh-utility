@@ -64,6 +64,17 @@ func (a *api) download(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) install(w http.ResponseWriter, r *http.Request) {
+	a.script(w, r, deploy.RenderInstall, "text/x-shellscript; charset=utf-8")
+}
+
+// installPS1 is the Windows installer (amendment A51).
+func (a *api) installPS1(w http.ResponseWriter, r *http.Request) {
+	a.script(w, r, deploy.RenderInstallPS1, "text/plain; charset=utf-8")
+}
+
+// script answers an install script rendered with this server's origin,
+// version and the checksums of its binaries.
+func (a *api) script(w http.ResponseWriter, r *http.Request, render func(deploy.InstallParams) ([]byte, error), contentType string) {
 	if a.DistDir == "" {
 		a.fail(w, r, a.noDownloads())
 		return
@@ -73,15 +84,15 @@ func (a *api) install(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	script, err := deploy.RenderInstall(deploy.InstallParams{
+	script, err := render(deploy.InstallParams{
 		Origin: a.ServerURL, Version: a.Version,
-		SHA256Amd64: sums["meshctl-linux-amd64"], SHA256Arm64: sums["meshctl-linux-arm64"],
+		SHA256Amd64: sums["meshctl-linux-amd64"], SHA256Arm64: sums["meshctl-linux-arm64"], SHA256Windows: sums["meshctl-windows-amd64.exe"],
 	})
 	if err != nil {
 		a.fail(w, r, err)
 		return
 	}
-	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
+	w.Header().Set("Content-Type", contentType)
 	_, _ = w.Write(script) // the client went away; nothing to do
 }
 

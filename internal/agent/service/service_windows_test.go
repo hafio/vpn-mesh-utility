@@ -6,27 +6,19 @@ import (
 	"context"
 	"errors"
 	"slices"
-	"strings"
 	"testing"
 
-	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 )
 
-func TestCommandLineQuotesThePaths(t *testing.T) {
-	got := commandLine(`C:\Program Files\meshctl\meshctl.exe`, SCM{DataDir: `C:\ProgramData\meshctl`}.args())
-	if want := `"C:\Program Files\meshctl\meshctl.exe" agent run --data C:\ProgramData\meshctl`; got != want {
-		t.Fatalf("commandLine = %s, want %s", got, want)
-	}
-}
-
-func TestAvailableNeedsElevation(t *testing.T) {
-	ok, why := Windows(`C:\ProgramData\meshctl`).Available()
-	if elevated := windows.GetCurrentProcessToken().IsElevated(); ok != elevated || (!ok && !strings.Contains(why, "elevated")) {
-		t.Fatalf("Available = %v (%s), elevated %v", ok, why, elevated)
-	}
+// A test is no Windows service; the service of a mesh is named as
+// install.ps1 names it.
+func TestNotAService(t *testing.T) {
 	if is, err := IsWindowsService(); is || err != nil {
 		t.Fatalf("a test is a Windows service: %v, %v", is, err)
+	}
+	if Name("lab") != "meshctl-agent-lab" {
+		t.Fatal(Name("lab"))
 	}
 }
 

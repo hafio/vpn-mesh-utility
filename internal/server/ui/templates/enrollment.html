@@ -3,6 +3,10 @@
 <p><code class="secret">{{.Data.Token}}</code></p>
 <h2>On {{.Data.Node}}, as root</h2>
 <pre>{{.Data.Install}}</pre>
+{{- with .Data.InstallWindows}}
+<h2>On Windows, in an elevated PowerShell</h2>
+<pre>{{.}}</pre>
+{{- end}}
 <h2>Or, where meshctl is already installed</h2>
 <pre>{{.Data.Join}}</pre>
 {{- range .Data.Warnings}}

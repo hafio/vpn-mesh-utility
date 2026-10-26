@@ -86,7 +86,7 @@ func joinOnStart(ctx context.Context, o JoinOptions, join func(context.Context, 
 		log.Debug("the join token was used on an earlier start; not joining again")
 		return nil
 	}
-	o.Out, o.NoService, o.Service = io.Discard, true, nil
+	o.Out = io.Discard
 	resp, err := join(ctx, o)
 	if err == nil {
 		if err := dir.SaveJoinRecord(state.JoinRecord{Token: sum}); err != nil {

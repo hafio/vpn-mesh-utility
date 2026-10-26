@@ -55,6 +55,7 @@ func TestJoinRequestValidateRejects(t *testing.T) {
 	}{
 		{"token", func(r *proto.JoinRequest) { r.Token = "short" }, "token"},
 		{"name injection", func(r *proto.JoinRequest) { r.Name = "nas\nprivileged: true" }, "name"},
+		{"mesh", func(r *proto.JoinRequest) { r.Mesh = "lab;reboot" }, "mesh"},
 		{"hostname injection", func(r *proto.JoinRequest) { r.Hostname = "$(reboot)" }, "hostname"},
 		{"os", func(r *proto.JoinRequest) { r.OS = "darwin" }, "os"},
 		{"arch", func(r *proto.JoinRequest) { r.Arch = "386" }, "arch"},

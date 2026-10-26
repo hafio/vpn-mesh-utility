@@ -14,6 +14,10 @@ func setupLogs(fs *flag.FlagSet, e *env) action {
 		if err := wantArgs(args, 0, ""); err != nil {
 			return err
 		}
-		return localapi.NewClient(sock()).Logs(ctx, *follow, e.stdout)
+		path, err := sock()
+		if err != nil {
+			return err
+		}
+		return localapi.NewClient(path).Logs(ctx, *follow, e.stdout)
 	}
 }

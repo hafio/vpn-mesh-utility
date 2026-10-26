@@ -22,7 +22,8 @@ Public listener (`--listen`, behind the reverse proxy):
 | `GET /api/v1/agent/mesh` | signature | every node as the dashboard shows it, for the node's local view: no keys, endpoints, hostnames or errors (amendment A31), and the containers' published names (A38) |
 | `PUT /api/v1/agent/names` | signature | the names the node's container runtime gives the containers on its mesh network (amendment A38) |
 | `GET /healthz` | none | the container healthcheck: serving, and the database answers |
-| `GET /install.sh` | none | the Linux installer, with the binaries' SHA-256 baked in |
+| `GET /install.sh` | none | the Linux installer, with the binaries' SHA-256 and the systemd unit baked in |
+| `GET /install.ps1` | none | the Windows installer, with the Windows binary's SHA-256 baked in (amendment A51) |
 | `GET /dl/{file}` | none | `meshctl-linux-amd64`, `meshctl-linux-arm64`, `meshctl-windows-amd64.exe`, `SHA256SUMS` |
 
 Admin socket (`<data>/admin.sock`, mode 0600, so only the server's own user reaches it). Every
@@ -129,10 +130,13 @@ and unsigned, it is logged and retried like any other error.
 {"token": "...", "name": "vps-2", "hostname": "vps-2.example.com", "os": "linux", "arch": "amd64",
  "wg_backend": "kernel", "wg_public_key": "...", "identity_public_key": "...",
  "endpoint": "203.0.113.11:51820", "public_ip": "203.0.113.11", "agent_version": "v1.0.0",
- "machine_id": "<64 hex characters>"}
+ "machine_id": "<64 hex characters>", "mesh": "default"}
 ```
 
-`name` is optional: when given it must be the node the token was issued for. The token is
+`name` is optional: when given it must be the node the token was issued for. So is `mesh`
+(amendment A51): when given it must be the name of that node's mesh, else 409 `conflict` names
+it, before the token is used; `agent join --mesh` sends it, and the agent's data dir and service
+are named after it. The token is
 consumed in the same transaction that registers the keys and recomputes the mesh, so a join that
 fails for any reason (a disabled node, a key another node already uses, a plan error) leaves the
 token usable. Phones cannot join this way; they enroll by QR code (M4).
@@ -574,9 +578,11 @@ the cache.
 
 ## Local API
 
-`meshctl status` reads `GET /v1/status` from the agent's Unix socket (`/run/meshctl/agent.sock`
-for the standard data dir, else `<data>/agent.sock`; mode 0660 with group `meshctl` when that
-group exists, else 0600). On Windows it is the named pipe `\\.\pipe\meshctl-agent`, which only
+`meshctl status` reads `GET /v1/status` from the agent's Unix socket (`/run/meshctl/<mesh>.sock`
+for a mesh's data dir `/var/lib/meshctl/<mesh>`, amendment A51, else `<data>/agent.sock`; mode
+0660 with group `meshctl` when that group exists, else 0600). The host's commands find the agent
+by `--mesh`, else the one mesh that has joined on the host, or by `--data` or `--socket`. On
+Windows it is the named pipe `\\.\pipe\meshctl-agent`, which only
 Administrators and SYSTEM may open. It never listens on the network. The agent takes it before it
 applies the cached config or contacts the server: when another agent already answers on it, or the
 path is unusable, the agent stops there, leaving the running agent's interface and safe apply alone.

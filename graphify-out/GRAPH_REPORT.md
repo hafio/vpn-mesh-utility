@@ -1,25 +1,25 @@
 # Graph Report - vpn-mesh-utility  (2026-10-26)
 
 ## Corpus Check
-- 332 files · ~405,382 words
+- 329 files · ~406,137 words
 - Verdict: corpus is large enough that graph structure adds value.
-- Unclassified: 9 file(s) not represented in the graph (top: (none) 5, .css 2, .tmpl 1)
+- Unclassified: 10 file(s) not represented in the graph (top: (none) 5, .tmpl 2, .css 2)
 
 ## Summary
-- 4081 nodes · 21877 edges · 123 communities (105 shown, 18 thin omitted)
-- Extraction: 88% EXTRACTED · 12% INFERRED · 0% AMBIGUOUS · INFERRED: 2535 edges (avg confidence: 0.88)
+- 4051 nodes · 21797 edges · 141 communities (114 shown, 27 thin omitted)
+- Extraction: 88% EXTRACTED · 12% INFERRED · 0% AMBIGUOUS · INFERRED: 2560 edges (avg confidence: 0.88)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `941d3b65`
+- Built from commit: `f2f215fa`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
 ## Community Hubs (Navigation)
 - ui/ui_test.go
 - WGKey
-- fail
-- `internal/server/api`
+- Name
+- newHarness
 - htmx.min.js
 - env
 - meshctl — Design Spec
@@ -27,133 +27,151 @@
 - dev.sh
 - dev.ps1
 - archtest.go
-- net.Listener
+- net/netip.AddrPort
 - commands.go
 - github.com/hafio/vpn-mesh-utility
-- `internal/proto`
+- Session
 - otherNet
 - net/http.ResponseWriter
 - Node
 - New
 - Dir
 - Agent (`internal/agent/...`)
-- Join
+- Run
 - net/netip.Prefix
 - Net
-- nodeRow
+- .nodeView
 - Input
 - lab
 - Snapshot
 - flag.FlagSet
 - Command reference
 - .mesh
-- PhoneConfig
+- NodeConfig
 - context.Context
 - newRig
 - Service
 - agent/agent_test.go
-- Agent (`internal/agent/...`)
+- testing.T
 - `internal/server/auth`
 - testing.T
 - log/slog.Logger
 - .exec
 - openTest
-- NodeConfig
+- Exit
 - netlinkNet
 - Net
 - planner_test.go
 - Registration
-- serveRuntime
+- `internal/server/api`
 - README.md
-- Host
+- wg.go
 - .query
 - sync.Mutex
-- .queryRow
+- serve
 - LocalStatus
-- .Set
+- storeNode
 - errorf
-- Matcher
+- time.Time
 - Client
 - exprs
 - Engine
 - meshDNS
-- AddrEntry
+- `internal/validate`
 - Sync
 - .Apply
-- nullInt
+- Run
 - kernel
 - .meshctl
 - UI
 - .add
-- Policy
-- time.Time
+- `internal/proto`
+- time.Duration
 - fetchwintun/main_test.go
-- fakeServer
-- Tx
+- net/http.Request
+- .AddMesh
 - ui
-- Of
+- Container
 - rulesFor
 - Sync
 - .readJSON
 - net/netip.Addr
 - resolved
 - Segmentation
-- io.Writer
+- printStatus
 - io.Reader
 - .renderPolicies
 - deploy_test.go
-- service_windows.go
+- Open
 - File
-- JoinRequest
+- Host
 - services
 - Ruleset
 - Diff
-- ValidSecret
+- samples_test.go
 - userspace
-- TestOneRunningCopy
-- loadMigrations
-- Version
+- ns
+- context.Context
+- fail
 - run
-- Table
+- sync.Mutex
 - Schedule
-- 8. The web UI
+- NodeInfo
 - context.Context
 - StatusError
 - AdminError
-- .SetSegmentation
+- Containers
 - StepError
+- Prefix6
 - TestMain
 - Engine
+- .apply
 - .Reach
-- ns
+- Test catalogue
+- .events
+- wgdev
+- IP
+- DefaultPolicy
 - `internal/server` and `internal/server/export`
-- stream
-- fromFile
+- Writer
+- Deps
+- run
+- ServerURL
+- DNSView
+- Segmentation
+- newQR
+- PlanError
 - Slot
-- AuditEntry
-- handler
+- Error
+- NewNet
+- NewKernel
+- service_windows.go
 - Refusal
+- Refusal
+- usageError
+- AliveRequest
 - entry
+- Error
 
 ## God Nodes (most connected - your core abstractions)
-1. `Agent (`internal/agent/...`)` - 308 edges
-2. `ui` - 104 edges
-3. ``internal/server/api`` - 99 edges
+1. `Agent (`internal/agent/...`)` - 304 edges
+2. `ui` - 106 edges
+3. ``internal/server/api`` - 101 edges
 4. `ServerConfig()` - 89 edges
 5. `Session` - 85 edges
 6. `Slot` - 82 edges
-7. `newHarness()` - 72 edges
+7. `newHarness()` - 73 edges
 8. `NodeConfig` - 69 edges
-9. `env` - 66 edges
-10. `api` - 56 edges
+9. `env` - 64 edges
+10. `api` - 58 edges
 
 ## Surprising Connections (you probably didn't know these)
 - `Add a command` --references--> `commands()`  [INFERRED]
   docs/developer.md → cmd/meshctl/commands.go
-- `A node's container on the host network (the NAS)` --references--> `TestContainerSamples()`  [INFERRED]
-  docs/security.md → deploy/samples_test.go
 - `Prefs` --references--> `version()`  [INFERRED]
   docs/agent-protocol.md → internal/agent/safeapply_test.go
+- `Packages, and which way they may import` --references--> `TestModuleBoundaries()`  [INFERRED]
+  CLAUDE.md → internal/archtest/archtest_test.go
 - `Errors` --references--> `message()`  [INFERRED]
   docs/agent-protocol.md → internal/server/ui/render.go
 - `1. Run the control plane (Dokploy)` --references--> `v()`  [INFERRED]
@@ -181,39 +199,39 @@
 - 3-file cycle: `internal/proto/names_test.go -> internal/proto/trust_test.go -> internal/testfix/testfix_test.go -> internal/proto/names_test.go`
 - 3-file cycle: `internal/proto/sse_test.go -> internal/proto/trust_test.go -> internal/testfix/testfix_test.go -> internal/proto/sse_test.go`
 
-## Communities (123 total, 18 thin omitted)
+## Communities (141 total, 27 thin omitted)
 
 ### Community 0 - "ui/ui_test.go"
 Cohesion: 0.09
-Nodes (18): linkDNS, DNSRecord, FirewallRule, Node, logsData, inspected, listed, ChallengeEvent (+10 more)
+Nodes (24): linkDNS, DNSRecord, FirewallRule, Node, TestDNS(), NewNet(), NewPolicy(), NewPolicy() (+16 more)
 
 ### Community 1 - "WGKey"
-Cohesion: 0.12
-Nodes (47): rig, TestProxyLoopAppliesAgain(), TestRunNeedsTheDataDirToItself(), NewHost(), NewRoutes(), IsStepError(), New(), failed() (+39 more)
+Cohesion: 0.14
+Nodes (46): blockingHost, rig, watchingFirewall, TestProxyLoopAppliesAgain(), NewHost(), NewRoutes(), IsStepError(), New() (+38 more)
 
-### Community 2 - "fail"
-Cohesion: 0.06
-Nodes (72): Security invariants, Add a validator, Container-mode agent, `internal/validate`, check(), validateMeshNames(), newNode(), validateSet() (+64 more)
+### Community 2 - "Name"
+Cohesion: 0.21
+Nodes (18): check(), newNode(), validateSet(), ToSnapshot(), Endpoint6(), IPv6(), PeerEndpoint(), TestIPv6Grammar() (+10 more)
 
-### Community 3 - "`internal/server/api`"
-Cohesion: 0.05
-Nodes (104): countingDB, `internal/server/api`, ErrorBody, ErrorMessage(), adminCall(), TestAdminAddIssuesAToken(), TestAdminAddRefusesBadInput(), TestAdminClientOverTheSocket() (+96 more)
+### Community 3 - "newHarness"
+Cohesion: 0.10
+Nodes (32): adminCall(), TestAdminAddIssuesAToken(), TestAdminAddRefusesBadInput(), TestAdminClientOverTheSocket(), TestAdminContainerMode(), TestAdminErrorCodes(), TestAdminPlanErrorsChangeNothing(), TestAdminSetClearsReferences() (+24 more)
 
 ### Community 4 - "htmx.min.js"
-Cohesion: 0.07
-Nodes (114): 1. The mesh network, once per host, 2. The agent, 3. A service on the mesh, A client node on the host network, A host-mode node's containers, Container mode, Container names, Containers (+106 more)
+Cohesion: 0.08
+Nodes (103): A(), Ae(), an(), at(), B(), Be(), bn(), bt() (+95 more)
 
 ### Community 5 - "env"
 Cohesion: 0.13
-Nodes (42): checkMachineIDFile(), joinFlags(), machineIDFlag(), setupAgentInstall(), setupAgentJoin(), setupAgentReset(), setupAgentRun(), setupAgentUninstall() (+34 more)
+Nodes (43): checkMachineIDFile(), joinFlags(), machineIDFlag(), meshDir(), meshFlags(), onlyMesh(), sep(), setupAgentJoin() (+35 more)
 
 ### Community 6 - "meshctl — Design Spec"
 Cohesion: 0.06
 Nodes (34): 10. Requirements, 11. CLI reference, 12. Deployment, 13. Build, 14. Swarm notes (informational, not managed by meshctl), 15. Milestones, 16. Open questions, 1. Problem (+26 more)
 
 ### Community 7 - "segResolver"
-Cohesion: 0.10
-Nodes (23): Matrix, MatrixCell, Policy, PolicyRule, Schedule, Service, activeAt(), zoneOf() (+15 more)
+Cohesion: 0.14
+Nodes (19): Service, checkSegmentation(), CompilePolicy(), hosts(), mergePorts(), mergeServices(), newSegResolver(), Overlaps() (+11 more)
 
 ### Community 8 - "dev.sh"
 Cohesion: 0.14
@@ -224,404 +242,440 @@ Cohesion: 0.15
 Nodes (34): Get-HostArch(), Get-HostOs(), Get-Log(), Get-Now(), Get-Text(), Invoke-TrivyImage(), Build-Image(), Build-One() (+26 more)
 
 ### Community 10 - "archtest.go"
-Cohesion: 0.14
-Nodes (16): Rule, Violation, graphify, Packages, and which way they may import, Style, What this repo is, You do not run the gates, Input and commands (+8 more)
+Cohesion: 0.39
+Nodes (6): Rule, Violation, Check(), importsOf(), under(), underAny()
 
-### Community 11 - "net.Listener"
-Cohesion: 0.26
-Nodes (10): Listen(), Listen(), listenPipe(), pipeName(), servePipe(), TestPipeIsForAdministratorsOnly(), TestStatusOverAPipe(), waitPipe() (+2 more)
+### Community 11 - "net/netip.AddrPort"
+Cohesion: 0.15
+Nodes (12): dialing, bindBoth(), bindPair(), Listen(), Listen(), listenSocket(), Listen(), ParseAddr() (+4 more)
 
 ### Community 12 - "commands.go"
-Cohesion: 0.16
-Nodes (20): argSynopsis(), flagName(), newFlags(), parseArgs(), parseFlags(), printFlags(), setupVersion(), shownDefault() (+12 more)
+Cohesion: 0.20
+Nodes (15): flagName(), cell(), envDoc(), renderCommands(), sentence(), startFlag(), TestCommandsDoc(), TestContainersDocNamesRealVariables() (+7 more)
 
-### Community 14 - "`internal/proto`"
-Cohesion: 0.04
-Nodes (89): brokenStream, Determinism and goldens, Options, ticketServer, `internal/proto`, Join(), New(), newClient() (+81 more)
+### Community 14 - "Session"
+Cohesion: 0.11
+Nodes (36): Options, ticketServer, Join(), New(), testSession(), TestUnreachableAndMalformedAnswers(), newTicketServer(), sessionClient() (+28 more)
 
 ### Community 16 - "net/http.ResponseWriter"
-Cohesion: 0.10
-Nodes (16): api, apiError, cli(), hostFamilies(), decodeJSON(), errorf(), invalid(), readBody() (+8 more)
+Cohesion: 0.12
+Nodes (13): api, decode(), reply(), cli(), hostFamilies(), decodeJSON(), readBody(), writeJSON() (+5 more)
 
 ### Community 17 - "Node"
-Cohesion: 0.20
+Cohesion: 0.21
 Nodes (10): Config and events, 4. Roles and topology, Peer, ContainerNetwork(), endpoints(), Node, sortPeers(), sortPrefixes() (+2 more)
 
 ### Community 18 - "New"
-Cohesion: 0.15
-Nodes (10): DB, newRenderer(), staticHandler(), headers(), New(), sameOrigin(), Deps, handler (+2 more)
+Cohesion: 0.10
+Nodes (17): Add a web UI page, newPolicyForm(), tabsIn(), dnsState(), newRenderer(), New(), sameOrigin(), golden() (+9 more)
 
 ### Community 19 - "Dir"
-Cohesion: 0.06
-Nodes (40): `internal/fsutil`, meshKey(), sign(), TestAnswersMustBeSigned(), TestDataDirIsProtectedOnWindows(), TestWipe(), Dir, Enrollment (+32 more)
+Cohesion: 0.05
+Nodes (49): TestStartNodeRuns(), `internal/fsutil`, meshKey(), TestDefaultSocket(), TestJoin(), Dir, Enrollment, NewKeys() (+41 more)
 
 ### Community 20 - "Agent (`internal/agent/...`)"
-Cohesion: 0.18
-Nodes (31): fakeRunner, atLeast(), appliedHost(), encodeCalls(), freshHost(), golden(), newFirewall(), policyInfo() (+23 more)
+Cohesion: 0.20
+Nodes (29): fakeRunner, appliedHost(), encodeCalls(), freshHost(), golden(), newFirewall(), policyInfo(), removable() (+21 more)
 
-### Community 21 - "Join"
-Cohesion: 0.08
-Nodes (38): hostService(), hostService(), DefaultSocket(), Pipe(), TestDefaultSocket(), TestIsPublic(), TestJoin(), TestJoinValidatesBeforeCallingTheServer() (+30 more)
+### Community 21 - "Run"
+Cohesion: 0.11
+Nodes (24): hostname(), Run(), TestIsPublic(), TestOpenRuntime(), uiListen(), Presented(), cleanHostname(), firstAddr() (+16 more)
 
 ### Community 22 - "net/netip.Prefix"
 Cohesion: 0.09
-Nodes (26): Routes, index(), route(), compare(), luidOf(), onLink(), meshCIDR(), Allocate() (+18 more)
+Nodes (26): Routes, NewTable(), compare(), Table, Sync(), NewTable(), luidOf(), NewTable() (+18 more)
 
-### Community 24 - "nodeRow"
-Cohesion: 0.40
-Nodes (5): dashboardData, nodeForm, nodeRow, nodesData, peerAge
+### Community 24 - ".nodeView"
+Cohesion: 0.21
+Nodes (7): ago(), writeHTML(), dashboardData, nodeForm, nodeRow, nodesData, peerAge
 
 ### Community 25 - "Input"
-Cohesion: 0.13
-Nodes (14): PlanError, Record, Check(), checkContainers(), checkContainers6(), checkDNS(), checkNode6(), checkUsable() (+6 more)
+Cohesion: 0.15
+Nodes (13): Record, containers6(), Check(), checkContainers(), checkContainers6(), checkDNS(), checkNode6(), checkUsable() (+5 more)
 
 ### Community 26 - "lab"
-Cohesion: 0.23
-Nodes (6): Coverage, eventually(), lab, TestServerMesh(), TestSpokesAndExit(), uapiGet()
+Cohesion: 0.16
+Nodes (10): Coverage, lab, TestDualStack(), eventually(), lab, inNS(), newLab(), TestServerMesh() (+2 more)
 
 ### Community 27 - "Snapshot"
 Cohesion: 0.14
 Nodes (18): `internal/server/versions`, SnapNode, Snapshot, snapNode(), Compare(), describeDNS(), describeSegmentation(), fields() (+10 more)
 
 ### Community 28 - "flag.FlagSet"
-Cohesion: 0.23
-Nodes (28): setupFirewallApply(), setupFirewallCheck(), setupFirewallShow(), setupIPv6(), setupMeshAdd(), setupMeshList(), setupMeshRemove(), setupMeshSet() (+20 more)
+Cohesion: 0.18
+Nodes (33): TestPrintEnrollmentInTheLocalZone(), setupFirewallApply(), setupFirewallCheck(), setupFirewallShow(), setupIPv6(), printMesh(), setupMeshAdd(), setupMeshList() (+25 more)
 
 ### Community 29 - "Command reference"
 Cohesion: 0.05
-Nodes (43): Command reference, meshctl agent install, meshctl agent join, meshctl agent reset, meshctl agent run, meshctl agent uninstall, meshctl control, meshctl dns (+35 more)
+Nodes (41): Command reference, meshctl agent join, meshctl agent reset, meshctl agent run, meshctl control, meshctl dns, meshctl exit, meshctl export (+33 more)
 
 ### Community 30 - ".mesh"
-Cohesion: 0.08
-Nodes (27): DNSEntry, NameEntry, NameSet, Routes, 10. Backups, 11. When the control plane is down, 12. Troubleshooting, 13. Upgrading (+19 more)
+Cohesion: 0.09
+Nodes (26): Agent protocol, Container names, Errors, Join, Local API, Mesh view, Prefs, Routes (+18 more)
 
-### Community 31 - "PhoneConfig"
-Cohesion: 0.21
-Nodes (16): Keys and tokens, `internal/server/phone`, Hub(), joinSet(), NewKey(), Render(), aliceKey(), dualPhone() (+8 more)
+### Community 31 - "NodeConfig"
+Cohesion: 0.05
+Nodes (48): IPv6Host, Determinism and goldens, Input and commands, Keys and tokens, `internal/archtest`, `internal/server/phone`, Shared fixtures -- `internal/testfix`, forHost() (+40 more)
 
 ### Community 32 - "context.Context"
-Cohesion: 0.09
-Nodes (11): Deps, runner, kick(), oneLine(), Reset(), Run(), TestOneLine(), TestReportKeepsToTheServersLimits() (+3 more)
+Cohesion: 0.12
+Nodes (4): runner, kick(), oneLine(), drain()
 
 ### Community 33 - "newRig"
-Cohesion: 0.12
-Nodes (40): Add a web UI page, The web UI's pages (internal/server/ui), `internal/server/ui`, TestTemplatesHaveNoScript(), TestFirewallPages(), TestNodeGroupsOnPages(), TestAccessByGrant(), TestHomeWithoutMeshes() (+32 more)
+Cohesion: 0.07
+Nodes (52): The web UI's pages (internal/server/ui), `internal/server/ui`, capped, clip(), meshFilter(), New(), inspectOf(), serveRuntime() (+44 more)
 
 ### Community 34 - "Service"
-Cohesion: 0.15
-Nodes (9): dialing, resolver, Service, bindBoth(), bindPair(), exchange(), serve(), ParseAddr() (+1 more)
+Cohesion: 0.22
+Nodes (4): resolver, Service, exchange(), serve()
 
 ### Community 35 - "agent/agent_test.go"
-Cohesion: 0.08
+Cohesion: 0.09
 Nodes (74): rig, enroll(), enrollAs(), eventually(), freePort(), joinedTo(), newDir(), newFakeRuntime() (+66 more)
 
-### Community 36 - "Agent (`internal/agent/...`)"
-Cohesion: 0.04
-Nodes (66): Agent (`internal/agent/...`), TestRestartNeedsAConfig(), TestRunNeedsAnEnrollment(), pfx(), TestConfigureHasKernelSemantics(), TestKernelHoldsOneTable(), TestNetHasKernelSemantics(), TestRoutesSysctlAndFirewall() (+58 more)
+### Community 36 - "testing.T"
+Cohesion: 0.03
+Nodes (142): Agent (`internal/agent/...`), TestCleanHostname(), TestJoinValidatesBeforeCallingTheServer(), TestMeshAddresses(), TestOneLine(), TestReportKeepsToTheServersLimits(), TestRestartNeedsAConfig(), pfx() (+134 more)
 
 ### Community 37 - "`internal/server/auth`"
-Cohesion: 0.15
-Nodes (25): `internal/server/auth`, New(), newRig(), TestAccountChangesEndSessions(), TestAccountManagementValidates(), TestAdminsAndGrants(), TestChangePassword(), TestEnrolmentReusesItsSecretAndPeekDoesNotSlide() (+17 more)
+Cohesion: 0.11
+Nodes (35): Params, rig, `internal/server/auth`, New(), newRig(), TestAccountChangesEndSessions(), TestAccountManagementValidates(), TestAdminsAndGrants() (+27 more)
 
 ### Community 38 - "testing.T"
 Cohesion: 0.09
-Nodes (62): TestAgentRunRuntimeSocket(), passwords(), runWith(), shortDir(), startAdmin(), TestAgentInstallIsForWindows(), TestAgentJoinTakesTheTokenFromTheEnvironment(), TestAgentLog() (+54 more)
+Nodes (52): TestAgentRunRuntimeSocket(), passwords(), runWith(), shortDir(), startAdmin(), TestAgentJoinTakesTheTokenFromTheEnvironment(), TestAgentLog(), TestAgentReset() (+44 more)
 
 ### Community 39 - "log/slog.Logger"
-Cohesion: 0.05
-Nodes (37): Change, Deps, Hub, subscription, blockingHost, TestOpen(), Open(), TestOpenRefusesUnknownBackends() (+29 more)
+Cohesion: 0.11
+Nodes (10): Hub, subscription, New(), NewUserspace(), NewUserspace(), ConfigEvent, Reconciler, NewReconciler() (+2 more)
 
 ### Community 40 - ".exec"
-Cohesion: 0.10
-Nodes (6): newUUID(), mustAffect(), boolInt(), classify(), changed(), Session
+Cohesion: 0.04
+Nodes (16): Add a database migration, errWait(), mustAffect(), DNSRecord, joinList(), AgentSession, boolInt(), classify() (+8 more)
 
 ### Community 41 - "openTest"
-Cohesion: 0.09
-Nodes (61): rig, `internal/server/store`, TestReconcilerVersionsOnlyRealChanges(), TestKeyHistory(), TestRestoreKeepsWhatTheNodeBrought(), addMesh(), TestMeshes(), TestMeshesAreApart() (+53 more)
-
-### Community 42 - "NodeConfig"
-Cohesion: 0.08
-Nodes (18): Agent protocol, Container names, Errors, Join, Local API, Mesh view, Prefs, Sessions (+10 more)
+Cohesion: 0.13
+Nodes (44): `internal/server/store`, TestKeyHistory(), TestRestoreKeepsWhatTheNodeBrought(), addMesh(), TestMeshes(), TestMeshesAreApart(), TestNodeIDsAreNeverReused(), TestRecordsStayInTheirMesh() (+36 more)
 
 ### Community 43 - "netlinkNet"
-Cohesion: 0.13
-Nodes (12): netlinkNet, blackhole(), dropRoute(), dump(), family(), prefixOf(), TestKernelShapes(), toRule() (+4 more)
+Cohesion: 0.17
+Nodes (8): netlinkNet, blackhole(), dropRoute(), dump(), family(), prefixOf(), TestKernelShapes(), toRule()
 
 ### Community 44 - "Net"
 Cohesion: 0.14
-Nodes (6): ensureAddr(), Net, Rule, syncDropped(), syncProxies(), syncRules()
+Nodes (7): ensureAddr(), Net, Rule, Remove(), syncDropped(), syncProxies(), syncRules()
 
 ### Community 45 - "planner_test.go"
 Cohesion: 0.13
-Nodes (46): Add a topology rule, `internal/server/planner`, TestCheckRequested(), TestRangeFor(), Compute(), deliver(), deliverAddr(), encode() (+38 more)
+Nodes (44): Add a topology rule, `internal/server/planner`, TestCheckRequested(), TestRangeFor(), Problem, Compute(), deliver(), deliverAddr() (+36 more)
 
 ### Community 46 - "Registration"
-Cohesion: 0.19
-Nodes (8): Domain, fakeRegistrar, Registrar, Registration, New(), NewRegistrar(), NewRegistrar(), NewRegistrar()
+Cohesion: 0.17
+Nodes (9): Domain, fakeRegistrar, Registrar, Registration, NewRegistrar(), NewRegistrar(), NewRegistrar(), serverZone() (+1 more)
 
-### Community 47 - "serveRuntime"
-Cohesion: 0.13
-Nodes (17): TestOpenRuntime(), clip(), Detect(), meshFilter(), New(), Sockets(), inspectOf(), serveRuntime() (+9 more)
+### Community 47 - "`internal/server/api`"
+Cohesion: 0.10
+Nodes (39): apiError, `internal/server/api`, ErrorMessage(), toAPIError(), newReplayCache(), TestReplayCache(), TestReplayCacheRefusesWhenFullOfLiveEntries(), NewHub() (+31 more)
 
 ### Community 48 - "README.md"
-Cohesion: 0.23
-Nodes (5): Building, Documentation, How it fits together, meshctl, Quick start
+Cohesion: 0.14
+Nodes (10): graphify, Packages, and which way they may import, Style, What this repo is, You do not run the gates, Building, Documentation, How it fits together (+2 more)
 
-### Community 49 - "Host"
-Cohesion: 0.05
-Nodes (44): link, Deps, exitHost, Host, Sysctl, peer(), TestLinksAddressesAndFailures(), Sysctls (+36 more)
+### Community 49 - "wg.go"
+Cohesion: 0.14
+Nodes (18): peer(), hexKey(), ParseUAPI(), uapiInt(), compareKeys(), Diff(), Change, Device (+10 more)
 
 ### Community 50 - ".query"
-Cohesion: 0.14
-Nodes (5): ContainerName, scanAll(), splitList(), PeerStat, StatusUpdate
+Cohesion: 0.13
+Nodes (6): ContainerName, scanAll(), splitList(), AuditEntry, PeerStat, StatusUpdate
 
 ### Community 51 - "sync.Mutex"
-Cohesion: 0.20
-Nodes (12): capped, golden(), newRig(), TestChangesNeedTheUIsOriginAndCSRF(), TestDashboard(), TestForms(), TestLogsPage(), TestOnlyTheUIsOwnHostIsServed() (+4 more)
+Cohesion: 0.36
+Nodes (10): golden(), newRig(), TestChangesNeedTheUIsOriginAndCSRF(), TestDashboard(), TestForms(), TestLogsPage(), TestOnlyTheUIsOwnHostIsServed(), TestSessionsAndLinksAreBounded() (+2 more)
 
-### Community 52 - ".queryRow"
-Cohesion: 0.10
-Nodes (5): AgentSession, HashToken(), NewToken(), Machine, Refusal
+### Community 52 - "serve"
+Cohesion: 0.12
+Nodes (24): brokenStream, ErrorBody, serve(), TestHealth(), TestHealthFailsWithoutTheDatabase(), distHarness(), TestDownloadsServeOnlyAllowlistedNames(), TestInstallPS1PinsTheChecksum() (+16 more)
 
 ### Community 53 - "LocalStatus"
-Cohesion: 0.08
-Nodes (27): statusDetail, dnsLine(), printExit(), Client, Logs, Handler(), logs(), refusal() (+19 more)
+Cohesion: 0.09
+Nodes (23): statusDetail, Client, Logs, Handler(), logs(), refusal(), laptop(), PrefsRequest (+15 more)
 
-### Community 54 - ".Set"
-Cohesion: 0.31
-Nodes (7): nrpt, parseServers(), serverList(), TestNRPTServers(), deleteRule(), flush(), ownedKeys()
+### Community 54 - "storeNode"
+Cohesion: 0.17
+Nodes (23): countingDB, harness, joinBody(), postJoin(), signed(), storeNode(), TestConfigAnswers304ForTheAppliedHash(), TestEventsEndAtAFailedSend() (+15 more)
 
 ### Community 55 - "errorf"
-Cohesion: 0.06
-Nodes (50): CopyInfo, IPv6Request, IPv6View, NodeDetail, NodeList, PhoneProfile, PhoneRequest, addresses() (+42 more)
+Cohesion: 0.07
+Nodes (41): NameSet, NodeAddRequest, PhoneRequest, Role, blockOf(), checkGroups(), checkName(), containerNetwork() (+33 more)
 
-### Community 56 - "Matcher"
-Cohesion: 0.29
-Nodes (4): serves(), Service, Matcher, matchRule
+### Community 56 - "time.Time"
+Cohesion: 0.12
+Nodes (13): replayCache, failures, LockoutError, ago(), serves(), sgt(), Health(), phoneHealth() (+5 more)
 
 ### Community 57 - "Client"
-Cohesion: 0.13
-Nodes (8): Session, apiError(), clip(), Client, StatusResponse, NamesResponse, ValidChallenge(), DroppedName
+Cohesion: 0.12
+Nodes (10): Session, apiError(), clip(), Client, StatusResponse, NamesResponse, HelloRequest, HelloResponse (+2 more)
 
 ### Community 58 - "exprs"
-Cohesion: 0.07
-Nodes (27): Route, route, Add a command, Add an agent API route, Dev script tasks, Developer guide, Extending the code, Goldens (+19 more)
+Cohesion: 0.09
+Nodes (17): Add a command, Add a validator, Dev script tasks, Developer guide, Extending the code, Goldens, Releases, Toolchain (+9 more)
 
 ### Community 59 - "Engine"
-Cohesion: 0.10
-Nodes (8): IPv6Host, Rechecker, Add an apply step, DNS, Engine, Firewall, MeshFirewall, PeerStatus
+Cohesion: 0.21
+Nodes (5): Rechecker, Add an apply step, Engine, Result, PeerStatus
 
 ### Community 60 - "meshDNS"
-Cohesion: 0.15
-Nodes (24): same(), answerOf(), ask(), meshDNS(), newRegistrar(), query(), TestNewZoneRejects(), TestSameRegistration() (+16 more)
+Cohesion: 0.20
+Nodes (25): same(), answerOf(), ask(), meshDNS(), newRegistrar(), query(), TestNewZoneRejects(), TestSameRegistration() (+17 more)
 
-### Community 61 - "AddrEntry"
-Cohesion: 0.33
-Nodes (6): addrs(), AddrEntry(), MergeRanges(), TestAddrEntry(), TestAddrRangePrefix(), TestMergeRanges()
+### Community 61 - "`internal/validate`"
+Cohesion: 0.11
+Nodes (22): Security invariants, `internal/validate`, addrs(), TestTimeZone(), AddrEntry(), MergeRanges(), TestAddrEntry(), TestAddrRangePrefix() (+14 more)
 
 ### Community 62 - "Sync"
-Cohesion: 0.14
-Nodes (34): Sysctls, NewNet(), TestTeardownFakes(), forHost(), TestForHostWithoutIPv6(), Gateway(), Guard(), Owned() (+26 more)
+Cohesion: 0.16
+Nodes (30): Sysctls, NewNet(), Gateway(), Guard(), Owned(), parse(), SlotOf(), Sync() (+22 more)
 
 ### Community 63 - ".Apply"
-Cohesion: 0.14
-Nodes (13): applied, Firewall, policy, Firewall, exitPolicy(), normalize(), relayPolicy(), richRule() (+5 more)
+Cohesion: 0.12
+Nodes (15): applied, Firewall, policy, Firewall, Runner, atLeast(), exitPolicy(), normalize() (+7 more)
 
-### Community 64 - "nullInt"
-Cohesion: 0.16
-Nodes (4): Add a database migration, DNSRecord, nullInt(), nullStr()
+### Community 64 - "Run"
+Cohesion: 0.15
+Nodes (18): Deps, Route, route, Add an agent API route, NewNodes(), AdminRoutes(), describe(), New() (+10 more)
 
 ### Community 65 - "kernel"
-Cohesion: 0.15
-Nodes (5): Status, TestCreateLinkNeedsPrivilege(), lookup(), kernel, links
+Cohesion: 0.11
+Nodes (9): Status, IPNet(), Prefix(), index(), route(), lookup(), netlinkTable, kernel (+1 more)
 
 ### Community 66 - ".meshctl"
 Cohesion: 0.18
-Nodes (11): A node's container on the host network (the NAS), Changes a node asks for, DNS, Interfaces the agent did not create, Security, Several meshes on one host, The host firewall, The local UI (internal/agent/localui) (+3 more)
+Nodes (14): 8. The web UI, Each node's local UI, The mesh firewall, Agent service (systemd), Changes a node asks for, DNS, Interfaces the agent did not create, Security (+6 more)
 
 ### Community 67 - "UI"
-Cohesion: 0.11
-Nodes (15): hostOf(), Listen(), New(), oldest(), TestServeAndListen(), validOrNot(), bytesize(), loadPages() (+7 more)
+Cohesion: 0.12
+Nodes (14): hostOf(), New(), oldest(), validOrNot(), bytesize(), loadPages(), prefsFlash(), UIToken (+6 more)
 
-### Community 69 - "Policy"
-Cohesion: 0.15
-Nodes (23): NewPolicy(), NewPolicy(), NewPolicy(), TestKernelNeedsPrivilege(), Compile(), Local, ofFamily(), compile() (+15 more)
+### Community 69 - "`internal/proto`"
+Cohesion: 0.07
+Nodes (51): `internal/proto`, TestBuildBatch(), TestKernelNeedsPrivilege(), Compile(), Local, compile(), dualPolicy(), officeHours() (+43 more)
 
-### Community 70 - "time.Time"
-Cohesion: 0.06
-Nodes (23): pendingApply, safeApply, syncBuffer, Failover, hubMove, hubState, replayCache, failures (+15 more)
+### Community 70 - "time.Duration"
+Cohesion: 0.10
+Nodes (12): Failover, hubMove, hubState, hitWindow, waitApplied(), Exec, TestJudgeHubs(), RateLimiter (+4 more)
 
 ### Community 71 - "fetchwintun/main_test.go"
+Cohesion: 0.21
+Nodes (12): `internal/tools/fetchwintun`, Pin, Sum(), download(), extract(), fetch(), TestDownload(), TestExtractChecksTheDLL() (+4 more)
+
+### Community 72 - "net/http.Request"
 Cohesion: 0.14
-Nodes (20): `internal/tools/fetchwintun`, `internal/tools/vulnjudge`, Shared fixtures -- `internal/testfix`, Test catalogue, NewUserspace(), Ensure(), Pin, install() (+12 more)
+Nodes (9): fakeServer, signed(), Definitive(), SignRefusal(), TestCookieAndCSRF(), ClearCookie(), CookieValue(), SetCookie() (+1 more)
 
-### Community 72 - "fakeServer"
-Cohesion: 0.28
-Nodes (3): fakeServer, signed(), Definitive()
-
-### Community 73 - "Tx"
-Cohesion: 0.06
-Nodes (34): MeshList, MeshSetRequest, meshSpace, MeshUpdate, NodeAddRequest, NodeSetRequest, SegmentView, SettingsRequest (+26 more)
+### Community 73 - ".AddMesh"
+Cohesion: 0.10
+Nodes (23): Change, MeshList, meshSpace, SoleMesh(), ULAPrefix(), checkApart(), clash(), freeCIDR() (+15 more)
 
 ### Community 74 - "ui"
 Cohesion: 0.09
-Nodes (20): decode(), reply(), TestCookieAndCSRF(), ClearCookie(), CookieValue(), Session, SetCookie(), anyText() (+12 more)
+Nodes (11): Session, listOf(), meshChanged(), title(), atoi(), before(), changed(), versionNumber() (+3 more)
 
-### Community 75 - "Of"
-Cohesion: 0.13
-Nodes (12): fakeRuntime, Container, hostAddr(), Of(), TestHostAddr(), TestOf(), TestOfCapsTheNames(), TestOfSwarmWithoutAStack() (+4 more)
+### Community 75 - "Container"
+Cohesion: 0.31
+Nodes (4): fakeRuntime, Container, ContainerName, NamesRequest
 
 ### Community 76 - "rulesFor"
-Cohesion: 0.33
-Nodes (12): nrptRule, desired(), domainName(), TestZoneFollowsTheConfig(), fromRules(), keyPart(), nrptKey(), ownedKey() (+4 more)
+Cohesion: 0.18
+Nodes (18): nrpt, nrptRule, desired(), domainName(), fromRules(), keyPart(), nrptKey(), ownedKey() (+10 more)
 
 ### Community 77 - "Sync"
-Cohesion: 0.05
-Nodes (28): Family, netlinkPolicy, otherPolicy, Policy, mutate(), Desired(), Policy, Route (+20 more)
+Cohesion: 0.06
+Nodes (20): Family, netlinkPolicy, otherPolicy, Policy, mutate(), Desired(), Policy, Route (+12 more)
 
 ### Community 78 - ".readJSON"
 Cohesion: 0.22
 Nodes (3): Host, Refused, Session
 
 ### Community 79 - "net/netip.Addr"
-Cohesion: 0.09
-Nodes (22): network, hostAddrs, nameTable, zone, Apply (agent), proxied(), gateway(), host() (+14 more)
+Cohesion: 0.08
+Nodes (26): network, hostAddrs, nameTable, zone, gateway(), host(), proxy(), records() (+18 more)
 
 ### Community 80 - "resolved"
-Cohesion: 0.31
-Nodes (5): linkDomain, resolved, classify(), foreignNetns(), TestClassifyBusErrors()
+Cohesion: 0.35
+Nodes (4): linkDomain, resolved, classify(), foreignNetns()
 
 ### Community 81 - "Segmentation"
 Cohesion: 0.09
-Nodes (26): RecordRequest, segLiteral, segDoc, Actor, segLiterals(), plannerSegmentation(), PolicyZone(), MeshChange (+18 more)
+Nodes (31): MeshSetRequest, RecordRequest, segLiteral, SettingsRequest, segDoc, addIPv6(), Actor, moveMeshIP6() (+23 more)
 
-### Community 82 - "io.Writer"
-Cohesion: 0.25
-Nodes (9): TestBytesize(), TestPrintEnrollmentInTheLocalZone(), printMesh(), printChange(), printEnrollment(), bytesize(), printStatus(), Write() (+1 more)
+### Community 82 - "printStatus"
+Cohesion: 0.40
+Nodes (5): TestBytesize(), dnsLine(), setupDNS(), bytesize(), printStatus()
 
 ### Community 83 - "io.Reader"
-Cohesion: 0.33
-Nodes (3): watchdog, Read(), ReadSegmentation()
+Cohesion: 0.29
+Nodes (4): watchdog, setupImport(), Read(), ReadSegmentation()
 
 ### Community 84 - ".renderPolicies"
-Cohesion: 0.06
-Nodes (29): SegPolicy, SegSchedule, newPolicyForm(), readPolicyForm(), readZoneForm(), ruleRows(), scheduleText(), tabsIn() (+21 more)
+Cohesion: 0.08
+Nodes (22): SegPolicy, SegSchedule, anyText(), listText(), objectRows(), readPolicyForm(), readZoneForm(), ruleRows() (+14 more)
 
 ### Community 85 - "deploy_test.go"
-Cohesion: 0.08
-Nodes (41): block, checkPosture(), controlEnv(), keys(), mustRead(), sameSet(), service(), startHealth() (+33 more)
+Cohesion: 0.19
+Nodes (24): checkPosture(), controlEnv(), keys(), mustRead(), sameSet(), service(), startHealth(), TestControlComposePosture() (+16 more)
 
-### Community 86 - "service_windows.go"
-Cohesion: 0.16
-Nodes (9): uninstallAgent(), main(), ttyPassword(), commandLine(), stop(), TestAvailableNeedsElevation(), TestCommandLineQuotesThePaths(), Windows() (+1 more)
+### Community 86 - "Open"
+Cohesion: 0.15
+Nodes (20): TestExportOnceFails(), TestExportOnceWritesEachMesh(), Import(), document(), linuxOnly(), TestImportIntoANamedMesh(), TestImportRefusesInvalidDocumentsUntouched(), TestImportRefusesWhileTheServerRuns() (+12 more)
 
 ### Community 87 - "File"
-Cohesion: 0.19
-Nodes (8): agentLog(), OpenFile(), TestFileRotates(), lockFile(), unlockFile(), lockFile(), unlockFile(), File
+Cohesion: 0.21
+Nodes (7): agentLog(), OpenFile(), lockFile(), unlockFile(), lockFile(), unlockFile(), File
 
-### Community 90 - "JoinRequest"
-Cohesion: 0.33
-Nodes (6): JoinRequest, pickEndpoint(), pickEndpoint6(), public6(), TestPickEndpoint(), TestPickEndpoint6()
+### Community 90 - "Host"
+Cohesion: 0.16
+Nodes (3): link, exitHost, Host
 
 ### Community 93 - "services"
 Cohesion: 0.32
 Nodes (7): addrText(), Rule, merged(), portText(), services(), Range, service
 
 ### Community 94 - "Ruleset"
-Cohesion: 0.10
-Nodes (10): watchingFirewall, Kernel, Ruleset, admit(), walk(), Chain, Enforcer, Kernel (+2 more)
+Cohesion: 0.11
+Nodes (9): Kernel, Ruleset, admit(), walk(), Chain, Enforcer, Kernel, noKernel (+1 more)
 
 ### Community 95 - "Diff"
 Cohesion: 0.29
 Nodes (6): Diff, versionData, versionRow, versionsData, FieldChange, NodeDiff
 
-### Community 96 - "ValidSecret"
-Cohesion: 0.40
-Nodes (3): HelloRequest, HelloResponse, ValidSecret()
+### Community 96 - "samples_test.go"
+Cohesion: 0.19
+Nodes (14): block, checkComposeSample(), checkKubeSample(), checkRunSample(), dig(), docBlocks(), mountsMachineID(), sampleVolume() (+6 more)
 
 ### Community 98 - "userspace"
-Cohesion: 0.08
-Nodes (7): NewUserspace(), defaultInterface(), exitRoutes(), unspecified(), Link, userspace, wgdev
+Cohesion: 0.10
+Nodes (8): adapterPart(), adapterSlot(), NewUserspace(), adapterGUID(), defaultInterface(), exitRoutes(), Link, userspace
 
-### Community 99 - "TestOneRunningCopy"
-Cohesion: 0.33
-Nodes (4): tail(), lab, staleTicket(), TestOneRunningCopy()
+### Community 99 - "ns"
+Cohesion: 0.16
+Nodes (10): lab, TestContainerNetworks(), deleteNamespaces(), ns(), tail(), lab, TestRelayFailover(), lab (+2 more)
 
-### Community 100 - "loadMigrations"
-Cohesion: 0.33
-Nodes (3): loadMigrations(), TestLoadMigrationsValidatesNames(), migration
+### Community 100 - "context.Context"
+Cohesion: 0.06
+Nodes (24): IPv6Request, IPv6View, MeshUpdate, NodeSetRequest, DNS, Firewall, MeshFirewall, dial() (+16 more)
+
+### Community 101 - "fail"
+Cohesion: 0.14
+Nodes (16): TestTimestamp(), Timestamp(), TimeZone(), fail(), LocalToken(), mask(), PipePath(), POSIXPath() (+8 more)
 
 ### Community 102 - "run"
-Cohesion: 0.18
-Nodes (19): agentCommands(), commands(), firewallCommands(), healthCommands(), find(), isHelp(), printUsage(), run() (+11 more)
+Cohesion: 0.13
+Nodes (27): agentCommands(), argSynopsis(), commands(), newFlags(), parseArgs(), parseFlags(), printFlags(), setupVersion() (+19 more)
 
-### Community 103 - "Table"
-Cohesion: 0.36
-Nodes (5): NewTable(), Table, Sync(), NewTable(), NewTable()
+### Community 103 - "sync.Mutex"
+Cohesion: 0.15
+Nodes (6): syncBuffer, Deps, Sysctl, Sysctls, Sysctl, syncBuffer
 
 ### Community 104 - "Schedule"
-Cohesion: 0.24
-Nodes (7): The mesh firewall, Clock(), Window, Schedule(), TestSchedule(), TestWindowHolds(), weekday()
+Cohesion: 0.15
+Nodes (11): Matrix, MatrixCell, PolicyRule, Schedule, Clock(), Window, Schedule(), TestSchedule() (+3 more)
 
-### Community 105 - "8. The web UI"
-Cohesion: 0.67
-Nodes (3): 8. The web UI, Each node's local UI, The mesh firewall
+### Community 105 - "NodeInfo"
+Cohesion: 0.18
+Nodes (11): CopyInfo, NodeDetail, NodeList, PhoneProfile, addresses(), heard(), ContainerNetwork, NodeInfo (+3 more)
 
 ### Community 106 - "context.Context"
-Cohesion: 0.06
-Nodes (35): fakeService, Access, Config, DB, Params, Pending, Sealer, resetTOTP() (+27 more)
+Cohesion: 0.07
+Nodes (25): Access, Config, DB, Lockout, Pending, Sealer, resetTOTP(), fullExpiry() (+17 more)
 
-### Community 112 - "TestMain"
-Cohesion: 0.05
-Nodes (11): Error, NewNet(), NewNet(), NewKernel(), NewKernel(), Refusal, usageError, AliveRequest (+3 more)
+### Community 109 - "Containers"
+Cohesion: 0.18
+Nodes (11): 1. The mesh network, once per host, 2. The agent, 3. A service on the mesh, A client node on the host network, A host-mode node's containers, Container mode, Container names, Containers (+3 more)
+
+### Community 111 - "Prefix6"
+Cohesion: 0.24
+Nodes (8): plain6(), Prefix(), Prefix6(), ServiceEntry(), TestServiceEntry(), Prefix4(), TestPrefix4(), Interface
 
 ### Community 113 - "Engine"
-Cohesion: 0.19
-Nodes (4): nameServer, DNS, Want, MeshName
+Cohesion: 0.15
+Nodes (6): nameServer, DNS, Want, MeshView, MeshName, MeshNode
+
+### Community 114 - ".apply"
+Cohesion: 0.38
+Nodes (4): pendingApply, safeApply, 12. Troubleshooting, TestSafeApplyStateMachine()
 
 ### Community 115 - ".Reach"
-Cohesion: 0.25
-Nodes (7): ReachRequest, flowEnd(), flowEnds(), ReachResult, matrixCell, matrixRow, reachView
+Cohesion: 0.18
+Nodes (9): ReachRequest, SegmentView, ZoneView, activeAt(), ReachResult, zoneOf(), matrixCell, matrixRow (+1 more)
 
-### Community 116 - "ns"
-Cohesion: 0.11
-Nodes (17): End to end -- `test/e2e`, host, lab, TestContainerNetworks(), lab, TestDualStack(), deleteNamespaces(), inNS() (+9 more)
+### Community 116 - "Test catalogue"
+Cohesion: 0.15
+Nodes (10): Several meshes on one host, End to end -- `test/e2e`, `internal/tools/vulnjudge`, Test catalogue, host, lab, stream, TestMeshFirewall() (+2 more)
+
+### Community 117 - ".events"
+Cohesion: 0.27
+Nodes (7): TestSSERoundTrip(), TestSSEWriterRefusesFrameInjection(), WriteComment(), WriteEvent(), WriteRetry(), Event, Reader
+
+### Community 119 - "IP"
+Cohesion: 0.28
+Nodes (8): validateMeshNames(), IP(), DNSName(), Domains(), TestDNSName(), TestDomains(), TestZone(), Zone()
+
+### Community 120 - "DefaultPolicy"
+Cohesion: 0.36
+Nodes (8): DefaultPolicy(), LegacySegmentation(), TestMigrationTurnsRulesIntoPolicies(), testSegmentation(), TestSegmentationRoundTrip(), TestSegmentationValidate(), TestSetSegmentationRefusesAStranger(), FirewallRule
 
 ### Community 121 - "`internal/server` and `internal/server/export`"
-Cohesion: 0.07
-Nodes (43): `internal/server` and `internal/server/export`, TestRead(), FromSnapshot(), Document, dualSnapshot(), legacy(), snapshot(), TestDualStackExport() (+35 more)
+Cohesion: 0.12
+Nodes (22): `internal/server` and `internal/server/export`, DB, FromSnapshot(), Document, dualSnapshot(), legacy(), snapshot(), TestDualStackExport() (+14 more)
 
-### Community 122 - "stream"
+### Community 122 - "Writer"
+Cohesion: 0.29
+Nodes (3): New(), New(), Writer
+
+### Community 123 - "Deps"
+Cohesion: 0.23
+Nodes (9): Deps, source, Reset(), clean(), first(), fromFile(), sources(), Read() (+1 more)
+
+### Community 124 - "run"
 Cohesion: 0.33
-Nodes (4): dial(), dial(), isPipe(), stream
+Nodes (5): TestExporterRunExportsAtNight(), TestRunGivesTheMeshIPv6(), main(), run(), TestRun()
 
-### Community 123 - "fromFile"
-Cohesion: 0.32
-Nodes (8): source, clean(), first(), fromFile(), sources(), Read(), TestFirst(), sources()
+### Community 125 - "ServerURL"
+Cohesion: 0.33
+Nodes (5): Hostname(), isLoopbackHost(), ServerURL(), TestHostnameFoldsCase(), TestServerURL()
+
+### Community 126 - "DNSView"
+Cohesion: 0.40
+Nodes (5): DNSEntry, NameEntry, DNSView, dnsData, recordForm
+
+### Community 128 - "newQR"
+Cohesion: 0.67
+Nodes (3): newQR(), phoneData, qrCode
 
 ### Community 130 - "Slot"
-Cohesion: 0.11
-Nodes (15): TestPolicyHasKernelSemantics(), Priorities(), SlotOf(), TestSlotOf(), NewKernel(), NewKernel(), adapterPart(), adapterSlot() (+7 more)
+Cohesion: 0.14
+Nodes (10): Pipe(), Priorities(), TestSlotOf(), NewKernel(), NewKernel(), SysctlKeys(), Slot, InterfaceSlot() (+2 more)
 
 ## Knowledge Gaps
 - **9 isolated node(s):** `github.com/hafio/vpn-mesh-utility`, `fakeServer`, `harness`, `harness`, `NO_COLOR` (+4 more)
-  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 385 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
-- **18 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 379 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
+- **27 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `Agent (`internal/agent/...`)` connect `Agent (`internal/agent/...`)` to `WGKey`, `Slot`, `archtest.go`, `net.Listener`, ``internal/proto``, `Node`, `Dir`, `Agent (`internal/agent/...`)`, `Join`, `lab`, `.mesh`, `context.Context`, `newRig`, `Service`, `agent/agent_test.go`, `testing.T`, `log/slog.Logger`, `NodeConfig`, `netlinkNet`, `serveRuntime`, `Host`, `sync.Mutex`, `.Set`, `Matcher`, `exprs`, `Engine`, `meshDNS`, `Sync`, `kernel`, `UI`, `Policy`, `time.Time`, `fetchwintun/main_test.go`, `Of`, `rulesFor`, `Sync`, `resolved`, `deploy_test.go`, `service_windows.go`, `File`, `Engine`, ``internal/server` and `internal/server/export``, `fromFile`?**
-  _High betweenness centrality (0.028) - this node is a cross-community bridge._
-- **Are the 307 inferred relationships involving `Agent (`internal/agent/...`)` (e.g. with `.SetFail()` and `.mesh()`) actually correct?**
-  _`Agent (`internal/agent/...`)` has 307 INFERRED edges - model-reasoned connections that need verification._
+- **Why does `Agent (`internal/agent/...`)` connect `testing.T` to `WGKey`, `Session`, `Node`, `Dir`, `Agent (`internal/agent/...`)`, `Run`, `.mesh`, `NodeConfig`, `newRig`, `agent/agent_test.go`, `sync.Mutex`, `time.Time`, `exprs`, `Engine`, `meshDNS`, `Sync`, `Run`, `.meshctl`, ``internal/proto``, `rulesFor`, `Host`, `Engine`, `.apply`, `Test catalogue`?**
+  _High betweenness centrality (0.034) - this node is a cross-community bridge._
+- **Are the 303 inferred relationships involving `Agent (`internal/agent/...`)` (e.g. with `.SetFail()` and `.mesh()`) actually correct?**
+  _`Agent (`internal/agent/...`)` has 303 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `github.com/hafio/vpn-mesh-utility`, `fakeServer`, `harness` to the rest of the system?**
   _9 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `ui/ui_test.go` be split into smaller, more focused modules?**
-  _Cohesion score 0.08949997769748874 - nodes in this community are weakly interconnected._
-- **Why does `on()` connect `htmx.min.js` to `testing.T`, `kernel`, `.mesh`?**
-  _High betweenness centrality (0.023) - this node is a cross-community bridge._
+  _Cohesion score 0.0922263771034086 - nodes in this community are weakly interconnected._
+- **Why does `Slot` connect `Slot` to `ui/ui_test.go`, `Name`, `Session`, `net/http.ResponseWriter`, `Dir`, `Run`, `Input`, `.mesh`, `newRig`, `testing.T`, `netlinkNet`, `Net`, `Registration`, `LocalStatus`, `errorf`, `Sync`, `.Apply`, `net/http.Request`, `rulesFor`, `Sync`, `net/netip.Addr`, `userspace`, `sync.Mutex`, `Writer`, `Deps`?**
+  _High betweenness centrality (0.017) - this node is a cross-community bridge._
 - **Should `WGKey` be split into smaller, more focused modules?**
-  _Cohesion score 0.11918367346938775 - nodes in this community are weakly interconnected._
-- **Why does `otherPolicy` connect `Sync` to `ui/ui_test.go`?**
-  _High betweenness centrality (0.022) - this node is a cross-community bridge._
+  _Cohesion score 0.13725490196078433 - nodes in this community are weakly interconnected._
+- **Why does `runner` connect `context.Context` to `ui/ui_test.go`, `newRig`, `log/slog.Logger`, `sync.Mutex`, `Engine`, `net/netip.AddrPort`, `.apply`, `Dir`, `Run`, `LocalStatus`, `time.Time`, `Client`, `Deps`, `NodeConfig`?**
+  _High betweenness centrality (0.015) - this node is a cross-community bridge._

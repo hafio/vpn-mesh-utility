@@ -154,8 +154,10 @@ type NodeSetRequest struct {
 type Enrollment struct {
 	Token     string `json:"token"`
 	ExpiresAt int64  `json:"expires_at"`
-	// Install is the one-line install for a Linux host.
-	Install string `json:"install"`
+	// Install is the one-line install for a Linux host, InstallWindows for
+	// an elevated PowerShell (amendment A51).
+	Install        string `json:"install"`
+	InstallWindows string `json:"install_windows"`
 	// Join is the agent command for a host that already has meshctl.
 	Join string `json:"join"`
 }

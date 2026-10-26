@@ -380,7 +380,8 @@ func TestNodeLifecycle(t *testing.T) {
 
 	w := post("/m/default/nodes", url.Values{"name": {"vps-1"}, "role": {"server"}, "endpoint": {"203.0.113.10:51820"}, "can_exit": {"on"}})
 	body := w.Body.String()
-	if w.Code != http.StatusOK || !strings.Contains(body, "shown once") || !strings.Contains(body, "install.sh | sudo sh -s -- --token ") {
+	if w.Code != http.StatusOK || !strings.Contains(body, "shown once") || !strings.Contains(body, "install.sh | sudo sh -s -- --mesh default --token ") ||
+		!strings.Contains(body, "elevated PowerShell") {
 		t.Fatalf("add = %d\n%s", w.Code, body)
 	}
 	if w := post("/m/default/nodes", url.Values{"name": {"Bad Name"}, "role": {"server"}}); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), `value="Bad Name"`) {

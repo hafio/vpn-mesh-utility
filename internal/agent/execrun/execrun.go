@@ -26,14 +26,9 @@ type Runner interface {
 // ErrNotInstalled means the program is not on PATH.
 var ErrNotInstalled = errors.New("program is not installed")
 
-// allowed is the closed set of programs the agent may run.
-func allowed(name string) bool {
-	switch name {
-	case "firewall-cmd", "systemctl":
-		return true
-	}
-	return false
-}
+// allowed is the closed set of programs the agent may run: firewall-cmd
+// only (the install scripts set up the service, amendment A51).
+func allowed(name string) bool { return name == "firewall-cmd" }
 
 // Check is the shell-layer gate: an allowlisted program, and validate.Arg on
 // every element.

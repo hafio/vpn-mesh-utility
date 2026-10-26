@@ -1,13 +1,13 @@
 // Package deploy holds the artifacts meshctl installs or serves: the agent's
-// systemd unit, the install.sh template and the control plane's compose and
-// stack files. meshctl generates no container deployment of a node
+// systemd unit, the install.sh and install.ps1 templates and the control
+// plane's compose and stack files. meshctl generates no container deployment of a node
 // (amendment A48); docs/containers.md has samples, and samples_test.go
 // holds them to the posture the files here state: each one states its
 // security posture explicitly instead of inheriting defaults, and the tests
 // pin it (docs/security.md explains every widening).
 //
-// It imports only internal/validate, so the control plane (which serves
-// install.sh) and the agent (which installs the unit) can both use it.
+// It imports only internal/validate. The scripts install the agent's
+// service (amendment A51); the binary installs none.
 package deploy
 
 import (
@@ -20,23 +20,21 @@ import (
 	"github.com/hafio/vpn-mesh-utility/internal/validate"
 )
 
-//go:embed meshctl-agent.service
+//go:embed meshctl-agent@.service
 var systemdUnit string
 
 //go:embed install.sh.tmpl
 var installTemplate string
 
+//go:embed install.ps1.tmpl
+var installPS1Template string
+
 //go:embed compose.control.yml
 var composeControl string
 
-// UnitPath is where `meshctl agent join` installs the unit.
-const UnitPath = "/etc/systemd/system/meshctl-agent.service"
-
-// UnitName is the agent's systemd unit.
-const UnitName = "meshctl-agent.service"
-
-// BinaryPath is where install.sh puts meshctl and where the unit runs it.
-const BinaryPath = "/usr/local/bin/meshctl"
+// UnitName is the agent's systemd unit, a template: install.sh starts the
+// instance meshctl-agent@<mesh> for the mesh a node joins (amendment A51).
+const UnitName = "meshctl-agent@.service"
 
 // SystemdUnit returns the agent's unit file. It is static: nothing from
 // outside the binary is ever written into it.
@@ -54,11 +52,17 @@ const (
 	markerVersion     = "@@MESHCTL_VERSION@@"
 	markerSHA256Amd64 = "@@MESHCTL_SHA256_AMD64@@"
 	markerSHA256Arm64 = "@@MESHCTL_SHA256_ARM64@@"
+	// markerUnit is a line of its own inside a quoted here-document; the
+	// unit, which is static, takes its place.
+	markerUnit = "@@MESHCTL_UNIT@@\n"
+	// markerSHA256Windows is install.ps1's checksum of
+	// meshctl-windows-amd64.exe.
+	markerSHA256Windows = "@@MESHCTL_SHA256_WINDOWS@@"
 )
 
 var reSHA256 = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-// InstallParams are the values written into install.sh.
+// InstallParams are the values written into install.sh and install.ps1.
 type InstallParams struct {
 	// Origin is the server's public origin; the script downloads from it and
 	// joins it.
@@ -66,14 +70,48 @@ type InstallParams struct {
 	// Version is the meshctl version the script installs.
 	Version string
 	// SHA256Amd64 and SHA256Arm64 are the hex SHA-256 of
-	// meshctl-linux-amd64 and meshctl-linux-arm64.
-	SHA256Amd64 string
-	SHA256Arm64 string
+	// meshctl-linux-amd64 and meshctl-linux-arm64 (install.sh),
+	// SHA256Windows of meshctl-windows-amd64.exe (install.ps1).
+	SHA256Amd64   string
+	SHA256Arm64   string
+	SHA256Windows string
 }
 
 // RenderInstall returns install.sh for p. Every value is checked against its
 // grammar first, so a bad value fails here instead of reaching a shell.
 func RenderInstall(p InstallParams) ([]byte, error) {
+	errs := p.check(map[string]string{"meshctl-linux-amd64": p.SHA256Amd64, "meshctl-linux-arm64": p.SHA256Arm64})
+	if err := errors.Join(errs...); err != nil {
+		return nil, fmt.Errorf("render install.sh: %w", err)
+	}
+	r := strings.NewReplacer(
+		markerOrigin, p.Origin,
+		markerVersion, p.Version,
+		markerSHA256Amd64, p.SHA256Amd64,
+		markerSHA256Arm64, p.SHA256Arm64,
+		markerUnit, systemdUnit,
+	)
+	return []byte(r.Replace(installTemplate)), nil
+}
+
+// RenderInstallPS1 returns install.ps1 for p, its values checked as
+// RenderInstall checks them.
+func RenderInstallPS1(p InstallParams) ([]byte, error) {
+	errs := p.check(map[string]string{"meshctl-windows-amd64.exe": p.SHA256Windows})
+	if err := errors.Join(errs...); err != nil {
+		return nil, fmt.Errorf("render install.ps1: %w", err)
+	}
+	r := strings.NewReplacer(
+		markerOrigin, p.Origin,
+		markerVersion, p.Version,
+		markerSHA256Windows, p.SHA256Windows,
+	)
+	return []byte(r.Replace(installPS1Template)), nil
+}
+
+// check holds the origin, the version and the checksums of sums (by
+// file) to their grammars.
+func (p InstallParams) check(sums map[string]string) []error {
 	var errs []error
 	origin, err := validate.ServerURL("origin", p.Origin)
 	if err != nil {
@@ -84,19 +122,10 @@ func RenderInstall(p InstallParams) ([]byte, error) {
 	if _, err := validate.Version("version", p.Version); err != nil {
 		errs = append(errs, err)
 	}
-	for arch, sum := range map[string]string{"amd64": p.SHA256Amd64, "arm64": p.SHA256Arm64} {
+	for file, sum := range sums {
 		if !reSHA256.MatchString(sum) {
-			errs = append(errs, fmt.Errorf("sha256 of meshctl-linux-%s: must be 64 lowercase hex characters (is SHA256SUMS complete)", arch))
+			errs = append(errs, fmt.Errorf("sha256 of %s: must be 64 lowercase hex characters (is SHA256SUMS complete)", file))
 		}
 	}
-	if err := errors.Join(errs...); err != nil {
-		return nil, fmt.Errorf("render install.sh: %w", err)
-	}
-	r := strings.NewReplacer(
-		markerOrigin, p.Origin,
-		markerVersion, p.Version,
-		markerSHA256Amd64, p.SHA256Amd64,
-		markerSHA256Arm64, p.SHA256Arm64,
-	)
-	return []byte(r.Replace(installTemplate)), nil
+	return errs
 }

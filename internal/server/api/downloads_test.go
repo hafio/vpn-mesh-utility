@@ -24,9 +24,10 @@ func distHarness(t *testing.T, files map[string]string) http.Handler {
 }
 
 var (
-	sumAmd64 = strings.Repeat("a", 64)
-	sumArm64 = strings.Repeat("b", 64)
-	sums     = sumAmd64 + "  meshctl-linux-amd64\n" + sumArm64 + "  meshctl-linux-arm64\n"
+	sumAmd64   = strings.Repeat("a", 64)
+	sumArm64   = strings.Repeat("b", 64)
+	sumWindows = strings.Repeat("c", 64)
+	sums       = sumAmd64 + "  meshctl-linux-amd64\n" + sumArm64 + "  meshctl-linux-arm64\n" + sumWindows + "  meshctl-windows-amd64.exe\n"
 )
 
 func TestDownloadsServeOnlyAllowlistedNames(t *testing.T) {
@@ -55,8 +56,31 @@ func TestInstallScriptPinsTheChecksums(t *testing.T) {
 			t.Errorf("install.sh lacks %s", want)
 		}
 	}
+	if strings.Contains(body, "@@") || !strings.Contains(body, "ExecStart=/usr/local/bin/meshctl agent run --mesh %i") {
+		t.Error("install.sh still has a marker, or lacks the unit")
+	}
+}
+
+// install.ps1 (amendment A51) pins the Windows binary's checksum the same
+// way, and needs it.
+func TestInstallPS1PinsTheChecksum(t *testing.T) {
+	h := distHarness(t, map[string]string{"SHA256SUMS": sums})
+	w, eb := serve(h, httptest.NewRequest(http.MethodGet, proto.PathInstallPS1, nil))
+	if w.Code != 200 {
+		t.Fatalf("%d %s", w.Code, eb.Message)
+	}
+	body := w.Body.String()
+	for _, want := range []string{"$Origin = '" + testURL + "'", "$Version = 'v1.2.3'", "$Sha256 = '" + sumWindows + "'"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("install.ps1 lacks %s", want)
+		}
+	}
 	if strings.Contains(body, "@@") {
-		t.Error("install.sh still has a marker")
+		t.Error("install.ps1 still has a marker")
+	}
+	linuxOnly := distHarness(t, map[string]string{"SHA256SUMS": sumAmd64 + "  meshctl-linux-amd64\n" + sumArm64 + "  meshctl-linux-arm64\n"})
+	if w, _ := serve(linuxOnly, httptest.NewRequest(http.MethodGet, proto.PathInstallPS1, nil)); w.Code != 500 {
+		t.Fatalf("no Windows checksum: %d", w.Code)
 	}
 }
 
@@ -69,7 +93,7 @@ func TestInstallScriptFailsWithoutChecksums(t *testing.T) {
 		t.Fatalf("missing arm64 checksum: %d", w.Code)
 	}
 	h := newHarness(t)
-	for _, p := range []string{proto.PathInstall, proto.PathDownload + "SHA256SUMS"} {
+	for _, p := range []string{proto.PathInstall, proto.PathInstallPS1, proto.PathDownload + "SHA256SUMS"} {
 		if w, eb := serve(h.pub, httptest.NewRequest(http.MethodGet, p, nil)); w.Code != 404 || !strings.Contains(eb.Message, "MESHCTL_DIST_DIR") {
 			t.Errorf("%s without a dist dir: %d %q", p, w.Code, eb.Message)
 		}

@@ -24,9 +24,11 @@ const (
 // Public paths served next to the agent API: the health probe and the
 // self-hosted install script and binaries (amendment A14).
 const (
-	PathHealth   = "/healthz"
-	PathInstall  = "/install.sh"
-	PathDownload = "/dl/"
+	PathHealth  = "/healthz"
+	PathInstall = "/install.sh"
+	// PathInstallPS1 is the Windows installer (amendment A51).
+	PathInstallPS1 = "/install.ps1"
+	PathDownload   = "/dl/"
 )
 
 // ETag is the HTTP entity tag of a config: its quoted Hash. GET config with
@@ -97,6 +99,9 @@ type JoinRequest struct {
 	// MachineID is the host's machine id as HelloRequest carries it
 	// (amendment A50): the node is pinned to this machine.
 	MachineID string `json:"machine_id"`
+	// Mesh, when set, must be the name of the token's node's mesh
+	// (amendment A51): the agent's data dir and service are named after it.
+	Mesh string `json:"mesh,omitempty"`
 }
 
 // Validate normalises the request in place and reports every bad field.
@@ -114,6 +119,10 @@ func (r *JoinRequest) Validate() error {
 	if r.Name != "" {
 		s, err = validate.Name("name", r.Name)
 		keep(s, err, &r.Name)
+	}
+	if r.Mesh != "" {
+		s, err = validate.Name("mesh", r.Mesh)
+		keep(s, err, &r.Mesh)
 	}
 	s, err = validate.Hostname("hostname", r.Hostname)
 	keep(s, err, &r.Hostname)

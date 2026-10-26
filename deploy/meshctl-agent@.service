@@ -1,23 +1,25 @@
-# meshctl agent. `meshctl agent join` installs this file unchanged to
-# /etc/systemd/system/meshctl-agent.service. The agent runs as root (it owns
-# wg0, routes, sysctls and, on servers, firewalld), but only with the two
-# capabilities that needs, on a read-only system. docs/security.md explains
-# each setting; deploy_test.go pins them.
+# meshctl agent, one instance per mesh (amendment A51): meshctl-agent@<mesh>
+# runs the agent of the mesh <mesh> on /var/lib/meshctl/<mesh>. install.sh
+# installs this file unchanged to /etc/systemd/system/meshctl-agent@.service.
+# The agent runs as root (it owns its interface, routes, sysctls and, on
+# servers, firewalld), but only with the two capabilities that needs, on a
+# read-only system. docs/security.md explains each setting; deploy_test.go
+# pins them.
 [Unit]
-Description=meshctl mesh agent
+Description=meshctl mesh agent (%i)
 Documentation=https://github.com/hafio/vpn-mesh-utility
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/meshctl agent run --data /var/lib/meshctl
+ExecStart=/usr/local/bin/meshctl agent run --mesh %i
 Restart=always
 RestartSec=5
 # Exit 3: the control plane refused this node (amendment A50); it stays
 # stopped until an operator acts.
 RestartPreventExitStatus=3
-StateDirectory=meshctl
+StateDirectory=meshctl/%i
 StateDirectoryMode=0700
 RuntimeDirectory=meshctl wireguard
 RuntimeDirectoryMode=0755

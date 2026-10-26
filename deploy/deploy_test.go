@@ -22,11 +22,11 @@ var update = flag.Bool("update", false, "rewrite testdata goldens")
 // ProtectKernelTunables (it writes net.ipv4.ip_forward).
 var wantService = map[string]string{
 	"Type":                     "simple",
-	"ExecStart":                "/usr/local/bin/meshctl agent run --data /var/lib/meshctl",
+	"ExecStart":                "/usr/local/bin/meshctl agent run --mesh %i",
 	"Restart":                  "always",
 	"RestartSec":               "5",
 	"RestartPreventExitStatus": "3",
-	"StateDirectory":           "meshctl",
+	"StateDirectory":           "meshctl/%i",
 	"StateDirectoryMode":       "0700",
 	"RuntimeDirectory":         "meshctl wireguard",
 	"RuntimeDirectoryMode":     "0755",
@@ -91,30 +91,36 @@ func TestUnitPosture(t *testing.T) {
 	if !strings.Contains(string(SystemdUnit()), "WantedBy=multi-user.target") {
 		t.Error("the unit must be enabled for multi-user.target")
 	}
+	// install.sh writes it through a here-document that this line ends.
+	if strings.Contains("\n"+string(SystemdUnit()), "\nMESHCTL_UNIT\n") || !strings.HasSuffix(string(SystemdUnit()), "\n") {
+		t.Error("the unit would end install.sh's here-document early, or does not end in a newline")
+	}
 }
 
 func testParams() InstallParams {
 	return InstallParams{Origin: "https://mesh.example.com", Version: "v1.2.3",
-		SHA256Amd64: strings.Repeat("a", 64), SHA256Arm64: strings.Repeat("b", 64)}
+		SHA256Amd64: strings.Repeat("a", 64), SHA256Arm64: strings.Repeat("b", 64), SHA256Windows: strings.Repeat("c", 64)}
 }
 
 func TestInstallGolden(t *testing.T) {
-	got, err := RenderInstall(testParams())
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join("testdata", "install.golden.sh")
-	if *update {
-		if err := os.WriteFile(path, got, 0o644); err != nil {
+	for name, render := range map[string]func(InstallParams) ([]byte, error){"install.golden.sh": RenderInstall, "install.golden.ps1": RenderInstallPS1} {
+		got, err := render(testParams())
+		if err != nil {
 			t.Fatal(err)
 		}
-	}
-	want, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("install.sh differs from %s; review the template change, then ./scripts/dev.sh regen", path)
+		path := filepath.Join("testdata", name)
+		if *update {
+			if err := os.WriteFile(path, got, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		want, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Errorf("%s differs from %s; review the template change, then ./scripts/dev.sh regen", name, path)
+		}
 	}
 }
 
@@ -131,10 +137,57 @@ func TestInstallChangesOnlyTheMarkers(t *testing.T) {
 			t.Errorf("marker %s must appear exactly once, quoted", m)
 		}
 	}
+	if strings.Count(installTemplate, "\n"+markerUnit+"MESHCTL_UNIT\n") != 1 || strings.Count(installTemplate, markerUnit) != 1 {
+		t.Error("the unit's marker must be the one line of a here-document ended by MESHCTL_UNIT")
+	}
 	back := strings.NewReplacer("'"+p.Origin+"'", "'"+markerOrigin+"'", "'"+p.Version+"'", "'"+markerVersion+"'",
-		"'"+p.SHA256Amd64+"'", "'"+markerSHA256Amd64+"'", "'"+p.SHA256Arm64+"'", "'"+markerSHA256Arm64+"'").Replace(string(got))
+		"'"+p.SHA256Amd64+"'", "'"+markerSHA256Amd64+"'", "'"+p.SHA256Arm64+"'", "'"+markerSHA256Arm64+"'", systemdUnit, markerUnit).Replace(string(got))
 	if back != installTemplate {
 		t.Fatal("rendering changed more than the markers")
+	}
+
+	// install.ps1 (amendment A51), the same way.
+	ps1, err := RenderInstallPS1(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range []string{markerOrigin, markerVersion, markerSHA256Windows} {
+		if n := strings.Count(installPS1Template, "'"+m+"'"); n != 1 || strings.Count(installPS1Template, m) != 1 {
+			t.Errorf("install.ps1's marker %s must appear exactly once, quoted", m)
+		}
+	}
+	back = strings.NewReplacer("'"+p.Origin+"'", "'"+markerOrigin+"'", "'"+p.Version+"'", "'"+markerVersion+"'",
+		"'"+p.SHA256Windows+"'", "'"+markerSHA256Windows+"'").Replace(string(ps1))
+	if back != installPS1Template {
+		t.Fatal("rendering install.ps1 changed more than the markers")
+	}
+	for _, b := range ps1 {
+		if b > 0x7e || b < 0x20 && b != '\n' && b != '\r' {
+			t.Fatalf("install.ps1 has the byte %#x: Windows PowerShell reads a script without a BOM as ANSI, so it stays ASCII", b)
+		}
+	}
+}
+
+// Windows PowerShell parses install.ps1 (on Windows runners).
+func TestInstallPS1Parses(t *testing.T) {
+	ps, err := exec.LookPath("powershell")
+	if err != nil {
+		t.Skip("no Windows PowerShell on this runner")
+	}
+	got, err := RenderInstallPS1(testParams())
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "install.ps1")
+	if err := os.WriteFile(path, got, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	check := "$e = $null; [void][System.Management.Automation.Language.Parser]::ParseFile($env:SCRIPT, [ref]$null, [ref]$e); " +
+		"if ($e) { $e | ForEach-Object { $_.Message }; exit 1 }"
+	cmd := exec.Command(ps, "-NoProfile", "-NonInteractive", "-Command", check)
+	cmd.Env = append(os.Environ(), "SCRIPT="+path)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("install.ps1 does not parse: %v\n%s", err, out)
 	}
 }
 
@@ -154,22 +207,31 @@ func TestInstallParses(t *testing.T) {
 	}
 }
 
+// A value that would change a script's meaning is refused by every script
+// that uses it, before anything is rendered.
 func TestInstallRefusesHostileValues(t *testing.T) {
-	cases := map[string]func(*InstallParams){
-		"quote in origin":         func(p *InstallParams) { p.Origin = "https://mesh.example.com'; id; '" },
-		"origin with a path":      func(p *InstallParams) { p.Origin = "https://mesh.example.com/x" },
-		"non-canonical origin":    func(p *InstallParams) { p.Origin = "https://Mesh.Example.com" },
-		"plain http":              func(p *InstallParams) { p.Origin = "http://mesh.example.com" },
-		"substitution in version": func(p *InstallParams) { p.Version = "v1$(id)" },
-		"newline in version":      func(p *InstallParams) { p.Version = "v1\nid" },
-		"short checksum":          func(p *InstallParams) { p.SHA256Amd64 = "abc" },
-		"quote in checksum":       func(p *InstallParams) { p.SHA256Arm64 = strings.Repeat("a", 63) + "'" },
-	}
-	for name, edit := range cases {
+	for _, c := range []struct {
+		name    string
+		edit    func(*InstallParams)
+		sh, ps1 bool // refused by install.sh, by install.ps1
+	}{
+		{"quote in origin", func(p *InstallParams) { p.Origin = "https://mesh.example.com'; id; '" }, true, true},
+		{"origin with a path", func(p *InstallParams) { p.Origin = "https://mesh.example.com/x" }, true, true},
+		{"non-canonical origin", func(p *InstallParams) { p.Origin = "https://Mesh.Example.com" }, true, true},
+		{"plain http", func(p *InstallParams) { p.Origin = "http://mesh.example.com" }, true, true},
+		{"substitution in version", func(p *InstallParams) { p.Version = "v1$(id)" }, true, true},
+		{"newline in version", func(p *InstallParams) { p.Version = "v1\nid" }, true, true},
+		{"short checksum", func(p *InstallParams) { p.SHA256Amd64 = "abc" }, true, false},
+		{"quote in checksum", func(p *InstallParams) { p.SHA256Arm64 = strings.Repeat("a", 63) + "'" }, true, false},
+		{"no Windows checksum", func(p *InstallParams) { p.SHA256Windows = "" }, false, true},
+	} {
 		p := testParams()
-		edit(&p)
-		if out, err := RenderInstall(p); err == nil || out != nil {
-			t.Errorf("%s: rendered", name)
+		c.edit(&p)
+		if out, err := RenderInstall(p); c.sh != (err != nil) || c.sh && out != nil {
+			t.Errorf("%s: install.sh = %v", c.name, err)
+		}
+		if out, err := RenderInstallPS1(p); c.ps1 != (err != nil) || c.ps1 && out != nil {
+			t.Errorf("%s: install.ps1 = %v", c.name, err)
 		}
 	}
 }

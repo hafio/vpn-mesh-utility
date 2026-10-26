@@ -469,3 +469,22 @@ func TestUnansweredHolderLapses(t *testing.T) {
 		t.Fatalf("no lapse audited: %v", err)
 	}
 }
+
+// A join that names its mesh is refused for a token of another mesh's node
+// before the token is used (amendment A51).
+func TestJoinNamesItsMesh(t *testing.T) {
+	h := newHarness(t)
+	h.seed(t, storeNode(testfix.VPS1, true), storeNode(testfix.VPS2, false))
+	tok := h.issue(t, "vps-2")
+	w, eb := serve(h.pub, httptest.NewRequest(http.MethodPost, proto.PathJoin, bytes.NewReader(joinBody(t, tok, testfix.VPS2,
+		func(r *proto.JoinRequest) { r.Mesh = "lab" }))))
+	if w.Code != http.StatusConflict || !strings.Contains(eb.Message, `mesh "default", not "lab"`) || !strings.Contains(eb.Message, "--mesh default") {
+		t.Fatalf("a join for another mesh: %d %+v", w.Code, eb)
+	}
+	if w, eb := postJoin(h, joinBody(t, tok, testfix.VPS2, func(r *proto.JoinRequest) { r.Mesh = "default" })); w.Code != 200 {
+		t.Fatalf("the token was used by the refused join, or the right mesh is refused: %d %+v", w.Code, eb)
+	}
+	if w, _ := postJoin(h, joinBody(t, h.issue(t, "vps-2"), testfix.VPS2, func(r *proto.JoinRequest) { r.Mesh = "Bad Mesh" })); w.Code != 400 {
+		t.Fatalf("a malformed mesh name: %d", w.Code)
+	}
+}

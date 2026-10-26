@@ -141,11 +141,20 @@ func (a *api) join(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The token's node says which mesh the join reconciles (amendment A49).
+	// The token's node says which mesh the join reconciles (amendment A49),
+	// and a join that names its mesh is refused for another before the token
+	// is used (amendment A51).
 	var mesh, id int64
 	if err := a.DB.Tx(r.Context(), func(tx *store.Tx) error {
 		var err error
-		mesh, err = tx.TokenMesh(req.Token)
+		if mesh, err = tx.TokenMesh(req.Token); err != nil {
+			return err
+		}
+		m, err := tx.MeshByID(mesh)
+		if err == nil && req.Mesh != "" && req.Mesh != m.Name {
+			return errorf(http.StatusConflict, proto.CodeConflict,
+				"this token belongs to a node of the mesh %q, not %q; join with --mesh %s (MESHCTL_MESH=%s)", m.Name, req.Mesh, m.Name, m.Name)
+		}
 		return err
 	}); err != nil {
 		a.fail(w, r, err)

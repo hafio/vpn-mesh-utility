@@ -21,27 +21,20 @@ import (
 	"github.com/hafio/vpn-mesh-utility/internal/validate"
 )
 
-// Service installs and starts the agent's service (internal/agent/service).
-type Service interface {
-	Available() (bool, string)
-	Install(ctx context.Context) error
-}
-
 // JoinOptions configure Join. The detection seams default to the host.
 type JoinOptions struct {
 	DataDir string
 	Server  string
 	Token   string
-	// Name, when set, must be the name the token was issued for.
+	// Name, when set, must be the name the token was issued for, and Mesh
+	// the name of its mesh (amendment A51): the data dir is the mesh's.
 	Name string
+	Mesh string
 	// Endpoint is a server's public IPv4:port, when detection would be wrong;
 	// Endpoint6 its public [IPv6]:port (M8).
 	Endpoint  string
 	Endpoint6 string
 	Version   string
-	// NoService skips installing the system service.
-	NoService bool
-	Service   Service
 	Out       io.Writer
 	Log       *slog.Logger
 	Now       func() time.Time
@@ -61,10 +54,10 @@ type JoinOptions struct {
 	MachineID  func() (string, error)
 }
 
-// Join enrolls this node (spec S6.1): it generates the keys locally if they
-// do not exist yet, sends only the public halves with the one-time token, and
-// records what the server answered. Unless told not to, it then installs and
-// starts the service.
+// Join enrolls this node (spec S6.1): it makes fresh keys, sends only the
+// public halves with the one-time token, and records what the server
+// answered. It installs no service: install.sh and install.ps1 do
+// (amendment A51).
 func Join(ctx context.Context, o JoinOptions) (proto.JoinResponse, error) {
 	if o.Now == nil {
 		o.Now = time.Now
@@ -120,7 +113,7 @@ func Join(ctx context.Context, o JoinOptions) (proto.JoinResponse, error) {
 	req := proto.JoinRequest{
 		Token: o.Token, Name: o.Name, Hostname: cleanHostname(host), OS: runtime.GOOS, Arch: runtime.GOARCH,
 		WGBackend: o.Backend(), WGPublicKey: wgPub, IdentityPublicKey: keys.IdentityPublic(),
-		Endpoint: o.Endpoint, AgentVersion: o.Version, Endpoint6: o.Endpoint6, MachineID: hostid.Presented(machine),
+		Endpoint: o.Endpoint, AgentVersion: o.Version, Endpoint6: o.Endpoint6, MachineID: hostid.Presented(machine), Mesh: o.Mesh,
 	}
 	if ip, ok := o.PublicIPv4(); ok {
 		req.PublicIP = ip.String()
@@ -173,18 +166,7 @@ func Join(ctx context.Context, o JoinOptions) (proto.JoinResponse, error) {
 		fmt.Fprintf(o.Out, "mesh %s, slot %d: interface %s, local UI port %d\n", resp.Mesh, slot, slot.Interface(), slot.UIPort())
 	}
 
-	if o.NoService || o.Service == nil {
-		fmt.Fprintf(o.Out, "start the agent with: meshctl agent run --data %s\n", o.DataDir)
-		return resp, nil
-	}
-	if ok, why := o.Service.Available(); !ok {
-		fmt.Fprintf(o.Out, "not installing a service: %s\nstart the agent with: meshctl agent run --data %s\n", why, o.DataDir)
-		return resp, nil
-	}
-	if err := o.Service.Install(ctx); err != nil {
-		return resp, fmt.Errorf("joined, but %w", err)
-	}
-	fmt.Fprintln(o.Out, "installed and started meshctl-agent.service")
+	fmt.Fprintf(o.Out, "start the agent with: meshctl agent run --data %s (install.sh and install.ps1 start it as a service)\n", o.DataDir)
 	return resp, nil
 }
 

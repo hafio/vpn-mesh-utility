@@ -44,7 +44,11 @@ func setupHealthAgent(fs *flag.FlagSet, e *env) action {
 		if err := wantArgs(args, 0, ""); err != nil {
 			return err
 		}
-		return checkAgent(ctx, sock())
+		path, err := sock()
+		if err != nil {
+			return err
+		}
+		return checkAgent(ctx, path)
 	}
 }
 

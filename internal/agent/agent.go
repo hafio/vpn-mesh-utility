@@ -32,6 +32,7 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -663,7 +664,7 @@ func Reset(ctx context.Context, d Deps) (int, error) {
 	}
 	unlock, err := dir.Lock()
 	if err != nil {
-		return 0, fmt.Errorf("%w; stop the agent first (`systemctl stop meshctl-agent`, or `Stop-Service meshctl-agent` on Windows)", err)
+		return 0, fmt.Errorf("%w; stop the agent first (`systemctl stop meshctl-agent@<mesh>`, or `Stop-Service meshctl-agent-<mesh>` on Windows)", err)
 	}
 	defer unlock()
 	enr, err := dir.Enrollment()
@@ -1399,15 +1400,16 @@ func Pipe(s proto.Slot) string {
 
 // DefaultSocket is the local API socket for a data dir on goos: on Windows
 // the named pipe of the slot the data dir's node joined (slot 0's before a
-// join, or when its enrollment cannot be read); the runtime dir for the
-// standard data dir, else inside the data dir.
+// join, or when its enrollment cannot be read); for a mesh's data dir under
+// /var/lib/meshctl, /run/meshctl/<mesh>.sock in the runtime dir the unit
+// makes (amendment A51); else inside the data dir.
 func DefaultSocket(goos, dataDir string) string {
 	switch {
 	case goos == "windows":
 		e, _ := (&state.Dir{Path: dataDir}).Enrollment() // read only; the zero value is slot 0
 		return Pipe(e.Slot)
-	case dataDir == "/var/lib/meshctl":
-		return "/run/meshctl/agent.sock"
+	case path.Dir(dataDir) == "/var/lib/meshctl":
+		return "/run/meshctl/" + path.Base(dataDir) + ".sock"
 	}
 	return filepath.Join(dataDir, "agent.sock")
 }

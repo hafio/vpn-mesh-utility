@@ -128,6 +128,7 @@ func (a *api) routes() []route {
 		{Route{http.MethodPut, proto.PathNames, "signature"}, a.names},
 		{Route{http.MethodGet, proto.PathHealth, "none"}, a.health},
 		{Route{http.MethodGet, proto.PathInstall, "none"}, a.install},
+		{Route{http.MethodGet, proto.PathInstallPS1, "none"}, a.installPS1},
 		{Route{http.MethodGet, proto.PathDownload + "{file}", "none"}, a.download},
 	}
 }

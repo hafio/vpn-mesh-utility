@@ -6,7 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/hafio/vpn-mesh-utility/internal/agent"
@@ -20,16 +22,14 @@ import (
 
 func agentCommands() []command {
 	return []command{
-		{name: "install", summary: "Windows: copy meshctl into Program Files, join this node and install the service", setup: setupAgentInstall},
-		{name: "join", summary: "enroll this node with a one-time token, then install and start the service", setup: setupAgentJoin},
+		{name: "join", summary: "enroll this node with a one-time token (install.sh and install.ps1 run it, then start the service)", setup: setupAgentJoin},
 		{name: "reset", summary: "take off this host what the stopped agent made: tunnel, routes, rules, firewalld zone, DNS", setup: setupAgentReset},
 		{name: "run", summary: "run the agent in the foreground (what the service runs)", setup: setupAgentRun},
-		{name: "uninstall", summary: "Windows: stop and remove the service (--purge also removes the data dir)", setup: setupAgentUninstall},
 	}
 }
 
-// joinFlags registers what join and install take; the returned func reads
-// them once they are parsed.
+// joinFlags registers what join takes; the returned func reads them once
+// they are parsed.
 func joinFlags(fs *flag.FlagSet, e *env) func() (agent.JoinOptions, error) {
 	srv := fs.String("server", "", "the control plane's origin, e.g. https://mesh.example.com")
 	// The token is never a flag default: -h would print it.
@@ -37,7 +37,8 @@ func joinFlags(fs *flag.FlagSet, e *env) func() (agent.JoinOptions, error) {
 	name := fs.String("name", "", "the node name the token must belong to (a safety check)")
 	endpoint := fs.String("endpoint", "", "servers only: public IPv4:port, when auto-detection would be wrong")
 	endpoint6 := fs.String("endpoint6", "", "servers only: public [IPv6]:port, when auto-detection would be wrong")
-	data := fs.String("data", defaultAgentData(e), "agent data directory")
+	mesh := fs.String("mesh", "", "the token's node's mesh, which names the data dir (default: default, unless --data names one)")
+	data := fs.String("data", "", "agent data directory (default: "+meshDir(e, agentRoot(e), "<mesh>")+")")
 	machine := machineIDFlag(fs)
 	return func() (agent.JoinOptions, error) {
 		tok := *token
@@ -50,7 +51,19 @@ func joinFlags(fs *flag.FlagSet, e *env) func() (agent.JoinOptions, error) {
 		if err := checkMachineIDFile(*machine); err != nil {
 			return agent.JoinOptions{}, err
 		}
-		return agent.JoinOptions{DataDir: *data, Server: *srv, Token: tok, Name: *name, Endpoint: *endpoint, Version: e.version,
+		// The mesh names the data dir (amendment A51); a data dir given
+		// outright is joined into for whatever mesh the token's is.
+		dir, m := *data, *mesh
+		if dir == "" {
+			if m == "" {
+				m = "default"
+			}
+			if _, err := validate.Name("--mesh", m); err != nil {
+				return agent.JoinOptions{}, usagef("%v", err)
+			}
+			dir = meshDir(e, agentRoot(e), m)
+		}
+		return agent.JoinOptions{DataDir: dir, Server: *srv, Token: tok, Name: *name, Mesh: m, Endpoint: *endpoint, Version: e.version,
 			Out: e.stdout, Now: e.now, Endpoint6: *endpoint6, MachineIDFile: *machine}, nil
 	}
 }
@@ -73,7 +86,6 @@ func checkMachineIDFile(path string) error {
 
 func setupAgentJoin(fs *flag.FlagSet, e *env) action {
 	opts := joinFlags(fs, e)
-	noService := fs.Bool("no-service", false, "do not install and start the system service")
 	return func(ctx context.Context, args []string) error {
 		if err := wantArgs(args, 0, ""); err != nil {
 			return err
@@ -82,49 +94,27 @@ func setupAgentJoin(fs *flag.FlagSet, e *env) action {
 		if err != nil {
 			return err
 		}
-		o.NoService, o.Service = *noService, hostService(o.DataDir)
 		_, err = agent.Join(ctx, o)
 		return err
 	}
 }
 
-func setupAgentInstall(fs *flag.FlagSet, e *env) action {
-	opts := joinFlags(fs, e)
-	return func(ctx context.Context, args []string) error {
-		if err := wantArgs(args, 0, ""); err != nil {
-			return err
-		}
-		o, err := opts()
-		if err != nil {
-			return err
-		}
-		return installAgent(ctx, e, o)
-	}
-}
-
-func setupAgentUninstall(fs *flag.FlagSet, e *env) action {
-	data := fs.String("data", defaultAgentData(e), "agent data directory")
-	purge := fs.Bool("purge", false, "also remove the data directory: this node's keys and cached config (it must join again)")
-	return func(ctx context.Context, args []string) error {
-		if err := wantArgs(args, 0, ""); err != nil {
-			return err
-		}
-		return uninstallAgent(ctx, e, *data, *purge)
-	}
-}
-
 func setupAgentReset(fs *flag.FlagSet, e *env) action {
-	data := fs.String("data", defaultAgentData(e), "agent data directory")
+	data := meshFlags(fs, e)
 	noFirewall := fs.Bool("no-firewall", false, "leave firewalld alone, as an agent run with --no-firewall did")
 	return func(ctx context.Context, args []string) error {
 		if err := wantArgs(args, 0, ""); err != nil {
+			return err
+		}
+		dir, err := data()
+		if err != nil {
 			return err
 		}
 		log, err := newLogger(e.stderr, "info")
 		if err != nil {
 			return err
 		}
-		n, err := agent.Reset(ctx, agent.Deps{DataDir: *data, NoFirewall: *noFirewall, Log: log, Version: e.version, Now: e.now})
+		n, err := agent.Reset(ctx, agent.Deps{DataDir: dir, NoFirewall: *noFirewall, Log: log, Version: e.version, Now: e.now})
 		switch {
 		case err != nil && n > 0:
 			return fmt.Errorf("took %d changes off this host, then: %w", n, err)
@@ -178,11 +168,19 @@ func setupAgentRun(fs *flag.FlagSet, e *env) action {
 			}
 			uiListen = *ui
 		}
+		dir, err := data()
+		if err != nil {
+			return err
+		}
+		socket, err := sock()
+		if err != nil {
+			return err
+		}
 		asService, err := service.IsWindowsService()
 		if err != nil {
 			return fmt.Errorf("find out whether the Windows service manager started meshctl: %w", err)
 		}
-		out, closeLog, err := agentLog(e.stderr, *data, asService)
+		out, closeLog, err := agentLog(e.stderr, dir, asService)
 		if err != nil {
 			return err
 		}
@@ -193,12 +191,12 @@ func setupAgentRun(fs *flag.FlagSet, e *env) action {
 			return err
 		}
 		d := agent.Deps{
-			DataDir: *data, Socket: sock(), UIListen: uiListen, Version: e.version,
+			DataDir: dir, Socket: socket, UIListen: uiListen, Version: e.version,
 			NoFirewall: *noFirewall, Backend: *backend, Log: log, Logs: ring, Now: e.now, RuntimeSocket: *runtime,
 			StatusEvery: *statusEvery, EndpointRetry: *endpointRetry, MachineIDFile: *machine,
 		}
 		if asService {
-			return service.RunWindowsService(func(ctx context.Context) error {
+			return service.RunWindowsService(service.Name(filepath.Base(dir)), func(ctx context.Context) error {
 				err := agent.Run(ctx, d)
 				if errors.Is(err, agent.ErrRefused) {
 					// A clean stop: the service manager restarts only a
@@ -235,16 +233,80 @@ func agentLog(stderr io.Writer, data string, asService bool) (io.Writer, func(),
 	return f, func() { _ = f.Close() }, nil // the agent has stopped; nothing to report to
 }
 
-// socketFlags registers --data and --socket. The returned func resolves the
-// socket once flags are parsed: --socket, else the default for the data dir.
-func socketFlags(fs *flag.FlagSet, e *env) (*string, func() string) {
-	data := fs.String("data", defaultAgentData(e), "agent data directory")
-	socket := fs.String("socket", "", `local API socket (default: /run/meshctl/agent.sock for the standard data dir, else <data>/agent.sock; `+
-		`on Windows \\.\pipe\meshctl-agent, with -<slot> for a mesh in another slot)`)
-	return data, func() string {
+// socketFlags registers --mesh, --data and --socket. The returned funcs
+// resolve the data dir (meshFlags) and the socket once flags are parsed:
+// --socket, else the default for the data dir.
+func socketFlags(fs *flag.FlagSet, e *env) (data, sock func() (string, error)) {
+	data = meshFlags(fs, e)
+	socket := fs.String("socket", "", `local API socket (default: /run/meshctl/<mesh>.sock for a mesh's data dir under /var/lib/meshctl, `+
+		`else <data>/agent.sock; on Windows \\.\pipe\meshctl-agent, with -<slot> for a mesh in another slot)`)
+	return data, func() (string, error) {
 		if *socket != "" {
-			return *socket
+			return *socket, nil
 		}
-		return agent.DefaultSocket(e.goos, *data)
+		dir, err := data()
+		if err != nil {
+			return "", err
+		}
+		return agent.DefaultSocket(e.goos, dir), nil
 	}
+}
+
+// meshFlags registers --mesh and --data. The returned func is the agent's
+// data dir once flags are parsed (amendment A51): --data, else the mesh's
+// under the agent root, else the one mesh that has joined on this host.
+func meshFlags(fs *flag.FlagSet, e *env) func() (string, error) {
+	root := agentRoot(e)
+	mesh := fs.String("mesh", "", "the mesh whose agent this is (default: the only one on this host)")
+	data := fs.String("data", "", "the agent's data directory (default: "+meshDir(e, root, "<mesh>")+")")
+	return func() (string, error) {
+		switch {
+		case *data != "":
+			return *data, nil
+		case *mesh != "":
+			if _, err := validate.Name("--mesh", *mesh); err != nil {
+				return "", usagef("%v", err)
+			}
+			return meshDir(e, root, *mesh), nil
+		}
+		return onlyMesh(e, root)
+	}
+}
+
+// meshDir is the data dir of mesh's agent under root.
+func meshDir(e *env, root, mesh string) string {
+	if e.goos == "windows" {
+		return root + `\` + mesh
+	}
+	return root + "/" + mesh
+}
+
+// onlyMesh is the data dir of the one mesh that has joined under root.
+func onlyMesh(e *env, root string) (string, error) {
+	entries, err := os.ReadDir(root)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("list the meshes under %s: %w", root, err)
+	}
+	var meshes []string
+	for _, en := range entries {
+		if _, err := os.Stat(meshDir(e, root, en.Name()) + sep(e) + state.EnrollmentFile); err == nil && en.IsDir() {
+			meshes = append(meshes, en.Name())
+		}
+	}
+	switch len(meshes) {
+	case 0:
+		return "", fmt.Errorf("no node has joined a mesh on this host (%s holds none): join with `meshctl agent join --mesh <mesh>`, "+
+			"or pass --data", root)
+	case 1:
+		return meshDir(e, root, meshes[0]), nil
+	}
+	return "", usagef("this host runs the agents of several meshes (%s): pass --mesh", strings.Join(meshes, ", "))
+}
+
+// sep is the path separator of e's platform.
+func sep(e *env) string {
+	if e.goos == "windows" {
+		return `\`
+	}
+	return "/"
 }

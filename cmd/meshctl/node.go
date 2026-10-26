@@ -145,6 +145,7 @@ func printEnrollment(w io.Writer, loc *time.Location, en *api.Enrollment) {
 	}
 	fmt.Fprintf(w, "\njoin token (shown once, valid until %s):\n  %s\n", time.Unix(en.ExpiresAt, 0).In(loc).Format(time.RFC3339), en.Token)
 	fmt.Fprintf(w, "\non the node, as root:\n  %s\n", en.Install)
+	fmt.Fprintf(w, "on Windows, in an elevated PowerShell:\n  %s\n", en.InstallWindows)
 	fmt.Fprintf(w, "or, where meshctl is already installed:\n  %s\n", en.Join)
 }
 

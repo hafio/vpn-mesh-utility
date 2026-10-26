@@ -239,13 +239,15 @@ type enrollmentData struct {
 	Install  string
 	Join     string
 	Warnings []string
+	// InstallWindows is the install for Windows (amendment A51).
+	InstallWindows string
 }
 
 // showEnrollment shows a join token once; the server keeps only its hash.
 func (u *ui) showEnrollment(w http.ResponseWriter, r *http.Request, s auth.Session, ch api.NodeChange, flash string) {
 	d := enrollmentData{Node: ch.Node.Name, Warnings: ch.Warnings}
 	if e := ch.Enrollment; e != nil {
-		d.Token, d.Expires, d.Install, d.Join = e.Token, u.stamp(e.ExpiresAt), e.Install, e.Join
+		d.Token, d.Expires, d.Install, d.Join, d.InstallWindows = e.Token, u.stamp(e.ExpiresAt), e.Install, e.Join, e.InstallWindows
 	}
 	u.show(w, r, s, http.StatusOK, "enrollment", "nodes", "Join "+ch.Node.Name, page{Flash: flash, Data: d})
 }

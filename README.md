@@ -49,7 +49,9 @@ interface, port, tables and firewall names. Configs, mesh views and refusals are
 control plane and checked by every agent; every join makes fresh keys, and a new token cuts a
 node off at once. A node runs once, on its own machine: a second copy is refused (it takes down
 what it brought up), one on another machine wipes itself, and a restart carries on at once. The
-live tests and the v1.0.0 release follow.
+install scripts set up each mesh's agent as a service, `meshctl-agent@<mesh>` on Linux and
+`meshctl-agent-<mesh>` on Windows; the binary installs none. The live tests and the v1.0.0 release
+follow.
 
 ## Quick start
 
@@ -59,7 +61,9 @@ live tests and the v1.0.0 release follow.
 MESHCTL_VERSION=1.0.0 MESHCTL_URL=https://mesh.example.com docker compose up -d
 docker exec <container> /app/meshctl node add vps-1 --role server
 # on vps-1, as root: the command node add printed
-curl -fsSL https://mesh.example.com/install.sh | sudo sh -s -- --token <token>
+curl -fsSL https://mesh.example.com/install.sh | sudo sh -s -- --mesh default --token <token>
+# on a Windows laptop, in an elevated PowerShell: the other command it printed
+$env:MESHCTL_TOKEN = '<token>'; $env:MESHCTL_MESH = 'default'; irm https://mesh.example.com/install.ps1 | iex
 ```
 
 [docs/operations.md](docs/operations.md) walks through it, including Swarm over the mesh.

@@ -561,7 +561,7 @@ func (l *lab) enroll(n host, args ...string) {
 		l.t.Fatalf("node add %s: %v\n%s", n.name, err, out)
 	}
 	env := []string{"SSL_CERT_FILE=" + l.ca, "MESHCTL_TOKEN=" + ch.Enrollment.Token}
-	join := []string{"agent", "join", "--server", "https://192.0.2.1:8443", "--data", l.data(n.ns), "--no-service"}
+	join := []string{"agent", "join", "--server", "https://192.0.2.1:8443", "--data", l.data(n.ns)}
 	if ch.Node.Role == string(proto.RoleServer) {
 		join = append(join, "--endpoint", n.ip+":51820")
 	}

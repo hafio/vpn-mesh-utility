@@ -21,7 +21,11 @@ func setupExit(fs *flag.FlagSet, e *env) action {
 	_, sock := socketFlags(fs, e)
 	wait := fs.Duration("wait", 30*time.Second, "how long to wait for the agent to apply the change (0 returns once the server accepted it)")
 	return func(ctx context.Context, args []string) error {
-		c := localapi.NewClient(sock())
+		path, err := sock()
+		if err != nil {
+			return err
+		}
+		c := localapi.NewClient(path)
 		if len(args) == 0 {
 			st, err := c.Status(ctx)
 			if err != nil {

@@ -48,7 +48,9 @@ func TestAdminAddIssuesAToken(t *testing.T) {
 		t.Fatalf("node %+v version %d (an unjoined node changes no config)", ch.Node, ch.Version)
 	}
 	en := ch.Enrollment
-	if en == nil || len(en.Token) != 43 || !strings.Contains(en.Install, testURL+"/install.sh") || !strings.Contains(en.Join, "--token "+en.Token) {
+	if en == nil || len(en.Token) != 43 || !strings.Contains(en.Install, testURL+"/install.sh | sudo sh -s -- --mesh default --token "+en.Token) ||
+		!strings.Contains(en.Join, "--mesh default --token "+en.Token) ||
+		en.InstallWindows != "$env:MESHCTL_TOKEN = '"+en.Token+"'; $env:MESHCTL_MESH = 'default'; irm "+testURL+"/install.ps1 | iex" {
 		t.Fatalf("enrollment %+v", en)
 	}
 	var audit []store.AuditEntry
