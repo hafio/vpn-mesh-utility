@@ -1008,9 +1008,14 @@ func TestRunStopsOnASignedRefusal(t *testing.T) {
 	default:
 	}
 
+	// A signed one ends the run, after the agent took off the host what it
+	// had brought up from its cache.
 	dir2, pub2 := newDir(t)
 	_, srv2 := newFakeServer(t, pub2, testfix.ServerConfig(), &refuse)
 	enroll(t, dir2, srv2.URL)
+	if err := dir2.SaveConfig(testfix.SignedConfig(testfix.ServerConfig())); err != nil {
+		t.Fatal(err)
+	}
 	r2 := start(t, dir2, "")
 	select {
 	case err := <-r2.done:
@@ -1020,6 +1025,84 @@ func TestRunStopsOnASignedRefusal(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("a signed refusal did not end the run")
+	}
+	if l, _ := r2.host.Link(Interface); l.Exists || !slices.Contains(r2.host.Calls, "DeleteLink "+Interface) || r2.fw.Removes != 1 ||
+		r2.dns.Reverted != 1 {
+		t.Fatalf("after the refusal: interface %v, host calls %v, firewall removes %d, DNS reverts %d", l.Exists, r2.host.Calls, r2.fw.Removes,
+			r2.dns.Reverted)
+	}
+	if _, err := dir2.Enrollment(); err != nil {
+		t.Fatalf("the refusal took the enrollment: %v", err)
+	}
+
+	// A teardown step that fails is logged with what tries again.
+	dir3, pub3 := newDir(t)
+	_, srv3 := newFakeServer(t, pub3, testfix.ServerConfig(), &refuse)
+	enroll(t, dir3, srv3.URL)
+	var logs3 syncBuffer
+	r3 := startWith(t, dir3, "", func(d *Deps) {
+		d.Log = slog.New(slog.NewTextHandler(&logs3, nil))
+		d.Firewall = &agentfake.Firewall{RemoveErr: errors.New("firewalld is not running")}
+	})
+	select {
+	case err := <-r3.done:
+		r3.done <- err
+	case <-time.After(10 * time.Second):
+		t.Fatal("a signed refusal did not end the run")
+	}
+	if !strings.Contains(logs3.String(), "firewalld is not running") || !strings.Contains(logs3.String(), "meshctl agent reset") {
+		t.Fatalf("a failed teardown was not logged:\n%s", logs3.String())
+	}
+}
+
+// Reset (amendment A50, `meshctl agent reset`) takes off the host what the
+// stopped agent made, from its cached config, and leaves the data dir; it
+// needs the data dir to itself and a node in it.
+func TestReset(t *testing.T) {
+	cfg := testfix.ServerConfig()
+	dir, _ := joinedTo(t, cfg)
+	r := start(t, dir, "")
+	eventually(t, "the config applied", func() bool { return r.peers() == len(cfg.Peers) })
+	if _, err := Reset(context.Background(), r.deps); !errors.Is(err, state.ErrLocked) || !strings.Contains(err.Error(), "stop the agent first") {
+		t.Fatalf("Reset while the agent runs = %v", err)
+	}
+	r.stop(t)
+	n, err := Reset(context.Background(), r.deps)
+	if l, _ := r.host.Link(Interface); err != nil || n == 0 || l.Exists || r.fw.Removes != 1 || r.dns.Reverted != 1 {
+		t.Fatalf("Reset = %d, %v; interface %v, firewall removes %d, DNS reverts %d", n, err, l.Exists, r.fw.Removes, r.dns.Reverted)
+	}
+	if _, err := dir.Enrollment(); err != nil {
+		t.Fatalf("Reset took the enrollment: %v", err)
+	}
+	if n, err := Reset(context.Background(), r.deps); err != nil || n != 0 {
+		t.Fatalf("second Reset = %d, %v", n, err)
+	}
+
+	empty, _ := newDir(t)
+	if _, err := Reset(context.Background(), Deps{DataDir: empty.Path, Host: agentfake.NewHost()}); !errors.Is(err, state.ErrNotJoined) ||
+		!strings.Contains(err.Error(), "--data") {
+		t.Fatalf("Reset of a data dir without a node = %v", err)
+	}
+	if _, err := Reset(context.Background(), Deps{DataDir: "/var/lib/meshctl?x"}); err == nil {
+		t.Fatal("Reset took a malformed data dir")
+	}
+	// A damaged cached config is ignored: the rest still goes.
+	if err := os.WriteFile(filepath.Join(dir.Path, state.ConfigFile), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Reset(context.Background(), r.deps); err != nil {
+		t.Fatalf("Reset with a damaged cached config = %v", err)
+	}
+	// An unknown backend, before anything is opened.
+	if _, err := Reset(context.Background(), Deps{DataDir: dir.Path, Backend: "bogus"}); err == nil || !strings.Contains(err.Error(), "--wg-backend") {
+		t.Fatalf("Reset with an unknown backend = %v", err)
+	}
+	// A damaged enrollment says what is wrong with it.
+	if err := os.WriteFile(filepath.Join(dir.Path, state.EnrollmentFile), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Reset(context.Background(), r.deps); err == nil || errors.Is(err, state.ErrNotJoined) {
+		t.Fatalf("Reset with a damaged enrollment = %v", err)
 	}
 }
 

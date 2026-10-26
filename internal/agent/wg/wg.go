@@ -230,6 +230,9 @@ type Host interface {
 	// Device reads the WireGuard configuration and peer statistics.
 	Device(name string) (Device, []PeerStats, error)
 	Configure(name string, c Change) error
+	// DeleteLink removes the interface the agent made (amendment A50): none
+	// is nothing to do, another's is ErrNotOurs.
+	DeleteLink(name string) error
 	Close() error
 }
 

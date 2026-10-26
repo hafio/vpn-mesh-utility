@@ -279,6 +279,23 @@ func (netlinkNet) DelProxy(link string, a netip.Addr) error {
 	return netlink.NeighDel(proxy(l.Attrs().Index, a))
 }
 
+func (netlinkNet) DeleteBridge(name string) (bool, error) {
+	l, err := netlink.LinkByName(name)
+	var notFound netlink.LinkNotFoundError
+	switch {
+	case errors.As(err, &notFound):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("look it up: %w", err)
+	case l.Type() != "bridge":
+		return false, fmt.Errorf("%s is a %s, not the agent's bridge; it is left alone", name, l.Type())
+	}
+	if err := netlink.LinkDel(l); err != nil {
+		return false, fmt.Errorf("remove it: %w", err)
+	}
+	return true, nil
+}
+
 func (netlinkNet) EnsureBridge(name string) (bool, error) {
 	created := false
 	l, err := netlink.LinkByName(name)

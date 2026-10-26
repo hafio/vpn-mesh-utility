@@ -177,6 +177,17 @@ func (u *userspace) DelAddr(name string, p netip.Prefix) error {
 	return nil
 }
 
+// DeleteLink closes the adapter this process opened; an adapter exists
+// only while its process holds it.
+func (u *userspace) DeleteLink(name string) error {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.dev != nil && u.name == name {
+		u.closeLocked()
+	}
+	return nil
+}
+
 func (u *userspace) Close() error {
 	u.mu.Lock()
 	defer u.mu.Unlock()

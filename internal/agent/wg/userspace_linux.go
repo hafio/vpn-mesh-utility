@@ -105,6 +105,23 @@ func (u *userspace) listen(name string, dev *device.Device) {
 	}()
 }
 
+// DeleteLink closes the device this process opened, which removes its tun
+// interface. A tun interface of that name another process holds is that
+// process's: it goes when it stops.
+func (u *userspace) DeleteLink(name string) error {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.dev != nil && u.name == name {
+		u.closeLocked()
+		return nil
+	}
+	l, err := u.links.Link(name)
+	if err != nil || !l.Exists {
+		return err
+	}
+	return fmt.Errorf("%s: %w: another process holds it, and it goes when that process stops", name, ErrNotOurs)
+}
+
 func (u *userspace) Close() error {
 	u.mu.Lock()
 	defer u.mu.Unlock()

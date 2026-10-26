@@ -334,6 +334,31 @@ func (s *Service) Close(ctx context.Context, iface string) {
 	s.stopLocked(ctx, iface)
 }
 
+// Revert stops the resolver and takes back what the host's resolver holds
+// for iface, also what an earlier process registered there (amendment A50:
+// teardown), and returns how many changes this process knew of. No host
+// resolver is nothing to take back.
+func (s *Service) Revert(ctx context.Context, iface string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	registered := s.registered
+	s.registered = false // taken back below, whatever this process knew
+	n := s.stopLocked(ctx, iface)
+	if s.Registrar == nil {
+		return n, nil
+	}
+	err := s.Registrar.Revert(ctx, iface)
+	switch {
+	case errors.Is(err, ErrUnavailable):
+		return n, nil
+	case err != nil:
+		return n, fmt.Errorf("dns: take %s's DNS back from the host's resolver: %w; `meshctl agent reset` tries again", iface, err)
+	case registered:
+		n++
+	}
+	return n, nil
+}
+
 // SetNames replaces the containers' names the resolver answers (amendment
 // A38): <name>.<zone> with every node's addresses, round robin, and
 // <name>.<node>.<zone> with one node's. They come from the mesh view, not

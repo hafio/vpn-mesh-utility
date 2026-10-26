@@ -189,6 +189,9 @@ func (r *resolved) Set(ctx context.Context, iface string, reg Registration) erro
 }
 
 func (r *resolved) Revert(ctx context.Context, iface string) error {
+	if _, err := net.InterfaceByName(iface); err != nil {
+		return nil // resolved forgets an interface when it goes
+	}
 	ctx, cancel := context.WithTimeout(ctx, busTimeout)
 	defer cancel()
 	c, idx, err := r.link(iface)

@@ -507,3 +507,86 @@ func TestSyncFailuresWithIPv6(t *testing.T) {
 		t.Error("Gateway accepted a malformed IPv6 gateway")
 	}
 }
+
+// Remove takes a slot's container network off the host (amendment A50):
+// in host mode its rules, blackhole routes and the bridge with what is on
+// it; another slot's stay, and a second Remove finds nothing.
+func TestRemoveHostMode(t *testing.T) {
+	n, sys := agentfake.NewNet(), &agentfake.Sysctl{}
+	k := testfix.Containers6(proto.ModeHost)
+	for _, s := range []proto.Slot{0, 1} {
+		if _, err := containers.Sync(n, sys, k, s, s.Interface(), proxied); err != nil {
+			t.Fatalf("slot %d: %v", s, err)
+		}
+	}
+	n.Calls = nil
+	if c, err := containers.Remove(n, 0, k); err != nil || c == 0 {
+		t.Fatalf("Remove = %d, %v; calls %v", c, err, n.Calls)
+	}
+	if _, err := n.Addrs(proto.ContainerBridge); err == nil || len(n.ProxiesOf(proto.ContainerBridge)) != 0 {
+		t.Errorf("the bridge is still there: %v", n.AddrsOf(proto.ContainerBridge))
+	}
+	if n.HasBlackhole() || n.HasBlackhole6() {
+		t.Error("slot 0's blackhole routes are still there")
+	}
+	rules, _ := n.Rules()
+	for _, r := range rules {
+		if s, _ := containers.SlotOf(r.Priority); s != 1 {
+			t.Errorf("rule %s is still there", r)
+		}
+	}
+	if len(rules) == 0 || len(n.AddrsOf("meshctl1")) == 0 || !n.HasBlackholeIn(proto.Slot(1).ContainersTable(), false) {
+		t.Errorf("slot 1's network went too: rules %v, bridge %v", rules, n.AddrsOf("meshctl1"))
+	}
+	if c, err := containers.Remove(n, 0, k); err != nil || c != 0 {
+		t.Fatalf("second Remove = %d, %v", c, err)
+	}
+	// Without a config the slot's bridge goes all the same.
+	if c, err := containers.Remove(n, 1, nil); err != nil || c == 0 || len(n.AddrsOf("meshctl1")) != 0 {
+		t.Fatalf("Remove without a config = %d, %v; bridge %v", c, err, n.AddrsOf("meshctl1"))
+	}
+}
+
+// In container mode the interface the runtime attached stays with its
+// addresses; the rules, routes and the IPv6 drops go.
+func TestRemoveContainerMode(t *testing.T) {
+	n := agentfake.NewNet()
+	n.NoIPv6Rules = true
+	n.Attach("eth1", netip.MustParsePrefix("10.77.128.128/16"))
+	k := testfix.Containers6(proto.ModeContainer)
+	if _, err := containers.Sync(n, &agentfake.Sysctl{}, k, 0, "wg0", proxied); !errors.Is(err, containers.ErrIPv6Unrouted) {
+		t.Fatal(err)
+	}
+	if c, err := containers.Remove(n, 0, k); err != nil || c == 0 {
+		t.Fatalf("Remove = %d, %v", c, err)
+	}
+	rules, _ := n.Rules()
+	dropped, _ := n.Dropped()
+	if len(rules) != 0 || len(dropped) != 0 || n.HasBlackhole() || len(n.AddrsOf("eth1")) != 2 {
+		t.Errorf("rules %v, dropped %v, blackhole %v, eth1 %v", rules, dropped, n.HasBlackhole(), n.AddrsOf("eth1"))
+	}
+}
+
+// A failing step is reported and the others still run.
+func TestRemoveFailures(t *testing.T) {
+	boom := errors.New("operation not permitted")
+	for _, c := range []struct{ failOn, want string }{
+		{"Rules", "operation not permitted"},
+		{"Dropped", "operation not permitted"},
+		{"DeleteBridge", "bridge meshctl0"},
+	} {
+		n := agentfake.NewNet()
+		k := testfix.Containers6(proto.ModeHost)
+		if _, err := containers.Sync(n, &agentfake.Sysctl{}, k, 0, "wg0", proxied); err != nil {
+			t.Fatal(err)
+		}
+		n.Fail, n.FailOn = boom, c.failOn
+		_, err := containers.Remove(n, 0, k)
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: Remove = %v, want %q", c.failOn, err, c.want)
+		}
+		if _, err := n.Addrs(proto.ContainerBridge); c.failOn != "DeleteBridge" && err == nil {
+			t.Errorf("%s: the bridge stayed", c.failOn)
+		}
+	}
+}

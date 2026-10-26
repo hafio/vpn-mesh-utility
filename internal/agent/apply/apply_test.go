@@ -418,6 +418,8 @@ type watchingFirewall struct {
 	fails bool
 }
 
+func (w *watchingFirewall) Remove(context.Context) (int, error) { return 0, nil }
+
 func (w *watchingFirewall) Apply(context.Context, *proto.Firewall) (int, error) {
 	table, _ := w.k.Holds()
 	w.saw = append(w.saw, table != nil)
@@ -521,6 +523,14 @@ func TestScheduledPolicy(t *testing.T) {
 func isStep(err error, step string) bool {
 	s, ok := apply.IsStepError(err)
 	return ok && s == step
+}
+
+// failed reports whether one of a teardown's joined errors is step's.
+func failed(err error, step string) bool {
+	if j, ok := err.(interface{ Unwrap() []error }); ok {
+		return slices.ContainsFunc(j.Unwrap(), func(e error) bool { return isStep(e, step) })
+	}
+	return isStep(err, step)
 }
 
 // Exit on installs the policy rules; switching exits only moves 0.0.0.0/0
@@ -786,5 +796,120 @@ func TestStatsNamesKnownPeers(t *testing.T) {
 	}
 	if p := got[0]; p.Name != "vps-2" || p.LastHandshake != testfix.Epoch.Unix() || p.Endpoint != testfix.VPS2.Endpoint || p.RxBytes != 5 {
 		t.Fatalf("Stats = %+v", p)
+	}
+}
+
+// Teardown (amendment A50) takes off the host what applies made: the DNS
+// registration, firewalld's zone and rules, the mesh firewall's table, exit
+// mode, the routes and the interface. Sysctls stay, and a second Teardown
+// finds nothing to do.
+func TestTeardown(t *testing.T) {
+	ctx := context.Background()
+	r := newRig(t)
+	cfg := testfix.ServerConfig()
+	cfg.Sysctl = []proto.Sysctl{{Key: proto.SysctlIPForward, Value: "1"}}
+	cfg.DNS, cfg.Policy = meshDNS(), testfix.Policy()
+	if _, err := r.e.Apply(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	n, err := r.e.Teardown(ctx, &cfg)
+	if err != nil || n == 0 {
+		t.Fatalf("Teardown = %d, %v", n, err)
+	}
+	l, _ := r.h.Link("wg0")
+	left, _ := r.r.List("wg0")
+	table, _ := r.k.Holds()
+	if l.Exists || len(left) != 0 || table != nil || r.fw.Removes != 1 || r.dns.Reverted != 1 {
+		t.Fatalf("left: interface %v, routes %v, table %v, firewall removes %d, DNS reverts %d", l.Exists, left, table != nil,
+			r.fw.Removes, r.dns.Reverted)
+	}
+	if r.s.Values[proto.SysctlIPForward] != "1" {
+		t.Error("a sysctl was changed")
+	}
+	if n, err := r.e.Teardown(ctx, &cfg); err != nil || n != 0 {
+		t.Fatalf("second Teardown = %d, %v", n, err)
+	}
+
+	// A spoke's exit mode goes with it.
+	spoke := newRig(t)
+	if _, err := spoke.e.Apply(ctx, testfix.SpokeConfig("vps-2")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := spoke.e.Teardown(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	if rules, _ := spoke.p.Rules(); len(rules) != 0 {
+		t.Fatalf("exit rules left: %v", rules)
+	}
+}
+
+// An interface of that name the agent did not make is left alone, with its
+// DNS and routes; the rest of the slot's is still taken away.
+func TestTeardownLeavesAForeignInterface(t *testing.T) {
+	r := newRig(t)
+	r.h.AddForeignLink("wg0")
+	if _, err := r.e.Teardown(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if l, _ := r.h.Link("wg0"); !l.Exists || r.dns.Reverted != 0 || r.fw.Removes != 1 {
+		t.Fatalf("interface %v, DNS reverts %d, firewall removes %d", l.Exists, r.dns.Reverted, r.fw.Removes)
+	}
+}
+
+// Every step is tried: a failing one is reported by name and the others
+// still run.
+func TestTeardownTriesEveryStep(t *testing.T) {
+	ctx := context.Background()
+	r := newRig(t)
+	if _, err := r.e.Apply(ctx, testfix.ServerConfig()); err != nil {
+		t.Fatal(err)
+	}
+	r.fw.RemoveErr, r.dns.RevertErr = errors.New("firewalld is not running"), errors.New("access denied")
+	_, err := r.e.Teardown(ctx, nil)
+	if !failed(err, apply.StepFirewall) || !failed(err, apply.StepDNS) {
+		t.Fatalf("Teardown = %v", err)
+	}
+	if l, _ := r.h.Link("wg0"); l.Exists {
+		t.Fatal("the interface stayed")
+	}
+	// Without knowing the interface, nothing that depends on it is touched.
+	r = newRig(t)
+	if _, err := r.e.Apply(ctx, testfix.ServerConfig()); err != nil {
+		t.Fatal(err)
+	}
+	r.h.SetFail("Link")
+	if _, err := r.e.Teardown(ctx, nil); !failed(err, apply.StepInterface) || r.dns.Reverted != 0 || r.fw.Removes != 1 {
+		t.Fatalf("Teardown = %v; DNS reverts %d, firewall removes %d", err, r.dns.Reverted, r.fw.Removes)
+	}
+	r.h.SetFail("")
+	if l, _ := r.h.Link("wg0"); !l.Exists {
+		t.Fatal("the interface went without being looked at")
+	}
+}
+
+// Where the host does exit mode (Windows), exit mode is turned off on the
+// interface before it goes; the container network goes too.
+func TestTeardownThroughTheHost(t *testing.T) {
+	ctx := context.Background()
+	k, _ := wg.ParseKey(testfix.WGKey(5))
+	h := &exitHost{Host: agentfake.NewHost()}
+	e := apply.New(apply.Deps{Host: h, Routes: agentfake.NewRoutes(), Sysctl: &agentfake.Sysctl{}, Iface: "wg0", Key: k})
+	if _, err := e.Apply(ctx, testfix.SpokeConfig("vps-2")); err != nil || !h.on {
+		t.Fatalf("exit on = %v", err)
+	}
+	if _, err := e.Teardown(ctx, nil); err != nil || h.on {
+		t.Fatalf("Teardown = %v, exit on %v", err, h.on)
+	}
+
+	cfg := testfix.ContainerSpokeConfig()
+	n := agentfake.NewNet()
+	n.Attach("eth1", netip.MustParsePrefix("10.77.128.128/16"))
+	e = apply.New(apply.Deps{Host: agentfake.NewHost(), Routes: agentfake.NewRoutes(), Sysctl: &agentfake.Sysctl{}, Containers: n,
+		Iface: "wg0", Key: k})
+	if _, err := e.Apply(ctx, cfg); err != nil || !n.HasBlackhole() {
+		t.Fatalf("Apply = %v", err)
+	}
+	if _, err := e.Teardown(ctx, &cfg); err != nil || n.HasBlackhole() {
+		t.Fatalf("Teardown = %v; the containers' blackhole stayed: %v", err, n.HasBlackhole())
 	}
 }

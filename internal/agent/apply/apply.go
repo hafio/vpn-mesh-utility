@@ -13,6 +13,9 @@
 // that remember what they found on the host (Rechecker) forget it, so a
 // change made underneath the agent is put back.
 //
+// Teardown takes off the host what the steps made (amendment A50), as a
+// refused agent and `meshctl agent reset` do.
+//
 // A policy with schedules is compiled for the time of the apply; the
 // Result says when a schedule next starts or ends, the time to apply again.
 //
@@ -73,17 +76,21 @@ type MeshFirewall interface {
 	Sync(rs *policy.Ruleset) (int, error)
 }
 
-// Firewall applies a firewall section (internal/agent/firewall).
+// Firewall applies a firewall section (internal/agent/firewall); Remove
+// takes off firewalld everything it made.
 type Firewall interface {
 	Apply(ctx context.Context, fw *proto.Firewall) (int, error)
+	Remove(ctx context.Context) (int, error)
 }
 
 // DNS serves the mesh zone and registers it with the host
 // (internal/agent/dns). Apply returns the state (proto.DNSStates); Close
-// stops it when the agent stops.
+// stops it when the agent stops; Revert stops it and takes back the
+// host's registration, also one an earlier process made.
 type DNS interface {
 	Apply(ctx context.Context, w dns.Want) (string, int, error)
 	Close(ctx context.Context, iface string)
+	Revert(ctx context.Context, iface string) (int, error)
 }
 
 // Rechecker is a step that remembers what it found on the host; Recheck
@@ -678,6 +685,73 @@ func (e *Engine) Close(ctx context.Context) {
 	if e.d.DNS != nil {
 		e.d.DNS.Close(ctx, e.d.Iface)
 	}
+}
+
+// Teardown takes off the host what the steps made for the slot (amendment
+// A50), in the reverse order of an apply: the DNS registration, the
+// container network, firewalld's zone, policies and rules, the mesh
+// firewall's table, exit mode, the routes and the interface. Sysctls stay,
+// as a stop leaves them. Every step is tried and the failures are joined;
+// a host the agent never applied to is left as it is, and so is an
+// interface of that name the agent did not make, with its DNS and routes.
+// cfg is the last config applied, if one is known: it says whether the
+// container network is the agent's own namespace and where its IPv6 drops
+// are. It returns how many changes it made.
+func (e *Engine) Teardown(ctx context.Context, cfg *proto.NodeConfig) (int, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	n := 0
+	var errs []error
+	step := func(name string, c int, err error) {
+		n += c
+		if err != nil {
+			errs = append(errs, &StepError{Step: name, Err: err})
+		}
+	}
+	l, err := e.d.Host.Link(e.d.Iface)
+	step(StepInterface, 0, err)
+	ours := err == nil && l.Exists && l.Ours
+	foreign := err != nil || l.Exists && !l.Ours
+	if e.d.DNS != nil && !foreign {
+		c, err := e.d.DNS.Revert(ctx, e.d.Iface)
+		step(StepDNS, c, err)
+	}
+	if e.d.Containers != nil {
+		var k *proto.Containers
+		if cfg != nil {
+			k = cfg.Containers
+		}
+		c, err := containers.Remove(e.d.Containers, e.d.Slot, k)
+		step(StepContainers, c, err)
+	}
+	// firewalld lets go of the mesh before its filter goes, as in an apply.
+	if e.d.Firewall != nil {
+		c, err := e.d.Firewall.Remove(ctx)
+		step(StepFirewall, c, err)
+	}
+	if e.d.MeshFirewall != nil {
+		c, err := e.d.MeshFirewall.Sync(nil)
+		step(StepPolicy, c, err)
+	}
+	switch router, ok := e.d.Host.(wg.ExitRouter); {
+	case e.d.Exit != nil:
+		c, err := exitmode.Sync(e.d.Exit, e.d.Slot, e.d.Iface, false, false)
+		step(StepExit, c, err)
+	case ok && ours:
+		c, err := router.SetExit(e.d.Iface, false)
+		step(StepExit, c, err)
+	}
+	if ours {
+		c, err := routes.Sync(e.d.Routes, e.d.Iface, nil)
+		step(StepRoutes, c, err)
+		err = e.d.Host.DeleteLink(e.d.Iface)
+		if err == nil {
+			n++
+		}
+		step(StepInterface, 0, err)
+	}
+	e.dial, e.names6 = map[wg.Key]*dialing{}, nil
+	return n, errors.Join(errs...)
 }
 
 // Stats returns the runtime state of the peers, named after cfg's peers.

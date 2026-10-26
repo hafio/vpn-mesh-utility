@@ -277,6 +277,19 @@ func TestAgentRunNeedsAJoin(t *testing.T) {
 	}
 }
 
+// `agent reset` needs a data dir with a node in it; it refuses before it
+// touches the host. (Its teardown is covered with fakes in the agent
+// package: here it would take apart this host's real tunnel.)
+func TestAgentReset(t *testing.T) {
+	data := filepath.Join(shortDir(t), "data")
+	if code, _, errOut := runArgs("agent", "reset", "--data", data); code != exitFailure || !strings.Contains(errOut, "nothing to reset") {
+		t.Fatalf("agent reset of a data dir without a node = %d %q", code, errOut)
+	}
+	if code, _, _ := runArgs("agent", "reset", "--data", data, "now"); code != exitUsage {
+		t.Fatalf("agent reset now = %d", code)
+	}
+}
+
 // `agent install` and `agent uninstall` are Windows commands; elsewhere they
 // say what to use instead and touch nothing. (On Windows they would install
 // or remove the host's real service, so the tests leave them alone there.)

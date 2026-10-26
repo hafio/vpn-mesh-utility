@@ -35,7 +35,9 @@ func TestClassifyBusErrors(t *testing.T) {
 }
 
 // An interface that does not exist fails before anything is sent to
-// resolved, wherever the test runs (with a system bus or without).
+// resolved, wherever the test runs (with a system bus or without); taking
+// its registration back is nothing to do, since resolved forgets an
+// interface when it goes (amendment A50: teardown).
 func TestRegistrarNeedsTheInterface(t *testing.T) {
 	r := NewRegistrar(0)
 	ctx := context.Background()
@@ -45,7 +47,7 @@ func TestRegistrarNeedsTheInterface(t *testing.T) {
 	if err := r.Set(ctx, "mctest-none", Registration{}); err == nil {
 		t.Fatal("Set of a missing interface succeeded")
 	}
-	if err := r.Revert(ctx, "mctest-none"); err == nil {
-		t.Fatal("Revert of a missing interface succeeded")
+	if err := r.Revert(ctx, "mctest-none"); err != nil {
+		t.Fatalf("Revert of a missing interface = %v", err)
 	}
 }

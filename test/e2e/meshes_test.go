@@ -140,4 +140,23 @@ func TestTwoMeshes(t *testing.T) {
 	if l.ping("b", lab3.meshIP) {
 		t.Fatal("a node of the default mesh reached a node of the lab")
 	}
+
+	// `agent reset` of vps-1's stopped lab agent (amendment A50) takes wg1,
+	// its routes and its nftables table off the host, and leaves the
+	// default mesh's agent as it was; a second reset finds nothing.
+	l.stop("agent-a-lab")
+	reset := []string{"agent", "reset", "--data", l.data("a-lab"), "--no-firewall"}
+	if out, err := l.meshctl(vps1.ns, nil, reset...); err != nil || !strings.Contains(out, "changes off this host") {
+		t.Fatalf("agent reset: %v\n%s", err, out)
+	}
+	tables := l.sh("ip", "netns", "exec", ns("a"), "nft", "list", "tables")
+	if l.has("a", "link", "show", "wg1") || strings.Contains(tables, "table inet meshctl1\n") || strings.Contains(l.out("a", "route", "show"), "wg1") {
+		t.Errorf("the reset left the lab's interface, table or routes:\n%s%s", tables, l.out("a", "route", "show"))
+	}
+	if !l.has("a", "link", "show", "wg0") || !strings.Contains(tables, "table inet meshctl\n") || !l.ping("b", vps1.meshIP) {
+		t.Errorf("the reset touched the default mesh's agent:\n%s", tables)
+	}
+	if out, err := l.meshctl(vps1.ns, nil, reset...); err != nil || !strings.Contains(out, "nothing this agent made") {
+		t.Errorf("a second agent reset: %v\n%s", err, out)
+	}
 }

@@ -103,6 +103,12 @@ func TestKernelNetWithoutPrivilege(t *testing.T) {
 	if _, err := n.EnsureBridge("lo"); err == nil || !strings.Contains(err.Error(), "not a bridge") {
 		t.Fatalf("EnsureBridge(lo) = %v", err)
 	}
+	if removed, err := n.DeleteBridge("mce-none0"); err != nil || removed {
+		t.Fatalf("DeleteBridge of a missing bridge = %v, %v", removed, err)
+	}
+	if _, err := n.DeleteBridge("lo"); err == nil || !strings.Contains(err.Error(), "left alone") {
+		t.Fatalf("DeleteBridge(lo) = %v", err)
+	}
 	r := Rule{Priority: PriorityGateway, Iif: "lo", Table: MainTable}
 	for what, err := range map[string]error{
 		"add a rule":                n.AddRule(r),

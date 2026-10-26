@@ -22,6 +22,7 @@ func agentCommands() []command {
 	return []command{
 		{name: "install", summary: "Windows: copy meshctl into Program Files, join this node and install the service", setup: setupAgentInstall},
 		{name: "join", summary: "enroll this node with a one-time token, then install and start the service", setup: setupAgentJoin},
+		{name: "reset", summary: "take off this host what the stopped agent made: tunnel, routes, rules, firewalld zone, DNS", setup: setupAgentReset},
 		{name: "run", summary: "run the agent in the foreground (what the service runs)", setup: setupAgentRun},
 		{name: "uninstall", summary: "Windows: stop and remove the service (--purge also removes the data dir)", setup: setupAgentUninstall},
 	}
@@ -89,6 +90,32 @@ func setupAgentUninstall(fs *flag.FlagSet, e *env) action {
 			return err
 		}
 		return uninstallAgent(ctx, e, *data, *purge)
+	}
+}
+
+func setupAgentReset(fs *flag.FlagSet, e *env) action {
+	data := fs.String("data", defaultAgentData(e), "agent data directory")
+	noFirewall := fs.Bool("no-firewall", false, "leave firewalld alone, as an agent run with --no-firewall did")
+	return func(ctx context.Context, args []string) error {
+		if err := wantArgs(args, 0, ""); err != nil {
+			return err
+		}
+		log, err := newLogger(e.stderr, "info")
+		if err != nil {
+			return err
+		}
+		n, err := agent.Reset(ctx, agent.Deps{DataDir: *data, NoFirewall: *noFirewall, Log: log, Version: e.version, Now: e.now})
+		switch {
+		case err != nil && n > 0:
+			return fmt.Errorf("took %d changes off this host, then: %w", n, err)
+		case err != nil:
+			return err
+		case n == 0:
+			fmt.Fprintln(e.stdout, "nothing this agent made is left on this host")
+		default:
+			fmt.Fprintf(e.stdout, "took %d changes off this host; the data dir is as it was\n", n)
+		}
+		return nil
 	}
 }
 

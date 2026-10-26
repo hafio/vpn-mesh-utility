@@ -493,3 +493,60 @@ func TestKernelHoldsOneTable(t *testing.T) {
 		t.Fatal("ForgetErr ignored")
 	}
 }
+
+// What a teardown calls (amendment A50): an interface the agent made is
+// deleted, a missing one is nothing to do and a foreign one is not ours; a
+// bridge goes once, with its proxy entries; the firewall and DNS count
+// their removals; each fails on request.
+func TestTeardownFakes(t *testing.T) {
+	h := NewHost()
+	h.AddForeignLink("wg1")
+	if err := h.CreateLink("wg0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.DeleteLink("wg0"); err != nil || !slices.Contains(h.Calls, "DeleteLink wg0") {
+		t.Fatalf("DeleteLink = %v; calls %v", err, h.Calls)
+	}
+	if l, _ := h.Link("wg0"); l.Exists {
+		t.Fatal("wg0 stayed")
+	}
+	if err := h.DeleteLink("wg0"); err != nil {
+		t.Fatalf("DeleteLink of a missing interface = %v", err)
+	}
+	if err := h.DeleteLink("wg1"); !errors.Is(err, wg.ErrNotOurs) {
+		t.Fatalf("DeleteLink of a foreign interface = %v", err)
+	}
+	h.SetFail("Link")
+	if err := h.DeleteLink("wg1"); err == nil || errors.Is(err, wg.ErrNotOurs) {
+		t.Fatalf("DeleteLink with Fail = %v", err)
+	}
+
+	n := NewNet()
+	if _, err := n.EnsureBridge("meshctl0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.AddProxy("meshctl0", netip.MustParseAddr("fd10:77::2:1")); err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := n.DeleteBridge("meshctl0"); err != nil || !removed || len(n.ProxiesOf("meshctl0")) != 0 {
+		t.Fatalf("DeleteBridge = %v, %v; proxies %v", removed, err, n.ProxiesOf("meshctl0"))
+	}
+	if removed, err := n.DeleteBridge("meshctl0"); err != nil || removed {
+		t.Fatalf("DeleteBridge of a missing bridge = %v, %v", removed, err)
+	}
+	boom := errors.New("operation not permitted")
+	n.Fail = boom
+	if _, err := n.DeleteBridge("meshctl0"); !errors.Is(err, boom) {
+		t.Fatalf("DeleteBridge with Fail = %v", err)
+	}
+
+	ctx := context.Background()
+	fw := &Firewall{RemoveErr: boom}
+	if _, err := fw.Remove(ctx); !errors.Is(err, boom) || fw.Removes != 1 {
+		t.Fatalf("Firewall.Remove = %v, %d removes", err, fw.Removes)
+	}
+	d := &DNS{RevertErr: boom}
+	if _, err := d.Revert(ctx, "wg0"); !errors.Is(err, boom) || d.Reverted != 1 || !d.IsClosed() {
+		t.Fatalf("DNS.Revert = %v, %d reverts", err, d.Reverted)
+	}
+}

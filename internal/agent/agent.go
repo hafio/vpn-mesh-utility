@@ -281,42 +281,13 @@ func Run(ctx context.Context, d Deps) error {
 	if err != nil {
 		return err
 	}
-	// Everything the agent makes on the host is named after its mesh's
-	// slot (amendment A49).
-	slot, iface := enr.Slot, enr.Slot.Interface()
+	slot := enr.Slot
 	d.UIListen = uiListen(d.UIListen, slot)
-	host, backend := d.Host, d.Backend
-	if host == nil {
-		if host, backend, err = wg.Open(d.Backend, d.Log); err != nil {
-			return err
-		}
-		defer host.Close()
-	} else if backend != wg.BackendUserspace {
-		backend = wg.BackendKernel
+	host, backend, closeHost, err := d.onHost(dir, enr)
+	if err != nil {
+		return err
 	}
-	if d.Routes == nil {
-		d.Routes = routes.NewTable()
-	}
-	if d.Exit == nil {
-		d.Exit = exitmode.NewPolicy()
-	}
-	if d.Sysctl == nil {
-		w := sysctl.New()
-		w.Slot = slot
-		d.Sysctl = w
-	}
-	if d.MeshFirewall == nil && enr.Role == proto.RoleServer {
-		d.MeshFirewall = &policy.Enforcer{K: policy.NewKernel(slot), Log: d.Log, Table: slot.Table()}
-	}
-	if d.Firewall == nil && !d.NoFirewall && enr.Role == proto.RoleServer {
-		d.Firewall = &firewall.Firewall{Run: execrun.Exec{}, Dir: dir.Path, Iface: iface, Slot: slot}
-	}
-	if d.DNS == nil {
-		d.DNS = dns.New(dns.NewRegistrar(slot), d.Log)
-	}
-	if d.Containers == nil {
-		d.Containers = containers.NewNet()
-	}
+	defer closeHost()
 	local, err := dir.Local()
 	if err != nil {
 		d.Log.Warn("ignoring the node's own settings; DNS stays on", "err", err)
@@ -334,9 +305,7 @@ func Run(ctx context.Context, d Deps) error {
 		log:      d.Log.With("node", enr.Name),
 		syncKick: make(chan struct{}, 1), statusKick: make(chan struct{}, 1), proxyKick: make(chan struct{}, 1),
 		meshKick: make(chan struct{}, 1), namesKick: make(chan struct{}, 1), scheduleKick: make(chan struct{}, 1),
-		engine: apply.New(apply.Deps{Host: host, Routes: d.Routes, Exit: d.Exit, Sysctl: d.Sysctl, MeshFirewall: d.MeshFirewall,
-			Firewall: d.Firewall, DNS: d.DNS, Containers: d.Containers, Slot: slot, Iface: iface, Key: wg.Key(keys.WG), Log: d.Log, Now: d.Now,
-			EndpointRetry: d.EndpointRetry}),
+		engine: d.engine(host, slot, wg.Key(keys.WG)),
 	}
 	r.engine.SetDNSOff(local.DNSOff)
 	if r.mesh, err = dir.Mesh(pinned); err != nil {
@@ -409,9 +378,115 @@ func Run(ctx context.Context, d Deps) error {
 	<-ctx.Done()
 	loops.Wait()
 	if err := context.Cause(ctx); errors.Is(err, ErrRefused) {
+		r.teardown()
 		return err
 	}
 	return nil
+}
+
+// teardown takes off the host what this agent made, once the control plane
+// has refused the node (amendment A50): a copy that must not run leaves no
+// tunnel, routes or rules behind.
+func (r *runner) teardown() {
+	ctx, cancel := context.WithTimeout(context.Background(), teardownWait)
+	defer cancel()
+	r.mu.Lock()
+	cfg := r.applied
+	r.mu.Unlock()
+	n, err := r.engine.Teardown(ctx, cfg)
+	if err != nil {
+		r.log.Error("the agent could not take everything it made off this host; `meshctl agent reset` tries again", "changes", n, "err", err)
+		return
+	}
+	r.log.Info("the agent took what it made off this host", "changes", n)
+}
+
+// teardownWait bounds a teardown: firewall-cmd and D-Bus calls that hang
+// must not keep a refused agent running.
+const teardownWait = time.Minute
+
+// onHost fills in the seams to the host d leaves nil, for the agent of a
+// mesh in enr's slot -- everything the agent makes on the host is named
+// after it (amendment A49) -- and returns the WireGuard host, its backend
+// and what closes it.
+func (d *Deps) onHost(dir *state.Dir, enr state.Enrollment) (wg.Host, string, func(), error) {
+	slot, iface := enr.Slot, enr.Slot.Interface()
+	host, backend, closeHost := d.Host, d.Backend, func() {}
+	if host == nil {
+		var err error
+		if host, backend, err = wg.Open(d.Backend, d.Log); err != nil {
+			return nil, "", nil, err
+		}
+		closeHost = func() { _ = host.Close() } // the agent is stopping
+	} else if backend != wg.BackendUserspace {
+		backend = wg.BackendKernel
+	}
+	if d.Routes == nil {
+		d.Routes = routes.NewTable()
+	}
+	if d.Exit == nil {
+		d.Exit = exitmode.NewPolicy()
+	}
+	if d.Sysctl == nil {
+		w := sysctl.New()
+		w.Slot = slot
+		d.Sysctl = w
+	}
+	if d.MeshFirewall == nil && enr.Role == proto.RoleServer {
+		d.MeshFirewall = &policy.Enforcer{K: policy.NewKernel(slot), Log: d.Log, Table: slot.Table()}
+	}
+	if d.Firewall == nil && !d.NoFirewall && enr.Role == proto.RoleServer {
+		d.Firewall = &firewall.Firewall{Run: execrun.Exec{}, Dir: dir.Path, Iface: iface, Slot: slot}
+	}
+	if d.DNS == nil {
+		d.DNS = dns.New(dns.NewRegistrar(slot), d.Log)
+	}
+	if d.Containers == nil {
+		d.Containers = containers.NewNet()
+	}
+	return host, backend, closeHost, nil
+}
+
+// engine is the apply engine on host, with d's seams (onHost).
+func (d *Deps) engine(host wg.Host, slot proto.Slot, key wg.Key) *apply.Engine {
+	return apply.New(apply.Deps{Host: host, Routes: d.Routes, Exit: d.Exit, Sysctl: d.Sysctl, MeshFirewall: d.MeshFirewall,
+		Firewall: d.Firewall, DNS: d.DNS, Containers: d.Containers, Slot: slot, Iface: slot.Interface(), Key: key, Log: d.Log, Now: d.Now,
+		EndpointRetry: d.EndpointRetry})
+}
+
+// Reset takes off the host everything the agent of the data dir's node made
+// there (amendment A50, `meshctl agent reset`), as a refused agent does
+// before it stops, from the last config it cached; the data dir stays as it
+// is. It needs the data dir to itself, so the agent must be stopped first.
+// It returns how many changes it made.
+func Reset(ctx context.Context, d Deps) (int, error) {
+	d.defaults()
+	dir, err := state.Open(d.DataDir)
+	if err != nil {
+		return 0, err
+	}
+	unlock, err := dir.Lock()
+	if err != nil {
+		return 0, fmt.Errorf("%w; stop the agent first (`systemctl stop meshctl-agent`, or `Stop-Service meshctl-agent` on Windows)", err)
+	}
+	defer unlock()
+	enr, err := dir.Enrollment()
+	if errors.Is(err, state.ErrNotJoined) {
+		return 0, fmt.Errorf("%w: data dir %s holds no node, so there is nothing to reset; an agent with another data dir needs --data", err, d.DataDir)
+	}
+	if err != nil {
+		return 0, err
+	}
+	host, _, closeHost, err := d.onHost(dir, enr)
+	if err != nil {
+		return 0, err
+	}
+	defer closeHost()
+	cfg, err := dir.Config(enr.Pinned())
+	if err != nil {
+		d.Log.Warn("ignoring the cached config; the container network's IPv6 drops stay", "err", err)
+	}
+	return d.engine(host, enr.Slot, wg.Key{}).Teardown(ctx, cfg)
 }
 
 // uiListen is where the local UI listens for listen: UIAuto is 127.0.0.1 on

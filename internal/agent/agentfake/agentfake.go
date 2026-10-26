@@ -98,6 +98,25 @@ func (h *Host) Link(name string) (wg.Link, error) {
 	return wg.Link{Exists: true, Ours: l.ours, MTU: l.mtu, Up: l.up, Addrs: slices.Clone(l.addrs)}, nil
 }
 
+// DeleteLink removes an interface the agent made; a foreign one is
+// wg.ErrNotOurs.
+func (h *Host) DeleteLink(name string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	l, err := h.call("Link", name)
+	switch {
+	case err != nil:
+		return err
+	case l == nil:
+		return nil
+	case !l.ours:
+		return fmt.Errorf("%s: %w", name, wg.ErrNotOurs)
+	}
+	delete(h.links, name)
+	h.Calls = append(h.Calls, "DeleteLink "+name)
+	return nil
+}
+
 func (h *Host) CreateLink(name string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -323,8 +342,10 @@ type Firewall struct {
 	mu      sync.Mutex
 	Applied []*proto.Firewall
 	Err     error
-	// Rechecks counts the drift check's Recheck calls.
-	Rechecks int
+	// Rechecks counts the drift check's Recheck calls, Removes the
+	// teardown's Remove calls, which fail with RemoveErr.
+	Rechecks, Removes int
+	RemoveErr         error
 }
 
 func (f *Firewall) Apply(_ context.Context, fw *proto.Firewall) (int, error) {
@@ -332,6 +353,13 @@ func (f *Firewall) Apply(_ context.Context, fw *proto.Firewall) (int, error) {
 	defer f.mu.Unlock()
 	f.Applied = append(f.Applied, fw)
 	return 0, f.Err
+}
+
+func (f *Firewall) Remove(context.Context) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Removes++
+	return 0, f.RemoveErr
 }
 
 func (f *Firewall) Recheck() {
@@ -412,6 +440,10 @@ type DNS struct {
 	Err         error
 	Unavailable bool
 	Closed      bool
+	// Reverted counts the teardown's Revert calls, which fail with
+	// RevertErr.
+	Reverted  int
+	RevertErr error
 }
 
 // SetNames records the containers' names the resolver answers.
@@ -453,6 +485,14 @@ func (d *DNS) Close(context.Context, string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.Closed = true
+}
+
+func (d *DNS) Revert(context.Context, string) (int, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.Closed = true
+	d.Reverted++
+	return 0, d.RevertErr
 }
 
 // Last is what the last apply asked for.
@@ -667,7 +707,7 @@ func (n *Net) ProxiesOf(link string) []netip.Addr {
 }
 
 func (n *Net) failure(method string) error {
-	mutating := slices.Contains([]string{"AddRule", "DelRule", "SetBlackhole", "AddAddr", "EnsureBridge", "AddProxy", "DelProxy",
+	mutating := slices.Contains([]string{"AddRule", "DelRule", "SetBlackhole", "AddAddr", "EnsureBridge", "DeleteBridge", "AddProxy", "DelProxy",
 		"SetDropped"}, method)
 	if n.FailOn == method || n.FailOn == "" && mutating {
 		return n.Fail
@@ -871,6 +911,21 @@ func (n *Net) AddAddr(link string, a netip.Prefix) error {
 	n.addrs[link] = append(n.addrs[link], a)
 	n.record("addr " + link + " " + a.String())
 	return nil
+}
+
+func (n *Net) DeleteBridge(name string) (bool, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if err := n.failure("DeleteBridge"); err != nil {
+		return false, err
+	}
+	if _, ok := n.addrs[name]; !ok {
+		return false, nil
+	}
+	delete(n.addrs, name)
+	delete(n.proxies, name)
+	n.record("remove bridge " + name)
+	return true, nil
 }
 
 func (n *Net) EnsureBridge(name string) (bool, error) {

@@ -151,6 +151,55 @@ func (f *Firewall) Apply(ctx context.Context, fw *proto.Firewall) (n int, err er
 	return n, nil
 }
 
+// Remove takes off firewalld what the agent made (amendment A50: teardown):
+// the rules it recorded, its policies and its zone, which lets go of the
+// interfaces bound to it, then one --reload. Without firewalld there is
+// nothing to remove; whatever an operator opened is left alone.
+func (f *Firewall) Remove(ctx context.Context) (int, error) {
+	zone := f.Slot.Zone()
+	out, err := f.Run.Run(ctx, []string{program, "--state"})
+	switch {
+	case errors.Is(err, execrun.ErrNotInstalled):
+		return 0, nil
+	case err != nil || strings.TrimSpace(out) != "running":
+		return 0, fmt.Errorf("firewall: firewalld is not running (%v), so zone %s and the agent's policies stay; "+
+			"start it (`systemctl start firewalld`) and run `meshctl agent reset` again", err, zone)
+	}
+	n, err := f.Apply(ctx, nil)
+	if err != nil {
+		return n, err
+	}
+	var argv [][]string
+	out, err = f.Run.Run(ctx, []string{program, "--permanent", "--get-policies"})
+	if err != nil {
+		return n, fmt.Errorf("firewall: %w", err)
+	}
+	for _, p := range []policy{relayPolicy(f.Slot), exitPolicy(f.Slot)} {
+		if slices.Contains(strings.Fields(out), p.name) {
+			argv = append(argv, []string{program, "--permanent", "--delete-policy=" + p.name})
+		}
+	}
+	// The policies name the zone, so they go first.
+	out, err = f.Run.Run(ctx, []string{program, "--permanent", "--get-zones"})
+	if err != nil {
+		return n, fmt.Errorf("firewall: %w", err)
+	}
+	if slices.Contains(strings.Fields(out), zone) {
+		argv = append(argv, []string{program, "--permanent", "--delete-zone=" + zone})
+	}
+	if len(argv) == 0 {
+		return n, nil
+	}
+	for _, a := range append(argv, []string{program, "--reload"}) {
+		if _, err := f.Run.Run(ctx, a); err != nil {
+			return n, fmt.Errorf("firewall: remove zone %s and its policies: %w", zone, err)
+		}
+		n++
+	}
+	f.ready, f.synced, f.policies = false, false, nil
+	return n, nil
+}
+
 // Recheck makes the next Apply ask firewalld again instead of trusting what
 // this process saw: the agent calls it before its periodic re-apply.
 func (f *Firewall) Recheck() { f.ready, f.synced = false, false }

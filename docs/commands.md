@@ -40,6 +40,19 @@ meshctl agent join [flags]
 | `--server` |  | the control plane's origin, e.g. https://mesh.example.com |
 | `--token` |  | one-time join token (or set MESHCTL_TOKEN, which keeps it out of the process list) |
 
+## meshctl agent reset
+
+Take off this host what the stopped agent made: tunnel, routes, rules, firewalld zone, DNS.
+
+```
+meshctl agent reset [flags]
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--data` | `/var/lib/meshctl` | agent data directory |
+| `--no-firewall` | `false` | leave firewalld alone, as an agent run with --no-firewall did |
+
 ## meshctl agent run
 
 Run the agent in the foreground (what the service runs).

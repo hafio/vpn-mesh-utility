@@ -663,3 +663,37 @@ func TestServiceAnswersOverIPv6(t *testing.T) {
 		t.Fatalf("an IPv6 address the host does not have = %v", err)
 	}
 }
+
+// Revert (amendment A50: teardown) stops the resolver and takes back the
+// registration this process made, and one an earlier process left, which
+// it does not count; no host resolver is nothing to take back, and a
+// failure says how to finish by hand.
+func TestServiceRevert(t *testing.T) {
+	ctx, lo := context.Background(), netip.MustParseAddr("127.0.0.1")
+	reg := newRegistrar()
+	s := &Service{Registrar: reg}
+	if _, _, err := s.Apply(ctx, Want{Iface: "wg0", IP: lo, Config: meshDNS(true, "1.1.1.1")}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.Revert(ctx, "wg0"); err != nil || n != 2 || s.Addr().IsValid() || len(reg.link("wg0").DNS) != 0 {
+		t.Fatalf("Revert = %d, %v; resolver %v, registered %+v", n, err, s.Addr(), reg.link("wg0"))
+	}
+	// An earlier process's registration: this one never registered.
+	reg.links["wg0"] = Registration{DNS: []netip.Addr{lo}}
+	fresh := &Service{Registrar: reg}
+	if n, err := fresh.Revert(ctx, "wg0"); err != nil || n != 0 || len(reg.link("wg0").DNS) != 0 {
+		t.Fatalf("an earlier registration: Revert = %d, %v; registered %+v", n, err, reg.link("wg0"))
+	}
+	unavailable := newRegistrar()
+	unavailable.fail["revert"] = errors.Join(ErrUnavailable, errors.New("systemd-resolved is not running"))
+	for name, r := range map[string]Registrar{"none": nil, "resolved not running": unavailable} {
+		if n, err := (&Service{Registrar: r}).Revert(ctx, "wg0"); err != nil || n != 0 {
+			t.Errorf("%s: Revert = %d, %v", name, n, err)
+		}
+	}
+	reg.fail["revert"] = errors.New("access denied")
+	if _, err := fresh.Revert(ctx, "wg0"); err == nil || !strings.Contains(err.Error(), "agent reset") ||
+		!strings.Contains(err.Error(), "access denied") {
+		t.Fatalf("a failing revert = %v", err)
+	}
+}

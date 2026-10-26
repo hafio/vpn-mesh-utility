@@ -3,6 +3,7 @@
 package wg
 
 import (
+	"errors"
 	"log/slog"
 	"os"
 	"strings"
@@ -61,5 +62,21 @@ func TestCreateLinkNeedsPrivilege(t *testing.T) {
 	}
 	if _, _, err := u.Device("mctest-tun"); err == nil {
 		t.Error("a failed CreateLink left a device")
+	}
+}
+
+// Removing an interface that is not there is nothing to do, and one the
+// agent did not make (lo) is left alone, by either backend; neither takes
+// privilege.
+func TestDeleteLink(t *testing.T) {
+	k := &kernel{links: links{kind: "wireguard"}}
+	u := &userspace{links: links{kind: "tuntap"}, log: slog.New(slog.DiscardHandler)}
+	for name, h := range map[string]Host{"kernel": k, "userspace": u} {
+		if err := h.DeleteLink("mctest-none"); err != nil {
+			t.Errorf("%s: DeleteLink of a missing interface = %v", name, err)
+		}
+		if err := h.DeleteLink("lo"); !errors.Is(err, ErrNotOurs) {
+			t.Errorf("%s: DeleteLink(lo) = %v", name, err)
+		}
 	}
 }

@@ -629,3 +629,77 @@ func TestEachFailingCallStopsTheApply(t *testing.T) {
 		}
 	}
 }
+
+// removable is a firewall that applied a relaying server's config, on a
+// host that holds what it made and another slot's relay policy.
+func removable(t *testing.T) (*fakeRunner, *Firewall) {
+	r := freshHost()
+	f := newFirewall(t, r)
+	cfg := testfix.ServerConfig()
+	cfg.Firewall.Relay = true
+	if _, err := f.Apply(context.Background(), cfg.Firewall); err != nil {
+		t.Fatal(err)
+	}
+	appliedHost(r)
+	r.answers["firewall-cmd --permanent --get-policies"] = "allow-host-ipv6 meshctl-relay meshctl2-relay\n"
+	r.calls = nil
+	return r, f
+}
+
+// Remove takes off firewalld what the agent made (amendment A50): its
+// recorded rules both ways, then its policy and its zone -- the policy
+// first, since it names the zone -- and one reload. The stock policy and
+// another slot's stay, and a second Remove finds nothing to do.
+func TestRemove(t *testing.T) {
+	r, f := removable(t)
+	n, err := f.Remove(context.Background())
+	if err != nil || n != 2+3 {
+		t.Fatalf("Remove = %d, %v; mutations %q", n, err, r.mutations())
+	}
+	want := [][]string{{"firewall-cmd", "--permanent", "--delete-policy=meshctl-relay"}, {"firewall-cmd", "--permanent", "--delete-zone=mesh"},
+		{"firewall-cmd", "--reload"}}
+	if m := r.mutations(); len(m) != 4+3 || !bytes.Equal(encodeCalls(m[4:]), encodeCalls(want)) {
+		t.Fatalf("mutations %q, want the rules' 4 and then %q", m, want)
+	}
+	r.answers["firewall-cmd --permanent --get-policies"] = "allow-host-ipv6 meshctl2-relay\n"
+	r.answers["firewall-cmd --permanent --get-zones"] = freshHost().answers["firewall-cmd --permanent --get-zones"]
+	r.calls = nil
+	if n, err := f.Remove(context.Background()); err != nil || n != 0 || len(r.mutations()) != 0 {
+		t.Fatalf("second Remove = %d, %v; mutations %q", n, err, r.mutations())
+	}
+}
+
+// Without firewalld there is nothing to remove; a firewalld that is not
+// running keeps the zone, and the error says how to finish.
+func TestRemoveWithoutFirewalld(t *testing.T) {
+	r, f := removable(t)
+	r.errs = map[string]error{"firewall-cmd --state": execrun.ErrNotInstalled}
+	if n, err := f.Remove(context.Background()); err != nil || n != 0 || len(r.mutations()) != 0 {
+		t.Fatalf("not installed: Remove = %d, %v; mutations %q", n, err, r.mutations())
+	}
+	r.answers["firewall-cmd --state"] = "not running\n"
+	r.errs = map[string]error{"firewall-cmd --state": errors.New("exit status 252")}
+	_, err := f.Remove(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "zone mesh") || !strings.Contains(err.Error(), "meshctl agent reset") || len(r.mutations()) != 0 {
+		t.Fatalf("not running: Remove = %v; mutations %q", err, r.mutations())
+	}
+}
+
+// Each failing call stops the removal there and is reported.
+func TestEachFailingCallStopsTheRemoval(t *testing.T) {
+	clean, first := removable(t)
+	if _, err := first.Remove(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for i, call := range clean.calls {
+		r, f := removable(t)
+		r.errs = map[string]error{strings.Join(call, " "): errors.New("DBUS_EXCEPTION: firewalld is reloading")}
+		_, err := f.Remove(context.Background())
+		switch {
+		case err == nil || !strings.Contains(err.Error(), "DBUS_EXCEPTION"):
+			t.Errorf("failing %q: Remove = %v", call, err)
+		case len(r.calls) != i+1:
+			t.Errorf("failing %q: %d calls ran, want %d (none after the failure)", call, len(r.calls), i+1)
+		}
+	}
+}

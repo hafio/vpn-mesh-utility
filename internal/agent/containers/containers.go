@@ -167,6 +167,9 @@ type Net interface {
 	// EnsureBridge makes the bridge exist and be up, and reports whether
 	// it had to create it.
 	EnsureBridge(name string) (bool, error)
+	// DeleteBridge removes the bridge when there is one (amendment A50),
+	// and reports whether there was.
+	DeleteBridge(name string) (bool, error)
 	// Proxies is the interface's IPv6 proxy neighbour entries: the
 	// addresses it answers neighbour discovery for, not being them.
 	Proxies(link string) ([]netip.Addr, error)
@@ -408,6 +411,38 @@ func Sync(nt Net, sys Sysctls, k *proto.Containers, s proto.Slot, wg string, pro
 		}
 	}
 	return changes, errUnrouted
+}
+
+// Remove takes slot s's container network off the host (amendment A50): its
+// rules and blackhole routes, the main-table drops inside k's IPv6 prefix
+// (k nil: none known), and the host-mode bridge the agent made, with the
+// addresses and proxy entries on it. In container mode the gateway's
+// addresses go with the agent's network namespace.
+func Remove(nt Net, s proto.Slot, k *proto.Containers) (int, error) {
+	n, err := syncRules(nt, s, nil)
+	var errs []error
+	if err != nil {
+		errs = append(errs, err)
+	}
+	if k != nil && k.Network6 != "" {
+		if mesh6, perr := netip.ParsePrefix(k.Network6); perr == nil {
+			c, err := syncDropped(nt, mesh6, nil)
+			n += c
+			if err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+	if k == nil || k.Mode != proto.ModeContainer {
+		removed, err := nt.DeleteBridge(s.Bridge())
+		if removed {
+			n++
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("containers: bridge %s: %w", s.Bridge(), err))
+		}
+	}
+	return n, errors.Join(errs...)
 }
 
 // syncDropped makes the agent's main-table blackhole routes inside its

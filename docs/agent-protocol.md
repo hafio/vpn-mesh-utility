@@ -110,7 +110,8 @@ Ed25519, pinned by the agent at join):
 The agent uses a config or mesh view only when its signature verifies for the request it sent,
 and keeps it with its nonce and signature (`config.json.sig`, `mesh.json.sig`), checked again at
 every boot. A definitive refusal ends the agent's run (`agent run` exits 3) only when its
-signature verifies; unsigned, it is logged and retried like any other error.
+signature verifies -- the agent first takes off the host what it made (Teardown, under Apply) --
+and unsigned, it is logged and retried like any other error.
 
 ## Join
 
@@ -477,6 +478,20 @@ back, reports `rollback {from, to, reason}` in every heartbeat, and does not app
 config again until the server's config differs. An agent that stops while a config is pending
 boots from the confirmed one and reports the rollback the same way. A config read from the cache
 at boot, and a node's first config, never arm it.
+
+**Teardown** (amendment A50). A run the control plane ended with a signed refusal, and `meshctl
+agent reset` on a stopped agent, take off the host what the steps made for the agent's slot, in
+reverse: the DNS registration (resolved's link, or the slot's NRPT rules, also ones an earlier
+process made), the container network (its rules, blackhole routes and IPv6 drops, and in host
+mode the bridge `meshctl0` with its addresses and proxy entries; in container mode the runtime's
+interface stays), firewalld's recorded rules, then the slot's policies and zone with one reload,
+the table `inet meshctl`, exit mode's rules and table, the routes, and the interface (the kernel
+link deleted, the userspace device closed). Sysctls stay, as a stop leaves them. An interface of
+that name the agent did not make is left alone, with its DNS and routes. Every step is tried and
+the failures are reported together; the data dir -- enrollment, keys, caches -- stays. `agent
+reset` reads the cached config for the container network's IPv6 drops and needs the data dir to
+itself (`agent.lock`). A plain stop tears nothing down: the next start brings the mesh back from
+the cache.
 
 ## Local API
 

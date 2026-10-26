@@ -101,6 +101,25 @@ func (links) AddAddr(name string, p netip.Prefix) error {
 	return nil
 }
 
+// DeleteLink removes the interface when it is the agent's: marked with
+// Alias and of the backend's kind.
+func (n links) DeleteLink(name string) error {
+	l, err := netlink.LinkByName(name)
+	var missing netlink.LinkNotFoundError
+	switch {
+	case errors.As(err, &missing):
+		return nil
+	case err != nil:
+		return fmt.Errorf("look up interface %s: %w", name, err)
+	case l.Attrs().Alias != Alias || l.Type() != n.kind:
+		return fmt.Errorf("%s: %w; it is left alone", name, ErrNotOurs)
+	}
+	if err := netlink.LinkDel(l); err != nil {
+		return fmt.Errorf("remove interface %s: %w", name, err)
+	}
+	return nil
+}
+
 func (links) DelAddr(name string, p netip.Prefix) error {
 	l, err := lookup(name)
 	if err != nil {

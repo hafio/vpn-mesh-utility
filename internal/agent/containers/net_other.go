@@ -27,6 +27,7 @@ func (otherNet) LinkHolding(netip.Prefix, string) (string, error) { return "", e
 func (otherNet) Addrs(string) ([]netip.Prefix, error)             { return nil, errPlatform }
 func (otherNet) AddAddr(string, netip.Prefix) error               { return errPlatform }
 func (otherNet) EnsureBridge(string) (bool, error)                { return false, errPlatform }
+func (otherNet) DeleteBridge(string) (bool, error)                { return false, nil }
 func (otherNet) Proxies(string) ([]netip.Addr, error)             { return nil, errPlatform }
 func (otherNet) AddProxy(string, netip.Addr) error                { return errPlatform }
 func (otherNet) DelProxy(string, netip.Addr) error                { return errPlatform }

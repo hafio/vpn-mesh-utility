@@ -328,7 +328,7 @@ node ...`. Each change is versioned, audited and pushed to the affected agents a
 | put it back | `node enable vps-3` |
 | re-install a node from scratch | `node token vps-3`, then the install command again |
 | a phone's new profile (a new key) | `node phone <name>`, `--exit vps-2` for all its traffic |
-| remove a node | `node rm vps-3` |
+| remove a node | `node rm vps-3`; on its host, `systemctl stop meshctl-agent` and then `meshctl agent reset` take its tunnel, routes, rules, firewalld zone and DNS registration off the host (the data dir stays) |
 | move a node to another mesh IP | `node set laptop --mesh-ip 10.77.2.9`, or Mesh IP on its page: peers, its DNS name and its agent follow; the answer lists what does not (a server's Swarm advertise address, a phone's profile, a firewall zone, object or policy naming the old address) |
 | put a node in firewall groups | `node add laptop --role spoke --groups laptops,office`, `node set laptop --groups laptops`, or Groups on its page |
 
@@ -690,6 +690,8 @@ server is back. When it is, agents reconnect within a minute.
 | `node_disabled` | an operator disabled the node; `node enable` it |
 | `token_invalid ... already used` / `expired` | tokens are single-use and live an hour: `node token <name>` |
 | `interface wg0 exists but was not created by meshctl` | a wg-quick setup owns wg0: `wg-quick down wg0` and disable it, then restart the agent |
+| `the agent could not take everything it made off this host` | a refused agent's teardown failed at the step the error names (firewalld stopped, say): fix that, then `meshctl agent reset` |
+| `another meshctl process uses this data dir ... stop the agent first` | `agent reset` needs the agent stopped: `systemctl stop meshctl-agent` (Windows: `Stop-Service meshctl-agent`) |
 | `firewall` listed as degraded | firewalld is missing or stopped; the tunnel works, but Swarm and udp/51820 may be blocked. Install/start firewalld, or open the ports yourself and run the agent with `--no-firewall` |
 | `create WireGuard interface wg0: ... is the wireguard kernel module available?` | `modprobe wireguard`, or run WireGuard in the agent: `agent run --wg-backend userspace` (`auto`, the default, picks it when the module is missing) |
 | `MESHCTL_MODE=server is gone` (or `=agent`) | a file from before amendment A48: the control plane sets `MESHCTL_MODE=control`, a node leaves it out |
@@ -742,8 +744,10 @@ token cuts the node off until the new join (below).
 
 **A new token cuts the node off** (amendment A50). `meshctl node token <name>` (or the node page)
 retires the node's current key at once: its peers drop it, and its running agent is told, signed,
-that it was replaced -- it stops (`agent run` exits 3, which the systemd unit does not restart; on
-Windows the service stops). The node comes back when it joins with the new token, with fresh
-keys: every join makes new ones. The node page asks first when the node was seen in the last 5
-minutes; `node token` says it was. A copy of an old data dir, from any earlier join, is told the
-same and stops.
+that it was replaced -- it takes its tunnel, routes, rules, firewalld zone and DNS registration off
+the host and stops (`agent run` exits 3, which the systemd unit does not restart; on Windows the
+service stops). When a step of that teardown fails, the log says so and `meshctl agent reset`
+(with the agent stopped; `--data` for another mesh's agent) tries again. The node comes back
+when it joins with the new token, with fresh keys: every join makes new ones. The node page asks
+first when the node was seen in the last 5 minutes; `node token` says it was. A copy of an old
+data dir, from any earlier join, is told the same, tears down and stops.
