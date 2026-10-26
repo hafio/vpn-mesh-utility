@@ -66,7 +66,9 @@ curl -fsSL https://mesh.example.com/install.sh | sudo sh -s -- --mesh default --
 install.sh downloads meshctl from your server, checks its SHA-256 against the value baked into
 the script, installs it to `/usr/local/bin`, installs the systemd unit `meshctl-agent@.service`,
 joins, and enables and starts the mesh's instance, `meshctl-agent@default` (amendment A51). The
-agent's data dir is the mesh's, `/var/lib/meshctl/default`, and its local API socket
+running instance stops for the join; when the join fails (an expired token, the wrong `--mesh`),
+install.sh starts it again on its earlier enrollment. The agent's data dir is the mesh's,
+`/var/lib/meshctl/default`, and its local API socket
 `/run/meshctl/default.sock`; `meshctl status`, `exit`, `dns`, `logs`, `ui` and `agent reset`
 find it by themselves while the host has one mesh's agent (`--mesh <mesh>` with several). A join
 whose token belongs to another mesh's node is refused before the token is used, saying which.
@@ -172,8 +174,8 @@ irm https://mesh.example.com/install.ps1 | iex
 
 install.ps1 (amendment A51) downloads meshctl for Windows from your server, checks its SHA-256
 against the value baked into the script, copies it to `C:\Program Files\meshctl\meshctl.exe`,
-joins, and installs and starts the mesh's service `meshctl-agent-default`, which Windows starts at
-boot and restarts when it fails (`MESHCTL_NAME`, when set, must be the token's node). Its data is
+joins, and installs and starts the mesh's service `meshctl-agent-default` (a failed join starts
+again every service it stopped), which Windows starts at boot and restarts when it fails (`MESHCTL_NAME`, when set, must be the token's node). Its data is
 in `C:\ProgramData\meshctl\default` (SYSTEM and Administrators only), its log in `agent.log`
 there (10 MiB, plus one older file). `meshctl status`, `exit`, `dns`, `logs` and `ui` reach it over
 the named pipe `\\.\pipe\meshctl-agent`, from an elevated prompt only. To remove it:

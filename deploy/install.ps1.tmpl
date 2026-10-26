@@ -54,16 +54,26 @@ function Install-Meshctl {
             Copy-Item -Force -Path $tmp -Destination $exe
             Write-Host "installed meshctl $Version to $exe"
         }
+    } catch {
+        $stopped | Start-Service -ErrorAction Continue
+        throw
     } finally {
         Remove-Item -Force -ErrorAction SilentlyContinue -Path $tmp
     }
 
-    # The join needs the mesh's data dir to itself.
-    Stop-Service -Name $service -ErrorAction SilentlyContinue
+    # The join needs the mesh's data dir to itself; a failed join starts
+    # again every service this script stopped.
+    $own = @(Get-Service -Name $service -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Running' })
+    $own | Stop-Service -Force
+    $stopped = @($stopped) + $own
     $join = @('agent', 'join', '--server', $Origin, '--mesh', $mesh)
     if ($env:MESHCTL_NAME) { $join += @('--name', $env:MESHCTL_NAME) }
     & $exe @join
-    if ($LASTEXITCODE -ne 0) { throw "install.ps1: meshctl agent join failed (exit $LASTEXITCODE)" }
+    $code = $LASTEXITCODE
+    if ($code -ne 0) {
+        $stopped | Start-Service -ErrorAction Continue
+        throw "install.ps1: meshctl agent join failed (exit $code)"
+    }
 
     $command = '"' + $exe + '" agent run --mesh ' + $mesh
     $existing = Get-CimInstance -ClassName Win32_Service -Filter "Name='$service'"

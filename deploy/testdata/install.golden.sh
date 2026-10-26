@@ -131,20 +131,30 @@ main() {
 
   service="meshctl-agent@$mesh.service"
   systemd=no
+  running=no
   if [ -d /run/systemd/system ]; then
     systemd=yes
     unit "$tmp/unit"
     install -m 0644 "$tmp/unit" /etc/systemd/system/meshctl-agent@.service
     systemctl daemon-reload
-    # The join needs the mesh's data dir to itself.
-    systemctl stop "$service" 2>/dev/null || true
+    # The join needs the mesh's data dir to itself; a failed join starts
+    # the running agent again below.
+    if systemctl is-active --quiet "$service"; then
+      running=yes
+      systemctl stop "$service"
+    fi
   fi
 
   set -- --server "$ORIGIN" --mesh "$mesh"
   [ -z "$name" ] || set -- "$@" --name "$name"
   [ -z "$endpoint" ] || set -- "$@" --endpoint "$endpoint"
   [ -z "$endpoint6" ] || set -- "$@" --endpoint6 "$endpoint6"
-  MESHCTL_TOKEN="$token" /usr/local/bin/meshctl agent join "$@"
+  if ! MESHCTL_TOKEN="$token" /usr/local/bin/meshctl agent join "$@"; then
+    if [ "$running" = yes ]; then
+      systemctl start "$service" && echo "started $service again on its earlier enrollment" >&2
+    fi
+    die "meshctl agent join failed (above)"
+  fi
 
   if [ "$systemd" = yes ]; then
     systemctl enable "$service" >/dev/null

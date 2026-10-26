@@ -48,9 +48,9 @@
     "semantic_hash": ""
   },
   "internal/proto/api_test.go": {
-    "mtime": 1792985270.823825,
-    "seen": 1792991186.5500124,
-    "ast_hash": "82978338da4aeb0f8d29153b1ffb8103",
+    "mtime": 1793005390.7095032,
+    "seen": 1793013362.8786309,
+    "ast_hash": "62d8c4a1d0cc3fdcdb3680033d875b7f",
     "semantic_hash": ""
   },
   "internal/proto/config.go": {
@@ -252,15 +252,15 @@
     "semantic_hash": ""
   },
   "docs/spec.md": {
-    "mtime": 1793000884.3545032,
-    "seen": 1793004872.5393996,
-    "ast_hash": "fee4bbfbe73b9cf225ffe4bf9f9bc0bd",
+    "mtime": 1793017341.6703207,
+    "seen": 1793017961.8717456,
+    "ast_hash": "9b8fd53ec29c3e9dd544676f89adecd9",
     "semantic_hash": ""
   },
   "docs/test.md": {
-    "mtime": 1793000929.3181965,
-    "seen": 1793004872.5394015,
-    "ast_hash": "94b56661e927381ae6a70389a4d9c863",
+    "mtime": 1793005405.3075626,
+    "seen": 1793013362.8854587,
+    "ast_hash": "1a3fd33f6670e2aa07126ff98fee258a",
     "semantic_hash": ""
   },
   "cmd/meshctl/agent.go": {
@@ -270,9 +270,9 @@
     "semantic_hash": ""
   },
   "cmd/meshctl/commands_test.go": {
-    "mtime": 1793000678.4858263,
-    "seen": 1793004872.5279677,
-    "ast_hash": "7f5b7df3d088fb9233bc6b4a8b56cc8c",
+    "mtime": 1793005390.7099984,
+    "seen": 1793013362.8705258,
+    "ast_hash": "6e2e991f9b7cdfda5b4c13826c73ebbc",
     "semantic_hash": ""
   },
   "cmd/meshctl/docs_test.go": {
@@ -648,15 +648,15 @@
     "semantic_hash": ""
   },
   "docs/commands.md": {
-    "mtime": 1793004993.7569528,
-    "seen": 1793005091.0430346,
+    "mtime": 1793019469.375097,
+    "seen": 1793019568.673122,
     "ast_hash": "2381f3749473791eec84ad603f84168c",
     "semantic_hash": ""
   },
   "docs/operations.md": {
-    "mtime": 1793000829.4822361,
-    "seen": 1793004872.5393968,
-    "ast_hash": "58a3cd624c7c53a2b3c9fc42dc7c2ffd",
+    "mtime": 1793017358.4793143,
+    "seen": 1793017961.871711,
+    "ast_hash": "8deda615c00326f2995e38aba49f0b33",
     "semantic_hash": ""
   },
   "docs/security.md": {
