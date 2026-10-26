@@ -759,6 +759,23 @@ func (e *Engine) Teardown(ctx context.Context, cfg *proto.NodeConfig) (int, erro
 func (e *Engine) Stats(cfg proto.NodeConfig) ([]proto.PeerStatus, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	return e.stats(cfg)
+}
+
+// ErrBusy is TryStats while an apply runs.
+var ErrBusy = errors.New("an apply is running")
+
+// TryStats is Stats without waiting for an apply that is running.
+func (e *Engine) TryStats(cfg proto.NodeConfig) ([]proto.PeerStatus, error) {
+	if !e.mu.TryLock() {
+		return nil, ErrBusy
+	}
+	defer e.mu.Unlock()
+	return e.stats(cfg)
+}
+
+// stats is Stats; the caller holds mu.
+func (e *Engine) stats(cfg proto.NodeConfig) ([]proto.PeerStatus, error) {
 	_, stats, err := e.d.Host.Device(e.d.Iface)
 	if err != nil {
 		return nil, err

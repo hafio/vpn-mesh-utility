@@ -37,7 +37,7 @@ func TestVerifyRejectsTampering(t *testing.T) {
 	otherPub, _ := testfix.IdentityKey(2)
 	const uri = "/api/v1/agent/config?since=3"
 	body := []byte(`{"x":1}`)
-	s := proto.Sign(priv, 7, http.MethodGet, uri, testfix.Epoch, body)
+	s := proto.SignSession(priv, 7, http.MethodGet, uri, testfix.Epoch, testfix.Session(7), testfix.Ticket(7), body)
 
 	cases := []struct {
 		name   string
@@ -53,6 +53,9 @@ func TestVerifyRejectsTampering(t *testing.T) {
 		{"body", pub, http.MethodGet, uri, []byte(`{"x":2}`), nil},
 		{"timestamp", pub, http.MethodGet, uri, body, func(s *proto.Signed) { s.Timestamp++ }},
 		{"nonce", pub, http.MethodGet, uri, body, func(s *proto.Signed) { s.Nonce = "AAAAAAAAAAAAAAAAAAAAAAAAAA" }},
+		{"session", pub, http.MethodGet, uri, body, func(s *proto.Signed) { s.Session = testfix.Session(8) }},
+		{"ticket", pub, http.MethodGet, uri, body, func(s *proto.Signed) { s.Ticket = testfix.Ticket(8) }},
+		{"no ticket", pub, http.MethodGet, uri, body, func(s *proto.Signed) { s.Ticket = "" }},
 		{"other node key", otherPub, http.MethodGet, uri, body, nil},
 	}
 	for _, c := range cases {
@@ -162,5 +165,30 @@ func TestParseSignedRejectsMalformedHeaders(t *testing.T) {
 				t.Fatalf("ParseSigned = %v, want ErrUnsigned", err)
 			}
 		})
+	}
+}
+
+// The session and the ticket travel in their own headers (amendment A50),
+// parse back as sent, and are refused when malformed; a request without
+// them has neither header.
+func TestSessionHeaders(t *testing.T) {
+	_, priv := testfix.IdentityKey(1)
+	h := http.Header{}
+	proto.SignSession(priv, 1, http.MethodGet, proto.PathConfig, testfix.Epoch, testfix.Session(1), testfix.Ticket(1), nil).Apply(h)
+	s, err := proto.ParseSigned(h)
+	if err != nil || s.Session != testfix.Session(1) || s.Ticket != testfix.Ticket(1) {
+		t.Fatalf("ParseSigned = %+v, %v", s, err)
+	}
+	for _, name := range []string{proto.HeaderSession, proto.HeaderTicket} {
+		bad := h.Clone()
+		bad.Set(name, strings.ToUpper(testfix.Session(1)))
+		if _, err := proto.ParseSigned(bad); !errors.Is(err, proto.ErrUnsigned) || !strings.Contains(err.Error(), name) {
+			t.Errorf("a malformed %s: %v", name, err)
+		}
+	}
+	plain := http.Header{}
+	proto.Sign(priv, 1, http.MethodGet, proto.PathConfig, testfix.Epoch, nil).Apply(plain)
+	if plain.Get(proto.HeaderSession) != "" || plain.Get(proto.HeaderTicket) != "" {
+		t.Fatalf("a request without a session sent %v", plain)
 	}
 }

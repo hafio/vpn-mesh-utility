@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"crypto/ed25519"
+	cryptorand "crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +29,7 @@ import (
 
 	"github.com/hafio/vpn-mesh-utility/internal/agent/agentfake"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/apply"
+	"github.com/hafio/vpn-mesh-utility/internal/agent/hostid"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/localapi"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/logbuf"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/names"
@@ -70,6 +73,17 @@ type fakeServer struct {
 	nudge       chan struct{}
 	names       []proto.NamesRequest
 	namesRefuse *proto.ErrorBody
+	// hello answers a hello (amendment A50); nil grants the node its
+	// fixture session. hellos counts them, alive keeps every nonce answered
+	// and byes counts goodbyes.
+	hello  func() (*proto.HelloResponse, *proto.ErrorBody)
+	hellos int
+	alive  []string
+	byes   int
+	// lose answers the next status 409 session; challenge goes out on
+	// every status answer.
+	lose      bool
+	challenge string
 }
 
 func newFakeServer(t *testing.T, pub ed25519.PublicKey, cfg proto.NodeConfig, refuse *proto.ErrorBody) (*fakeServer, *httptest.Server) {
@@ -81,6 +95,9 @@ func newFakeServer(t *testing.T, pub ed25519.PublicKey, cfg proto.NodeConfig, re
 	mux.HandleFunc("POST "+proto.PathPrefs, f.prefsHandler)
 	mux.HandleFunc("GET "+proto.PathMesh, f.meshHandler)
 	mux.HandleFunc("PUT "+proto.PathNames, f.namesHandler)
+	mux.HandleFunc("POST "+proto.PathHello, f.helloHandler)
+	mux.HandleFunc("POST "+proto.PathAlive, f.aliveHandler)
+	mux.HandleFunc("POST "+proto.PathBye, f.byeHandler)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return f, srv
@@ -124,6 +141,69 @@ func signed(w http.ResponseWriter, r *http.Request, kind string, slot proto.Slot
 	node, _ := strconv.ParseInt(r.Header.Get(proto.HeaderNode), 10, 64)
 	w.Header().Set(proto.HeaderConfigSignature, proto.SignBody(testfix.ConfigKey(), kind, node, slot, r.Header.Get(proto.HeaderNonce), b))
 	_, _ = w.Write(b)
+}
+
+func (f *fakeServer) helloHandler(w http.ResponseWriter, r *http.Request) {
+	body, ok := f.verify(w, r)
+	if !ok {
+		return
+	}
+	var req proto.HelloRequest
+	if err := json.Unmarshal(body, &req); err != nil || req.Validate() != nil {
+		f.t.Errorf("hello %s: %v", body, err)
+	}
+	node, _ := strconv.ParseInt(r.Header.Get(proto.HeaderNode), 10, 64)
+	resp := &proto.HelloResponse{Session: testfix.Session(node), Ticket: testfix.Ticket(node), Heartbeat: proto.Heartbeat}
+	var eb *proto.ErrorBody
+	f.mu.Lock()
+	f.hellos++
+	if f.hello != nil {
+		resp, eb = f.hello()
+	}
+	f.mu.Unlock()
+	if eb != nil {
+		status := http.StatusConflict
+		if proto.Definitive(eb.Code) {
+			status, eb.ServerTime = http.StatusForbidden, time.Now().Unix()
+			w.Header().Set(proto.HeaderRefusalSignature, proto.SignRefusal(testfix.ConfigKey(), node, eb.Code, r.Header.Get(proto.HeaderNonce), eb.ServerTime))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(eb)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func (f *fakeServer) aliveHandler(w http.ResponseWriter, r *http.Request) {
+	body, ok := f.verify(w, r)
+	if !ok {
+		return
+	}
+	var req proto.AliveRequest
+	_ = json.Unmarshal(body, &req) // a malformed one is recorded as empty
+	f.mu.Lock()
+	f.alive = append(f.alive, req.Nonce)
+	f.mu.Unlock()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (f *fakeServer) byeHandler(w http.ResponseWriter, r *http.Request) {
+	if _, ok := f.verify(w, r); !ok {
+		return
+	}
+	f.mu.Lock()
+	f.byes++
+	f.mu.Unlock()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// sessions is how many hellos and goodbyes the server saw, and the
+// challenges answered.
+func (f *fakeServer) sessions() (hellos, byes int, alive []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.hellos, f.byes, slices.Clone(f.alive)
 }
 
 func (f *fakeServer) set(cfg proto.NodeConfig) proto.ConfigEvent {
@@ -218,6 +298,16 @@ func (f *fakeServer) status(w http.ResponseWriter, r *http.Request) {
 		f.t.Errorf("status report %s: %v", body, err)
 	}
 	f.mu.Lock()
+	if f.lose {
+		f.lose = false
+		f.mu.Unlock()
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(proto.ErrorBody{Code: proto.CodeSession, Message: "say hello"})
+		return
+	}
+	if f.challenge != "" {
+		w.Header().Set(proto.HeaderChallenge, f.challenge)
+	}
 	if f.statusDown {
 		f.mu.Unlock()
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -309,10 +399,34 @@ func newDir(t *testing.T) (*state.Dir, ed25519.PublicKey) {
 // enroll records the enrollment `agent join` would have written for vps-1.
 func enroll(t *testing.T, dir *state.Dir, server string) { enrollAs(t, dir, server, testfix.VPS1) }
 
+// It also leaves what a run on this machine leaves (amendment A50): the
+// session, and the machine the data dir ran on, so the cache is applied at
+// boot; each dir is a mesh of its own, so agents of several tests never
+// share a mesh lock.
 func enrollAs(t *testing.T, dir *state.Dir, server string, n testfix.Node) {
 	t.Helper()
+	uuid := make([]byte, 16)
+	_, _ = cryptorand.Read(uuid) // never fails
 	if err := dir.SaveEnrollment(state.Enrollment{Server: server, NodeID: n.ID, Name: n.Name, Role: n.Role, MeshIP: n.MeshIP,
-		ConfigKey: testfix.ConfigKeyB64()}); err != nil {
+		ConfigKey: testfix.ConfigKeyB64(), MeshUUID: hex.EncodeToString(uuid)}); err != nil {
+		t.Fatal(err)
+	}
+	ranHere(t, dir, n.ID)
+}
+
+// testMachine is the machine id of the tests' host.
+const testMachine = "4c4c4544004d3110804ac2c04f4a3332"
+
+func testMachineID() (string, error) { return testMachine, nil }
+
+// ranHere writes what a run of node on this machine leaves in its data
+// dir: host.json and session.json.
+func ranHere(t *testing.T, dir *state.Dir, node int64) {
+	t.Helper()
+	if err := dir.SaveHost(state.Host{Machine: hostid.Local(testMachine)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := dir.SaveSession(state.Session{Session: testfix.Session(node), Ticket: testfix.Ticket(node), Heartbeat: proto.Heartbeat}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -408,7 +522,7 @@ func startWith(t *testing.T, dir *state.Dir, socket string, edit func(*Deps)) *r
 	r.deps = Deps{DataDir: dir.Path, Socket: socket, Version: "v1.0.0", Host: r.host, Routes: agentfake.NewRoutes(),
 		Exit: r.policy, Sysctl: &agentfake.Sysctl{}, MeshFirewall: &policy.Enforcer{K: r.kernel}, Firewall: r.fw, DNS: r.dns,
 		Containers: agentfake.NewNet(), PollEvery: 50 * time.Millisecond, StatusEvery: 50 * time.Millisecond,
-		BackoffMin: 10 * time.Millisecond, BackoffMax: 50 * time.Millisecond,
+		BackoffMin: 10 * time.Millisecond, BackoffMax: 50 * time.Millisecond, MachineID: testMachineID, HelloRetry: 10 * time.Millisecond,
 		RuntimeSocket: RuntimeOff} // never the host's container runtime
 	if edit != nil {
 		edit(&r.deps)
@@ -580,6 +694,7 @@ func TestRunRefusesAnUnusableDataDir(t *testing.T) {
 		t.Helper()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
+		d.MachineID = testMachineID
 		return Run(ctx, d)
 	}
 	if err := run(Deps{DataDir: "data?x=1", Host: agentfake.NewHost()}); err == nil || !strings.Contains(err.Error(), "--data") {
@@ -794,7 +909,8 @@ func TestJoin(t *testing.T) {
 	opts := JoinOptions{DataDir: data, Server: srv.URL, Token: testfix.Token, Version: "v1.0.0", Service: svc, Out: &out,
 		Hostname: func() (string, error) { return "My_VPS.Example.COM", nil }, Backend: func() string { return "kernel" },
 		PublicIPv4: func() (netip.Addr, bool) { return netip.MustParseAddr("198.51.100.7"), true },
-		PublicIPv6: func() (netip.Addr, bool) { return netip.MustParseAddr("2001:db8::7"), true }, Endpoint6: "[2001:db8::70]:51820"}
+		PublicIPv6: func() (netip.Addr, bool) { return netip.MustParseAddr("2001:db8::7"), true }, Endpoint6: "[2001:db8::70]:51820",
+		MachineID: testMachineID}
 	if _, err := Join(context.Background(), opts); err != nil {
 		t.Fatal(err)
 	}
@@ -812,8 +928,24 @@ func TestJoin(t *testing.T) {
 	if e, err := dir.Enrollment(); err != nil || e.NodeID != 7 || e.Server != srv.URL {
 		t.Fatalf("enrollment %+v, %v", e, err)
 	}
+	// The node is pinned to this machine (amendment A50): the server gets
+	// one hash of its id, host.json keeps another.
+	if h, ok, _ := dir.Host(); got.MachineID != hostid.Presented(testMachine) || !ok || h.Machine != hostid.Local(testMachine) {
+		t.Fatalf("the join presented machine %q; host.json %+v", got.MachineID, h)
+	}
+	if _, ok, _ := dir.Session(); ok {
+		t.Fatal("a join kept a session")
+	}
 	if !svc.installed || !strings.Contains(out.String(), "installed and started") || !strings.Contains(out.String(), "(server, mesh IP 10.77.0.1, node id 7)") {
 		t.Fatalf("service not installed: %s", out.String())
+	}
+
+	// A host without a machine id cannot join: nothing is sent.
+	noID := opts
+	noID.MachineID = func() (string, error) { return "", errors.New("this host has no machine id") }
+	got = proto.JoinRequest{}
+	if _, err := Join(context.Background(), noID); err == nil || !strings.Contains(err.Error(), "machine id") || got.Token != "" {
+		t.Fatalf("a join without a machine id = %v, sent %+v", err, got)
 	}
 
 	// Re-joining as another node drops the cached config.
@@ -901,7 +1033,7 @@ func TestJoinValidatesBeforeCallingTheServer(t *testing.T) {
 	defer srv.Close()
 	base := JoinOptions{DataDir: filepath.Join(t.TempDir(), "data"), Server: srv.URL, Token: testfix.Token, Version: "v1",
 		NoService: true, Backend: func() string { return "kernel" }, PublicIPv4: func() (netip.Addr, bool) { return netip.Addr{}, false },
-		PublicIPv6: func() (netip.Addr, bool) { return netip.Addr{}, false }}
+		PublicIPv6: func() (netip.Addr, bool) { return netip.Addr{}, false }, MachineID: testMachineID}
 	for name, edit := range map[string]func(*JoinOptions){
 		"http to a public server": func(o *JoinOptions) { o.Server = "http://mesh.example.com" },
 		"short token":             func(o *JoinOptions) { o.Token = "abc" },
@@ -1456,7 +1588,7 @@ func TestLocalUIOffOrUnavailable(t *testing.T) {
 	dir3, _ := joinedTo(t, testfix.ServerConfig())
 	host := agentfake.NewHost()
 	err = Run(context.Background(), Deps{DataDir: dir3.Path, UIListen: "0.0.0.0:7443", Host: host, Routes: agentfake.NewRoutes(), Exit: &agentfake.Policy{},
-		Sysctl: &agentfake.Sysctl{}, Firewall: &agentfake.Firewall{}, DNS: &agentfake.DNS{}})
+		Sysctl: &agentfake.Sysctl{}, Firewall: &agentfake.Firewall{}, DNS: &agentfake.DNS{}, MachineID: testMachineID})
 	if err == nil || !strings.Contains(err.Error(), "loopback") || host.Mutations() != 0 {
 		t.Fatalf("Run with the UI off loopback = %v, %d host calls", err, host.Mutations())
 	}

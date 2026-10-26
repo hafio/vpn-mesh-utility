@@ -22,6 +22,8 @@ package agent
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -29,8 +31,10 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -45,6 +49,7 @@ import (
 	"github.com/hafio/vpn-mesh-utility/internal/agent/execrun"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/exitmode"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/firewall"
+	"github.com/hafio/vpn-mesh-utility/internal/agent/hostid"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/localapi"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/localui"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/names"
@@ -150,6 +155,14 @@ type Deps struct {
 	// handshake before the agent dials the server's other one (M8); zero
 	// means 45 s.
 	EndpointRetry time.Duration
+	// MachineIDFile holds the host's machine id (amendment A50); empty
+	// reads the platform's (hostid.Read). MachineID replaces the read
+	// (tests).
+	MachineIDFile string
+	MachineID     func() (string, error)
+	// HelloRetry is how long a hello answered "wait" waits before it asks
+	// again; zero means proto.WaitRetry seconds.
+	HelloRetry time.Duration
 }
 
 func (d *Deps) defaults() {
@@ -189,6 +202,13 @@ func (d *Deps) defaults() {
 	if d.NamesSettle <= 0 {
 		d.NamesSettle = defaultNamesSettle
 	}
+	if d.MachineID == nil {
+		file := d.MachineIDFile
+		d.MachineID = func() (string, error) { return hostid.Read(file) }
+	}
+	if d.HelloRetry <= 0 {
+		d.HelloRetry = proto.WaitRetry * time.Second
+	}
 }
 
 // runner is one running agent.
@@ -204,6 +224,10 @@ type runner struct {
 	stop context.CancelCauseFunc
 	// backend is the WireGuard backend in use, as reported.
 	backend string
+	// machine and hostname are what a hello says of this host (amendment
+	// A50): hostid.Presented of its machine id, and its name; hostLocal is
+	// what host.json keeps of the id.
+	machine, hostname, hostLocal string
 
 	syncKick   chan struct{}
 	statusKick chan struct{}
@@ -256,6 +280,18 @@ type runner struct {
 // until an operator acts (`meshctl agent run` exits 3).
 var ErrRefused = errors.New("the control plane refused this node")
 
+// Refusal is the ErrRefused that ended a run: the code (proto.CodeReplaced,
+// CodeDuplicate or CodeForeign) and what the control plane said.
+type Refusal struct {
+	Code    string
+	Message string
+}
+
+func (e *Refusal) Error() string { return ErrRefused.Error() + ": " + e.Message }
+
+// Is makes a Refusal an ErrRefused.
+func (e *Refusal) Is(target error) bool { return target == ErrRefused }
+
 // Run runs the agent until ctx ends, or until the control plane refuses
 // the node definitively (ErrRefused).
 func Run(ctx context.Context, d Deps) error {
@@ -272,12 +308,27 @@ func Run(ctx context.Context, d Deps) error {
 	defer unlock()
 	enr, err := dir.Enrollment()
 	if errors.Is(err, state.ErrNotJoined) {
+		if rec, ok, _ := dir.Refused(); ok { // best effort: the advice below stands either way
+			return fmt.Errorf("%w: the control plane refused this node here (%s: %s); it needs a new join token -- "+
+				"`meshctl node token <name>`, then `meshctl agent join` (data dir %s)", err, rec.Code, rec.Message, d.DataDir)
+		}
 		return fmt.Errorf("%w: run `meshctl agent join --server <url> --token <token>` first (data dir %s)", err, d.DataDir)
 	}
 	if err != nil {
 		return err
 	}
 	keys, err := dir.LoadKeys()
+	if err != nil {
+		return err
+	}
+	// One agent of the mesh per network namespace (amendment A50): a copy
+	// of this data dir in another directory is refused here too.
+	unlockMesh, err := state.LockMesh(meshKey(enr))
+	if err != nil {
+		return err
+	}
+	defer unlockMesh()
+	machine, err := d.MachineID()
 	if err != nil {
 		return err
 	}
@@ -293,8 +344,30 @@ func Run(ctx context.Context, d Deps) error {
 		d.Log.Warn("ignoring the node's own settings; DNS stays on", "err", err)
 	}
 	pinned := enr.Pinned()
+	// The session to carry on with, and whether the cache may be applied:
+	// only where the data dir last ran (amendment A50). A copy on another
+	// machine applies nothing before the control plane has had its say.
+	saved, hasSession, err := dir.Session()
+	if err != nil {
+		d.Log.Warn("ignoring the saved session; the agent says hello", "err", err)
+		hasSession = false
+	}
+	ran, hasHost, err := dir.Host()
+	if err != nil {
+		d.Log.Warn("ignoring host.json; the cached config waits for the control plane", "err", err)
+	}
+	here := hasHost && ran.Machine == hostid.Local(machine)
+	var carry *client.Session
+	if hasSession {
+		carry = &client.Session{ID: saved.Session, Ticket: saved.Ticket, Heartbeat: saved.Heartbeat, Released: saved.Released || !here}
+	}
+	keep := func(s client.Session) {
+		if err := dir.SaveSession(state.Session{Session: s.ID, Ticket: s.Ticket, Heartbeat: s.Heartbeat, Released: s.Released}); err != nil {
+			d.Log.Error("the session could not be saved; a restart says hello and may wait for the control plane", "err", err)
+		}
+	}
 	cl, err := client.New(client.Options{Server: enr.Server, NodeID: enr.NodeID, Key: keys.Identity, ConfigKey: pinned.Key, Slot: slot,
-		Version: d.Version, Now: d.Now, Transport: d.Transport})
+		Version: d.Version, Now: d.Now, Transport: d.Transport, Session: carry, Keep: keep})
 	if err != nil {
 		return err
 	}
@@ -302,6 +375,7 @@ func Run(ctx context.Context, d Deps) error {
 	defer stop(nil)
 	r := &runner{
 		d: d, dir: dir, enr: enr, pinned: pinned, cl: cl, backend: backend, stop: stop,
+		machine: hostid.Presented(machine), hostname: hostname(), hostLocal: hostid.Local(machine),
 		log:      d.Log.With("node", enr.Name),
 		syncKick: make(chan struct{}, 1), statusKick: make(chan struct{}, 1), proxyKick: make(chan struct{}, 1),
 		meshKick: make(chan struct{}, 1), namesKick: make(chan struct{}, 1), scheduleKick: make(chan struct{}, 1),
@@ -342,8 +416,14 @@ func Run(ctx context.Context, d Deps) error {
 		r.log.Warn("ignoring the cached config", "err", err)
 	}
 	r.recoverPending(cfg)
-	if cfg != nil {
+	switch {
+	case cfg != nil && here && hasSession:
 		r.apply(ctx, *cfg, proto.SignedBody{}, "cache")
+	case cfg != nil:
+		r.log.Warn("not applying the cached config: this data dir did not last run on this machine; it waits for the control plane")
+	}
+	if rec, ok, _ := dir.Refused(); ok { // best effort: it only explains
+		r.log.Warn("the control plane refused this node here before; it says hello again", "code", rec.Code, "at", time.Unix(rec.At, 0).UTC())
 	}
 
 	var loops sync.WaitGroup
@@ -366,8 +446,8 @@ func Run(ctx context.Context, d Deps) error {
 	}
 	r.log.Info("meshctl agent running", "server", enr.Server, "node_id", enr.NodeID, "version", d.Version, "wg_backend", backend)
 
-	for _, loop := range []func(context.Context){r.syncLoop, r.eventsLoop, r.pollLoop, r.statusLoop, r.safeLoop, r.reassertLoop, r.meshLoop,
-		r.namesLoop, r.scheduleLoop, r.proxyLoop} {
+	for _, loop := range []func(context.Context){r.sessionLoop, r.syncLoop, r.eventsLoop, r.pollLoop, r.statusLoop, r.safeLoop, r.reassertLoop,
+		r.meshLoop, r.namesLoop, r.scheduleLoop, r.proxyLoop} {
 		loops.Add(1)
 		go func() {
 			defer loops.Done()
@@ -379,9 +459,125 @@ func Run(ctx context.Context, d Deps) error {
 	loops.Wait()
 	if err := context.Cause(ctx); errors.Is(err, ErrRefused) {
 		r.teardown()
+		r.refused(err)
 		return err
 	}
+	// A clean stop says goodbye, so the next start is let in at once; one
+	// the control plane did not hear carries on with the session.
+	bctx, cancel := context.WithTimeout(context.Background(), byeWait)
+	defer cancel()
+	if err := r.cl.Bye(bctx); err != nil {
+		r.log.Warn("could not say goodbye to the control plane; the next start carries on with this session", "err", err)
+	}
 	return nil
+}
+
+// byeWait bounds the goodbye at a clean stop.
+const byeWait = 5 * time.Second
+
+// sessionLoop keeps the node's session (amendment A50): whenever the client
+// has none -- at start without one, after the control plane forgot it, or
+// when another copy took it over -- it says hello until the node is let in,
+// waiting while another copy is asked whether it runs. A definitive refusal
+// ends the run (serverError).
+func (r *runner) sessionLoop(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-r.cl.Lost():
+		}
+		r.hello(ctx)
+	}
+}
+
+// hello says hello until the node is let in, refused or ctx ends.
+func (r *runner) hello(ctx context.Context) {
+	backoff, waiting := r.d.BackoffMin, false
+	for ctx.Err() == nil {
+		resp, err := r.cl.Hello(ctx, proto.HelloRequest{MachineID: r.machine, Hostname: r.hostname})
+		var ce *client.Error
+		switch {
+		case err == nil:
+			r.log.Info("the control plane let this node in", "heartbeat", resp.Heartbeat)
+			r.contact()
+			if err := r.dir.SaveHost(state.Host{Machine: r.hostLocal}); err != nil {
+				r.log.Warn("host.json not written; the next boot waits for the control plane before it applies the cache", "err", err)
+			}
+			_ = r.dir.ClearRefused() // explained a refusal that is over; best effort
+			kick(r.statusKick)
+			r.trigger()
+			return
+		case errors.As(err, &ce) && ce.Code == proto.CodeWait:
+			if !waiting {
+				r.log.Warn("another copy of this node holds its session; waiting while the control plane asks it whether it still runs",
+					"err", err)
+				waiting = true
+			}
+			select {
+			case <-ctx.Done():
+			case <-time.After(r.d.HelloRetry):
+			}
+			continue
+		}
+		r.serverError("hello", err)
+		wait := backoff/2 + rand.N(backoff/2+1)
+		select {
+		case <-ctx.Done():
+		case <-time.After(wait):
+		}
+		backoff = min(2*backoff, r.d.BackoffMax)
+	}
+}
+
+// refused records why the control plane refused this copy (amendment A50),
+// once it is torn down: a duplicate or a replaced copy forgets its session
+// and keeps its enrollment, so a later start says hello again; a copy on
+// another machine removes everything a node could run with.
+func (r *runner) refused(err error) {
+	var ref *Refusal
+	if !errors.As(err, &ref) {
+		return
+	}
+	rec := state.Refused{Code: ref.Code, At: r.d.Now().Unix(), Message: ref.Message}
+	if jr, err := r.dir.JoinRecord(); err == nil {
+		rec.Token = jr.Token
+	}
+	if err := r.dir.SaveRefused(rec); err != nil {
+		r.log.Error("refused.json not written", "err", err)
+	}
+	if ref.Code == proto.CodeForeign {
+		if err := r.dir.Wipe(append([]string{state.RefusedFile}, logFiles...)...); err != nil {
+			r.log.Error("the data dir was not wiped; remove it before this host joins again", "err", err)
+			return
+		}
+		r.log.Warn("this node runs on another machine: its data dir here is wiped, and it needs a new join token to run here")
+		return
+	}
+	if err := r.dir.ClearSession(); err != nil {
+		r.log.Error("session.json not removed", "err", err)
+	}
+}
+
+// logFiles are the Windows service's log in the data dir (cmd/meshctl),
+// open while the agent runs: a wipe leaves them.
+var logFiles = []string{"agent.log", "agent.log.1"}
+
+// meshKey names the mesh's lock: a hash of its uuid, or for an enrollment
+// without one of its server and slot.
+func meshKey(e state.Enrollment) string {
+	key := e.MeshUUID
+	if key == "" {
+		key = e.Server + "\x00" + strconv.Itoa(int(e.Slot))
+	}
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:16])
+}
+
+// hostname is this host's name as a hello and a join report it.
+func hostname() string {
+	h, _ := os.Hostname() // none is reported as "unknown"
+	return cleanHostname(h)
 }
 
 // teardown takes off the host what this agent made, once the control plane
@@ -974,7 +1170,7 @@ func (r *runner) serverError(what string, err error) {
 		// (amendment A50).
 		r.log.Error(what+": the control plane refused this node; the agent stops", "code", ce.Code, "err", err)
 		if r.stop != nil {
-			r.stop(fmt.Errorf("%w: %s", ErrRefused, ce.Message))
+			r.stop(&Refusal{Code: ce.Code, Message: ce.Message})
 		}
 	case errors.Is(err, context.Canceled):
 	case errors.As(err, &ce) && ce.Code == proto.CodeClockSkew:
@@ -1036,7 +1232,8 @@ func (r *runner) pollLoop(ctx context.Context) {
 }
 
 func (r *runner) statusLoop(ctx context.Context) {
-	t := time.NewTicker(r.d.StatusEvery)
+	every := r.d.StatusEvery
+	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
 		select {
@@ -1044,6 +1241,12 @@ func (r *runner) statusLoop(ctx context.Context) {
 			return
 		case <-t.C:
 		case <-r.statusKick:
+		}
+		// The hello's heartbeat is the longest the control plane waits
+		// between two (amendment A50); --status-every may only shorten it.
+		if hb := time.Duration(r.cl.Session().Heartbeat) * time.Second; hb > 0 && hb < r.d.StatusEvery && hb != every {
+			every = hb
+			t.Reset(every)
 		}
 		// A server that stopped answering on one endpoint is tried on its
 		// other (M8), at every heartbeat, whether the server answers or not.
@@ -1086,10 +1289,13 @@ func (r *runner) report() proto.StatusReport {
 	}
 	r.mu.Unlock()
 	if applied != nil {
-		peers, err := r.engine.Stats(*applied)
-		if err != nil {
+		// Not behind an apply: the heartbeat goes without the peers rather
+		// than late (amendment A50).
+		switch peers, err := r.engine.TryStats(*applied); {
+		case errors.Is(err, apply.ErrBusy):
+		case err != nil:
 			rep.Errors = append(rep.Errors, "read peer status: "+err.Error())
-		} else {
+		default:
 			rep.Peers = peers
 		}
 	}
@@ -1163,6 +1369,9 @@ func (r *runner) prefs(ctx context.Context, req proto.PrefsRequest) (proto.Prefs
 	resp, err := r.cl.Prefs(ctx, req)
 	if err != nil {
 		var ce *client.Error
+		if errors.Is(err, client.ErrNoSession) {
+			return proto.PrefsResponse{}, &localapi.Refusal{Status: http.StatusServiceUnavailable, Code: proto.CodeSession, Message: err.Error()}
+		}
 		if errors.As(err, &ce) {
 			if ce.Definitive {
 				r.serverError("change the node's settings", err)

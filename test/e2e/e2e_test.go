@@ -29,6 +29,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -116,6 +117,8 @@ type lab struct {
 	bin   string
 	ca    string
 	procs map[string]*exec.Cmd
+	// exits delivers each process's end, once (its Wait).
+	exits map[string]chan error
 	// runtimes are the container runtime sockets agents read names from,
 	// by namespace; every other agent reads none (never the host's).
 	runtimes map[string]string
@@ -144,7 +147,7 @@ func newLab(t *testing.T) *lab {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l := &lab{t: t, dir: t.TempDir(), bin: bin, procs: map[string]*exec.Cmd{}, runtimes: map[string]string{}}
+	l := &lab{t: t, dir: t.TempDir(), bin: bin, procs: map[string]*exec.Cmd{}, exits: map[string]chan error{}, runtimes: map[string]string{}}
 	deleteNamespaces()
 	t.Cleanup(l.teardown)
 
@@ -237,7 +240,9 @@ func (l *lab) start(name, space string, env []string, prog string, args ...strin
 	if err := cmd.Start(); err != nil {
 		l.t.Fatal(err)
 	}
-	l.procs[name] = cmd
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	l.procs[name], l.exits[name] = cmd, done
 }
 
 func (l *lab) stop(name string) {
@@ -245,15 +250,47 @@ func (l *lab) stop(name string) {
 	if cmd == nil {
 		return
 	}
+	done := l.exits[name]
 	delete(l.procs, name)
+	delete(l.exits, name)
 	_ = cmd.Process.Signal(syscall.SIGTERM)
-	done := make(chan struct{})
-	go func() { _ = cmd.Wait(); close(done) }()
 	select {
 	case <-done:
 	case <-time.After(10 * time.Second):
 		_ = cmd.Process.Kill()
 		<-done
+	}
+}
+
+// kill ends name with SIGKILL, as a crash or a power cut would.
+func (l *lab) kill(name string) {
+	l.t.Helper()
+	cmd, done := l.procs[name], l.exits[name]
+	delete(l.procs, name)
+	delete(l.exits, name)
+	_ = cmd.Process.Kill()
+	<-done
+}
+
+// exitCode waits up to within for name to end by itself and returns its
+// exit status.
+func (l *lab) exitCode(name string, within time.Duration) int {
+	l.t.Helper()
+	select {
+	case err := <-l.exits[name]:
+		delete(l.procs, name)
+		delete(l.exits, name)
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			return ee.ExitCode()
+		}
+		if err != nil {
+			l.t.Fatalf("%s: %v", name, err)
+		}
+		return 0
+	case <-time.After(within):
+		l.t.Fatalf("%s did not stop within %s", name, within)
+		return -1
 	}
 }
 

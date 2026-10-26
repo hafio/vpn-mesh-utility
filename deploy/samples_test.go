@@ -34,6 +34,10 @@ var (
 		"read_only", "tmpfs", "devices", "sysctls", "volumes", "ports", "networks", "restart", "mem_limit", "pids_limit"}
 )
 
+// machineID is the host's machine id, which every node's sample mounts
+// read-only: it pins the node to its machine (amendment A50).
+const machineID = "/etc/machine-id:/etc/machine-id:ro"
+
 // block is a fenced code block of the doc: its language and its text.
 type block struct{ lang, text string }
 
@@ -153,6 +157,9 @@ func checkComposeSample(t *testing.T, doc map[string]any) int {
 				t.Errorf("%s: volume %s", name, v)
 			}
 		}
+		if !control && !slices.Contains(list(svc["volumes"]), machineID) {
+			t.Errorf("%s: no %s volume; a node needs the host's machine id", name, machineID)
+		}
 		for _, p := range list(svc["ports"]) {
 			if control && !strings.HasPrefix(p, "127.0.0.1:") || !control && !strings.HasSuffix(p, "/udp") {
 				t.Errorf("%s: port %s (the control plane on loopback behind a proxy, a node its WireGuard port)", name, p)
@@ -168,11 +175,13 @@ func checkComposeSample(t *testing.T, doc map[string]any) int {
 }
 
 // sampleVolume is a volume a sample may mount: data at /data (a named
-// volume, or a host directory for a node), or a node's read-only runtime
-// socket.
+// volume, or a host directory for a node), a node's read-only runtime
+// socket, or the host's machine id.
 func sampleVolume(v string, node bool) bool {
 	src, dst, _ := strings.Cut(v, ":")
 	switch {
+	case node && v == machineID:
+		return true
 	case dst == "/data":
 		// The samples run on Linux hosts: their paths are POSIX on every OS
 		// the test runs on.
@@ -229,6 +238,9 @@ func checkKubeSample(t *testing.T, doc map[string]any) int {
 				t.Errorf("container %v adds %s", c["name"], a)
 			}
 		}
+		if !control && !mountsMachineID(c) {
+			t.Errorf("container %v does not mount the host's /etc/machine-id read-only", c["name"])
+		}
 		user := sc["runAsUser"]
 		if user == nil {
 			user = podUser
@@ -240,11 +252,24 @@ func checkKubeSample(t *testing.T, doc map[string]any) int {
 	vols, _ := spec["volumes"].([]any)
 	for _, v := range vols {
 		vol, _ := v.(map[string]any)
-		if hp := dig(vol, "hostPath"); len(hp) > 0 && hp["path"] != "/var/lib/meshctl" {
-			t.Errorf("volume %v mounts the host's %v; only a node's data directory", vol["name"], hp["path"])
+		if hp := dig(vol, "hostPath"); len(hp) > 0 && hp["path"] != "/var/lib/meshctl" && hp["path"] != "/etc/machine-id" {
+			t.Errorf("volume %v mounts the host's %v; only a node's data directory and its machine id", vol["name"], hp["path"])
 		}
 	}
 	return n
+}
+
+// mountsMachineID reports whether a Kubernetes container mounts
+// /etc/machine-id read-only.
+func mountsMachineID(c map[string]any) bool {
+	ms, _ := c["volumeMounts"].([]any)
+	for _, m := range ms {
+		vm, _ := m.(map[string]any)
+		if vm["mountPath"] == "/etc/machine-id" && vm["readOnly"] == true {
+			return true
+		}
+	}
+	return false
 }
 
 // checkRunSample holds a `podman run` line to the compose samples' posture.
@@ -263,6 +288,9 @@ func checkRunSample(t *testing.T, cmd []string) {
 	}
 	if !slices.Contains(cmd, user) {
 		t.Errorf("%s: no %s", line, user)
+	}
+	if i := slices.Index(cmd, machineID); !control && (i < 1 || cmd[i-1] != "-v") {
+		t.Errorf("%s: no -v %s; a node needs the host's machine id", line, machineID)
 	}
 	for i, a := range cmd {
 		flag, val, _ := strings.Cut(a, "=")

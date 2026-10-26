@@ -19,6 +19,7 @@ func validJoin() proto.JoinRequest {
 		IdentityPublicKey: testfix.IdentityKeyB64(2),
 		Endpoint:          "203.0.113.11:51820",
 		AgentVersion:      "v1.0.0",
+		MachineID:         testfix.MachineID,
 	}
 }
 
@@ -67,6 +68,7 @@ func TestJoinRequestValidateRejects(t *testing.T) {
 		{"public ip6 is IPv4", func(r *proto.JoinRequest) { r.PublicIP6 = "198.51.100.7" }, "public_ip6"},
 		{"public ip6 with a zone", func(r *proto.JoinRequest) { r.PublicIP6 = "fe80::1%eth0" }, "public_ip6"},
 		{"version", func(r *proto.JoinRequest) { r.AgentVersion = "1.0;rm" }, "agent_version"},
+		{"no machine id", func(r *proto.JoinRequest) { r.MachineID = "" }, "machine_id"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

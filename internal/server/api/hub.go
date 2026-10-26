@@ -24,8 +24,11 @@ type subscription struct {
 	meshID int64
 	events chan proto.ConfigEvent
 	mesh   chan struct{}
-	done   chan struct{}
-	once   sync.Once
+	// challenge carries the nonce of a challenge to the node's session
+	// holder (amendment A50), latest-wins like events.
+	challenge chan string
+	done      chan struct{}
+	once      sync.Once
 }
 
 func (s *subscription) end() { s.once.Do(func() { close(s.done) }) }
@@ -35,10 +38,13 @@ func NewHub() *Hub { return &Hub{subs: map[int64]*subscription{}} }
 
 // Subscribe registers the stream of node, of meshID, ending any previous
 // one. events delivers config events, mesh a nudge when its mesh's view
-// changed; done closes when the stream must end (replaced, kicked or
-// shutdown). cancel unregisters and must always be called.
-func (h *Hub) Subscribe(node, meshID int64) (events <-chan proto.ConfigEvent, mesh, done <-chan struct{}, cancel func()) {
-	s := &subscription{meshID: meshID, events: make(chan proto.ConfigEvent, 1), mesh: make(chan struct{}, 1), done: make(chan struct{})}
+// changed, challenge a challenge to the node's session holder; done closes
+// when the stream must end (replaced, kicked or shutdown). cancel
+// unregisters and must always be called.
+func (h *Hub) Subscribe(node, meshID int64) (events <-chan proto.ConfigEvent, mesh <-chan struct{}, challenge <-chan string,
+	done <-chan struct{}, cancel func()) {
+	s := &subscription{meshID: meshID, events: make(chan proto.ConfigEvent, 1), mesh: make(chan struct{}, 1), challenge: make(chan string, 1),
+		done: make(chan struct{})}
 	h.mu.Lock()
 	if h.closed {
 		s.end()
@@ -49,7 +55,7 @@ func (h *Hub) Subscribe(node, meshID int64) (events <-chan proto.ConfigEvent, me
 		h.subs[node] = s
 	}
 	h.mu.Unlock()
-	return s.events, s.mesh, s.done, func() {
+	return s.events, s.mesh, s.challenge, s.done, func() {
 		h.mu.Lock()
 		if h.subs[node] == s {
 			delete(h.subs, node)
@@ -92,6 +98,22 @@ func (h *Hub) NotifyMesh(meshID int64) {
 		default: // a nudge is already pending
 		}
 	}
+}
+
+// Challenge delivers a challenge's nonce to node's stream, if it has one
+// (amendment A50).
+func (h *Hub) Challenge(node int64, nonce string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	s := h.subs[node]
+	if s == nil {
+		return
+	}
+	select {
+	case <-s.challenge:
+	default:
+	}
+	s.challenge <- nonce
 }
 
 // Kick ends node's stream: the node was disabled or removed.

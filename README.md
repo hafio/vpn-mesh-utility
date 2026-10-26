@@ -47,7 +47,9 @@ admin command, each mesh's web UI pages under `/m/<mesh>/` with a Meshes page, a
 users granted meshes, and a host in two meshes running one agent per mesh, each on its slot's
 interface, port, tables and firewall names. Configs, mesh views and refusals are signed by the
 control plane and checked by every agent; every join makes fresh keys, and a new token cuts a
-node off at once. The live tests and the v1.0.0 release follow.
+node off at once. A node runs once, on its own machine: a second copy is refused (it takes down
+what it brought up), one on another machine wipes itself, and a restart carries on at once. The
+live tests and the v1.0.0 release follow.
 
 ## Quick start
 

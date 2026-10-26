@@ -294,6 +294,9 @@ func setupNodeShow(fs *flag.FlagSet, e *env) action {
 		row("keepalive", strconv.Itoa(n.Keepalive))
 		row("mtu", strconv.Itoa(n.MTU))
 		row("host", n.Hostname)
+		if n.Copy != nil {
+			row("second copy", api.CopyLine(*n.Copy, e.now().Location()))
+		}
 		row("platform", joinNonEmpty("/", n.OS, n.Arch))
 		row("agent", joinNonEmpty(", ", n.AgentVersion, n.WGBackend))
 		row("version", fmt.Sprintf("applied v%d, current v%d", n.AppliedVersion, n.ConfigVersion))

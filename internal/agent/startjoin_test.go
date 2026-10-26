@@ -207,7 +207,8 @@ func TestJoinOnStartAsksTheServer(t *testing.T) {
 	data, dir := startDir(t, false, "")
 	o := JoinOptions{DataDir: data, Server: srv.URL, Token: testfix.Token, Version: "v1",
 		Hostname: func() (string, error) { return "nas", nil }, Backend: func() string { return "kernel" },
-		PublicIPv4: func() (netip.Addr, bool) { return netip.Addr{}, false }, PublicIPv6: func() (netip.Addr, bool) { return netip.Addr{}, false }}
+		PublicIPv4: func() (netip.Addr, bool) { return netip.Addr{}, false }, PublicIPv6: func() (netip.Addr, bool) { return netip.Addr{}, false },
+		MachineID: testMachineID}
 	if err := JoinOnStart(context.Background(), o); err == nil || !strings.Contains(err.Error(), "already used") {
 		t.Fatalf("err = %v", err)
 	}

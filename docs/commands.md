@@ -18,6 +18,7 @@ meshctl agent install [flags]
 | `--data` | `/var/lib/meshctl` | agent data directory |
 | `--endpoint` |  | servers only: public IPv4:port, when auto-detection would be wrong |
 | `--endpoint6` |  | servers only: public [IPv6]:port, when auto-detection would be wrong |
+| `--machine-id-file` |  | the file holding this host's machine id, which pins the node to it (default: /etc/machine-id, /var/lib/dbus/machine-id or the firmware's UUID; MachineGuid on Windows); a container mounts the host's |
 | `--name` |  | the node name the token must belong to (a safety check) |
 | `--server` |  | the control plane's origin, e.g. https://mesh.example.com |
 | `--token` |  | one-time join token (or set MESHCTL_TOKEN, which keeps it out of the process list) |
@@ -35,6 +36,7 @@ meshctl agent join [flags]
 | `--data` | `/var/lib/meshctl` | agent data directory |
 | `--endpoint` |  | servers only: public IPv4:port, when auto-detection would be wrong |
 | `--endpoint6` |  | servers only: public [IPv6]:port, when auto-detection would be wrong |
+| `--machine-id-file` |  | the file holding this host's machine id, which pins the node to it (default: /etc/machine-id, /var/lib/dbus/machine-id or the firmware's UUID; MachineGuid on Windows); a container mounts the host's |
 | `--name` |  | the node name the token must belong to (a safety check) |
 | `--no-service` | `false` | do not install and start the system service |
 | `--server` |  | the control plane's origin, e.g. https://mesh.example.com |
@@ -66,6 +68,7 @@ meshctl agent run [flags]
 | `--data` | `/var/lib/meshctl` | agent data directory |
 | `--endpoint-retry` | `45s` | how long a spoke waits for a first handshake on a server's endpoint before it dials the server's other-family one |
 | `--log-level` | `info` | debug, info, warn or error |
+| `--machine-id-file` |  | the file holding this host's machine id, which pins the node to it (default: /etc/machine-id, /var/lib/dbus/machine-id or the firmware's UUID; MachineGuid on Windows); a container mounts the host's |
 | `--no-firewall` | `false` | leave the host firewall alone (you open the WireGuard port and the Swarm ports yourself) |
 | `--runtime-socket` | `auto` | the container runtime's API socket the containers' names are read from (GET only): auto (Docker's, then Podman's), off, or a path |
 | `--socket` |  | local API socket (default: /run/meshctl/agent.sock for the standard data dir, else &lt;data&gt;/agent.sock; on Windows \\.\pipe\meshctl-agent, with -&lt;slot&gt; for a mesh in another slot) |
@@ -520,6 +523,7 @@ meshctl start [flags]
 | `MESHCTL_WG_BACKEND` | node | `auto` | `meshctl agent run --wg-backend`: WireGuard backend: auto (kernel when the module is there), kernel or userspace (wireguard-go on /dev/net/tun) |
 | `MESHCTL_RUNTIME_SOCKET` | node | `auto` | `meshctl agent run --runtime-socket`: the container runtime's API socket the containers' names are read from (GET only): auto (Docker's, then Podman's), off, or a path |
 | `MESHCTL_UI_LISTEN` | node | `auto` | `meshctl agent run --ui-listen`: the local UI's loopback address, auto (127.0.0.1:7443, plus the mesh's slot) or off; meshctl ui prints a sign-in link |
+| `MESHCTL_MACHINE_ID_FILE` | node |  | `meshctl agent run --machine-id-file`: the file holding this host's machine id, which pins the node to it (default: /etc/machine-id, /var/lib/dbus/machine-id or the firmware's UUID; MachineGuid on Windows); a container mounts the host's |
 
 ## meshctl status
 

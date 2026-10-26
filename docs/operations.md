@@ -675,7 +675,8 @@ it joined since.
 
 Agents keep their last config (`/var/lib/meshctl/config.json`) and re-apply it at boot without
 the server, so the mesh survives a server outage and reboots, and every node keeps answering
-`.mesh` names. Each node also keeps the last view of the mesh it fetched (`mesh.json`, at most
+`.mesh` names -- on the machine the data dir last ran on (`host.json`), never on another
+(amendment A50). Each node also keeps the last view of the mesh it fetched (`mesh.json`, at most
 5 minutes old when the server went down), which it shows marked with the server's absence. Changes
 simply wait, and so does relay failover: a hub that goes down meanwhile keeps its pairs until the
 server is back. When it is, agents reconnect within a minute.
@@ -692,6 +693,10 @@ server is back. When it is, agents reconnect within a minute.
 | `interface wg0 exists but was not created by meshctl` | a wg-quick setup owns wg0: `wg-quick down wg0` and disable it, then restart the agent |
 | `the agent could not take everything it made off this host` | a refused agent's teardown failed at the step the error names (firewalld stopped, say): fix that, then `meshctl agent reset` |
 | `another meshctl process uses this data dir ... stop the agent first` | `agent reset` needs the agent stopped: `systemctl stop meshctl-agent` (Windows: `Stop-Service meshctl-agent`) |
+| `this host has no machine id` | a container without the host's `/etc/machine-id` mounted (`/etc/machine-id:/etc/machine-id:ro`), or a host without one (`systemd-machine-id-setup`); `--machine-id-file` (`MESHCTL_MACHINE_ID_FILE`) names another file |
+| `another copy of this node holds its session; waiting` | another agent of this node runs on this machine: stop one of them. Within 90 s this one is refused (`duplicate`) if the other answers, or takes over if it is gone |
+| `node ... runs on another machine` (`foreign`) | the data dir came from another machine: this copy wiped itself. Issue a token (`meshctl node token <name>`) and join here |
+| `another agent of this mesh already runs here` | a second agent of the mesh in this network namespace: a copy of the data dir in another directory, or another node of the mesh; stop it |
 | `firewall` listed as degraded | firewalld is missing or stopped; the tunnel works, but Swarm and udp/51820 may be blocked. Install/start firewalld, or open the ports yourself and run the agent with `--no-firewall` |
 | `create WireGuard interface wg0: ... is the wireguard kernel module available?` | `modprobe wireguard`, or run WireGuard in the agent: `agent run --wg-backend userspace` (`auto`, the default, picks it when the module is missing) |
 | `MESHCTL_MODE=server is gone` (or `=agent`) | a file from before amendment A48: the control plane sets `MESHCTL_MODE=control`, a node leaves it out |
@@ -751,3 +756,23 @@ service stops). When a step of that teardown fails, the log says so and `meshctl
 when it joins with the new token, with fresh keys: every join makes new ones. The node page asks
 first when the node was seen in the last 5 minutes; `node token` says it was. A copy of an old
 data dir, from any earlier join, is told the same, tears down and stops.
+
+**One node, one running copy** (amendment A50). A node runs on one machine at a time, once:
+
+- A second agent on the same data dir, or on a copy of it in the same network namespace (or, on
+  Windows, the same host), is refused before it touches anything.
+- A copy elsewhere on the same machine (a second container with the same volume, a cloned VM)
+  waits while the control plane asks the running one whether it is alive, and is refused when it
+  answers: the copy takes down what it brought up and stops (exit 3), keeping its data dir. If the
+  running one does not answer within 90 seconds -- it is gone -- the copy takes over.
+- A copy on another machine (the data dir restored onto a new box, a disk moved) is refused, takes
+  down what it brought up, wipes its data dir and stops. To move a node to a new machine, issue a
+  token (`meshctl node token <name>`) and join there. A container restarted with the old token is
+  told it needs a new one.
+- A restart, a crash, a reboot or a control plane restart keeps the node's session: it carries on
+  at once. A clean stop ends the session, so the next start is let in at once too.
+
+The dashboard and `node show` say when a second copy waited or was refused, and where it ran; the
+audit log has `node.session`, `node.duplicate`, `node.foreign` and `node.replaced`. Every node's
+container mounts the host's `/etc/machine-id` (docs/containers.md); a host without one makes it
+with `systemd-machine-id-setup`, or names another file with `--machine-id-file`.

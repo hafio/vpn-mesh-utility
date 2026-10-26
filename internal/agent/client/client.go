@@ -1,7 +1,14 @@
 // Package client is the agent's side of the agent API (spec S6): the join
 // request, then signed requests for config, events, status, prefs, the
-// mesh view and the containers' names. Every signed request carries a fresh nonce, so retries never
-// look like replays.
+// mesh view and the containers' names. Every signed request carries a
+// fresh nonce, so retries never look like replays.
+//
+// The node's session (amendment A50): a hello opens it, every later
+// request presents it with the ticket the previous answer carried, one
+// request at a time, and keeps the next ticket (Options.Keep writes it to
+// the data dir). Requests wait while there is no session. An answer that
+// asks whether this copy is alive -- a challenge, in a header or on the
+// event stream -- is answered at once.
 package client
 
 import (
@@ -9,10 +16,12 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
@@ -46,6 +55,24 @@ type Options struct {
 	Now     func() time.Time
 	// Transport overrides the HTTP transport (tests).
 	Transport http.RoundTripper
+	// Session is the session to carry on with, from the data dir; nil, or
+	// a released one, waits for Hello.
+	Session *Session
+	// Keep is told of every change to the session -- a hello, a next
+	// ticket, a goodbye or a loss -- so the data dir holds what a restart
+	// carries on with. It runs while the client's lock is held.
+	Keep func(Session)
+}
+
+// Session is the node's session as the client holds it (amendment A50).
+type Session struct {
+	ID     string
+	Ticket string
+	// Heartbeat is the status interval the hello answered, in seconds.
+	Heartbeat int
+	// Released is a session that is no longer usable: the agent said
+	// goodbye, or the control plane no longer knows it.
+	Released bool
 }
 
 // Client makes the agent's API calls.
@@ -58,6 +85,19 @@ type Client struct {
 	now     func() time.Time
 	calls   *http.Client
 	streams *http.Client
+	keep    func(Session)
+
+	// mu orders the requests that present the session: one at a time,
+	// so a ticket is never presented after the one that followed it.
+	mu sync.Mutex
+	// smu guards the session, ready (closed while there is a usable one)
+	// and a challenge an answer carried.
+	smu       sync.Mutex
+	sess      Session
+	ready     chan struct{}
+	lost      chan struct{}
+	challenge string
+	answered  string
 }
 
 // New validates o and returns a client.
@@ -73,12 +113,93 @@ func New(o Options) (*Client, error) {
 	if tr == nil {
 		tr = http.DefaultTransport
 	}
-	return &Client{
+	c := &Client{
 		base: base, nodeID: o.NodeID, key: o.Key, ua: "meshctl/" + o.Version, now: o.Now, pinned: proto.Pinned{Key: o.ConfigKey, NodeID: o.NodeID, Slot: o.Slot},
 		calls: &http.Client{Transport: tr, Timeout: requestTimeout},
 		// Streams have no overall timeout; Events watches for silence.
 		streams: &http.Client{Transport: tr},
-	}, nil
+		keep:    o.Keep,
+		ready:   make(chan struct{}),
+		lost:    make(chan struct{}),
+	}
+	if s := o.Session; s != nil && !s.Released {
+		c.sess = *s
+		close(c.ready)
+	} else {
+		close(c.lost)
+	}
+	return c, nil
+}
+
+// Lost is closed while the client has no usable session: the agent says
+// hello.
+func (c *Client) Lost() <-chan struct{} {
+	c.smu.Lock()
+	defer c.smu.Unlock()
+	return c.lost
+}
+
+// ErrNoSession is a request made while the node has no session with the
+// control plane: the agent is saying hello, or waiting to be let in.
+var ErrNoSession = errors.New("the agent has no session with the control plane yet; it is saying hello")
+
+// Session is the session the client holds.
+func (c *Client) Session() Session {
+	c.smu.Lock()
+	defer c.smu.Unlock()
+	return c.sess
+}
+
+// HasSession reports whether the client holds a usable session.
+func (c *Client) HasSession() bool {
+	c.smu.Lock()
+	defer c.smu.Unlock()
+	return c.sess.ID != "" && !c.sess.Released
+}
+
+// setSession takes s as the session; the caller holds smu.
+func (c *Client) setSession(s Session) {
+	usable := c.sess.ID != "" && !c.sess.Released
+	c.sess = s
+	switch next := s.ID != "" && !s.Released; {
+	case next && !usable:
+		close(c.ready)
+		c.lost = make(chan struct{})
+	case !next && usable:
+		c.ready = make(chan struct{})
+		close(c.lost)
+	}
+	if c.keep != nil {
+		c.keep(s)
+	}
+}
+
+// release marks the session no longer usable: requests wait for a hello.
+func (c *Client) release() {
+	c.smu.Lock()
+	defer c.smu.Unlock()
+	if c.sess.ID != "" && !c.sess.Released {
+		s := c.sess
+		s.Released = true
+		c.setSession(s)
+	}
+}
+
+// waitSession waits until there is a usable session, or ctx ends.
+func (c *Client) waitSession(ctx context.Context) error {
+	for {
+		c.smu.Lock()
+		ready, ok := c.ready, c.sess.ID != "" && !c.sess.Released
+		c.smu.Unlock()
+		if ok {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("%w: %w", ErrNoSession, ctx.Err())
+		case <-ready:
+		}
+	}
 }
 
 // Error is a refusal from the server. Code is one of the proto.Code*
@@ -123,17 +244,31 @@ func Join(ctx context.Context, o Options, req proto.JoinRequest) (proto.JoinResp
 	return resp, nil
 }
 
-func (c *Client) signed(ctx context.Context, method, path string, body []byte) (*http.Request, error) {
+// signed builds a signed request that presents session and ticket ("" for
+// none).
+func (c *Client) signed(ctx context.Context, method, path, session, ticket string, body []byte) (*http.Request, error) {
 	r, err := http.NewRequestWithContext(ctx, method, c.base+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("build %s %s: %w", method, path, err)
 	}
-	proto.Sign(c.key, c.nodeID, method, r.URL.RequestURI(), c.now(), body).Apply(r.Header)
+	proto.SignSession(c.key, c.nodeID, method, r.URL.RequestURI(), c.now(), session, ticket, body).Apply(r.Header)
 	r.Header.Set("User-Agent", c.ua)
 	if len(body) > 0 {
 		r.Header.Set("Content-Type", "application/json")
 	}
 	return r, nil
+}
+
+// call is a ticketed request whose 2xx JSON answer is decoded into out.
+func (c *Client) call(ctx context.Context, method, path string, body []byte, wait bool, out any) error {
+	r, _, b, _, err := c.ticketed(ctx, method, path, body, wait, nil)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(b, out); err != nil {
+		return fmt.Errorf("%s %s: decode answer: %w", r.Method, r.URL.Path, err)
+	}
+	return nil
 }
 
 // do sends r and decodes a 2xx JSON answer into out (when out is non-nil).
@@ -150,21 +285,160 @@ func (c *Client) do(r *http.Request, out any) (int, error) {
 }
 
 // raw sends r and returns a 2xx or 304 answer as it came: status, body and
-// headers. A non-2xx answer is an *Error.
+// headers. A non-2xx answer is an *Error. Whatever the status, the answer's
+// next ticket and challenge are taken.
 func (c *Client) raw(r *http.Request) (int, []byte, http.Header, error) {
 	resp, err := c.calls.Do(r)
 	if err != nil {
 		return 0, nil, nil, fmt.Errorf("%s %s: %w", r.Method, r.URL.Path, err)
 	}
 	defer resp.Body.Close()
+	c.observe(r, resp.Header)
 	b, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse))
 	if err != nil {
 		return resp.StatusCode, nil, nil, fmt.Errorf("%s %s: read answer: %w", r.Method, r.URL.Path, err)
 	}
 	if resp.StatusCode != http.StatusNotModified && resp.StatusCode/100 != 2 {
-		return resp.StatusCode, nil, nil, c.refused(r, resp, b)
+		err := c.refused(r, resp, b)
+		var e *Error
+		if errors.As(err, &e) && e.Code == proto.CodeSession && r.Header.Get(proto.HeaderTicket) != "" {
+			c.release() // say hello
+		}
+		return resp.StatusCode, nil, nil, err
 	}
 	return resp.StatusCode, b, resp.Header, nil
+}
+
+// observe takes the next ticket an answer to r carries -- the ticket never
+// moves back, and only on an answer that says where it goes -- and a
+// challenge to answer.
+func (c *Client) observe(r *http.Request, h http.Header) {
+	c.smu.Lock()
+	defer c.smu.Unlock()
+	if next := h.Get(proto.HeaderNextTicket); proto.ValidSecret(next) && r.Header.Get(proto.HeaderSession) == c.sess.ID && c.sess.ID != "" {
+		s := c.sess
+		s.Ticket = next
+		c.setSession(s)
+	}
+	if ch := h.Get(proto.HeaderChallenge); proto.ValidChallenge(ch) && ch != c.answered {
+		c.challenge = ch
+	}
+}
+
+// ticketed sends a request that presents the session, waiting for one when
+// wait is set, then answers a challenge its answer carried. edit adds
+// headers the signature does not cover (If-None-Match).
+func (c *Client) ticketed(ctx context.Context, method, path string, body []byte, wait bool,
+	edit func(*http.Request)) (*http.Request, int, []byte, http.Header, error) {
+	if !wait && !c.HasSession() {
+		return nil, 0, nil, nil, ErrNoSession
+	}
+	if err := c.waitSession(ctx); err != nil {
+		return nil, 0, nil, nil, err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	r, status, b, h, err := c.send(ctx, method, path, body, edit)
+	c.answerChallenge(ctx)
+	return r, status, b, h, err
+}
+
+// send is one ticketed request; the caller holds mu.
+func (c *Client) send(ctx context.Context, method, path string, body []byte, edit func(*http.Request)) (*http.Request, int, []byte, http.Header, error) {
+	s := c.Session()
+	if s.ID == "" || s.Released {
+		return nil, 0, nil, nil, ErrNoSession
+	}
+	r, err := c.signed(ctx, method, path, s.ID, s.Ticket, body)
+	if err != nil {
+		return nil, 0, nil, nil, err
+	}
+	if edit != nil {
+		edit(r)
+	}
+	status, b, h, err := c.raw(r)
+	return r, status, b, h, err
+}
+
+// answerChallenge answers the challenge an answer carried, if any; the
+// caller holds mu. A failure is left to the next answer, which carries the
+// challenge again.
+func (c *Client) answerChallenge(ctx context.Context) {
+	c.smu.Lock()
+	nonce := c.challenge
+	c.challenge = ""
+	c.smu.Unlock()
+	if nonce == "" {
+		return
+	}
+	body, _ := json.Marshal(proto.AliveRequest{Nonce: nonce}) // a struct of one string always encodes
+	if _, _, _, _, err := c.send(ctx, http.MethodPost, proto.PathAlive, body, nil); err == nil {
+		c.smu.Lock()
+		c.answered = nonce
+		c.smu.Unlock()
+	}
+}
+
+// Hello opens the node's session (amendment A50). A copy that another holds
+// the session for gets an *Error with proto.CodeWait and should ask again
+// after a few seconds; a definitive one ends its run.
+func (c *Client) Hello(ctx context.Context, req proto.HelloRequest) (proto.HelloResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return proto.HelloResponse{}, fmt.Errorf("encode hello: %w", err)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	r, err := c.signed(ctx, http.MethodPost, proto.PathHello, "", "", body)
+	if err != nil {
+		return proto.HelloResponse{}, err
+	}
+	var resp proto.HelloResponse
+	if _, err := c.do(r, &resp); err != nil {
+		return proto.HelloResponse{}, err
+	}
+	if err := resp.Validate(); err != nil {
+		return proto.HelloResponse{}, err
+	}
+	c.smu.Lock()
+	c.setSession(Session{ID: resp.Session, Ticket: resp.Ticket, Heartbeat: resp.Heartbeat})
+	c.challenge, c.answered = "", ""
+	c.smu.Unlock()
+	return resp, nil
+}
+
+// Alive answers a challenge the event stream carried.
+func (c *Client) Alive(ctx context.Context, nonce string) error {
+	c.smu.Lock()
+	if nonce == c.answered {
+		c.smu.Unlock()
+		return nil
+	}
+	c.challenge = nonce
+	c.smu.Unlock()
+	if !c.HasSession() {
+		return ErrNoSession
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.answerChallenge(ctx)
+	return nil
+}
+
+// Bye ends the session: the agent is stopping cleanly, and its next start
+// is let in at once. A goodbye the control plane did not hear keeps the
+// session, which the next start carries on with.
+func (c *Client) Bye(ctx context.Context) error {
+	if !c.HasSession() {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, _, _, _, err := c.send(ctx, http.MethodPost, proto.PathBye, nil, nil)
+	if err == nil {
+		c.release()
+	}
+	return err
 }
 
 // refused is the *Error of a non-2xx answer to r, Definitive when the
@@ -211,14 +485,11 @@ func clip(s string) string {
 // the applied config ("" for none); when nothing changed the server answers
 // 304 and Config returns nil.
 func (c *Client) Config(ctx context.Context, etag string) (*proto.NodeConfig, proto.SignedBody, error) {
-	r, err := c.signed(ctx, http.MethodGet, proto.PathConfig, nil)
-	if err != nil {
-		return nil, proto.SignedBody{}, err
-	}
-	if etag != "" {
-		r.Header.Set("If-None-Match", etag)
-	}
-	status, body, h, err := c.raw(r)
+	r, status, body, h, err := c.ticketed(ctx, http.MethodGet, proto.PathConfig, nil, true, func(r *http.Request) {
+		if etag != "" {
+			r.Header.Set("If-None-Match", etag)
+		}
+	})
 	if err != nil || status == http.StatusNotModified {
 		return nil, proto.SignedBody{}, err
 	}
@@ -239,12 +510,8 @@ func (c *Client) Status(ctx context.Context, rep proto.StatusReport) (proto.Stat
 	if err != nil {
 		return proto.StatusResponse{}, fmt.Errorf("encode status: %w", err)
 	}
-	r, err := c.signed(ctx, http.MethodPost, proto.PathStatus, body)
-	if err != nil {
-		return proto.StatusResponse{}, err
-	}
 	var resp proto.StatusResponse
-	if _, err := c.do(r, &resp); err != nil {
+	if err := c.call(ctx, http.MethodPost, proto.PathStatus, body, true, &resp); err != nil {
 		return proto.StatusResponse{}, err
 	}
 	return resp, nil
@@ -256,12 +523,8 @@ func (c *Client) Prefs(ctx context.Context, req proto.PrefsRequest) (proto.Prefs
 	if err != nil {
 		return proto.PrefsResponse{}, fmt.Errorf("encode prefs: %w", err)
 	}
-	r, err := c.signed(ctx, http.MethodPost, proto.PathPrefs, body)
-	if err != nil {
-		return proto.PrefsResponse{}, err
-	}
 	var resp proto.PrefsResponse
-	if _, err := c.do(r, &resp); err != nil {
+	if err := c.call(ctx, http.MethodPost, proto.PathPrefs, body, false, &resp); err != nil {
 		return proto.PrefsResponse{}, err
 	}
 	return resp, nil
@@ -271,11 +534,7 @@ func (c *Client) Prefs(ctx context.Context, req proto.PrefsRequest) (proto.Prefs
 // control plane's signature and the view itself before anything caches or
 // shows it; the view comes back as signed too, for the cache.
 func (c *Client) Mesh(ctx context.Context) (proto.MeshView, proto.SignedBody, error) {
-	r, err := c.signed(ctx, http.MethodGet, proto.PathMesh, nil)
-	if err != nil {
-		return proto.MeshView{}, proto.SignedBody{}, err
-	}
-	_, body, h, err := c.raw(r)
+	r, _, body, h, err := c.ticketed(ctx, http.MethodGet, proto.PathMesh, nil, true, nil)
 	if err != nil {
 		return proto.MeshView{}, proto.SignedBody{}, err
 	}
@@ -299,30 +558,34 @@ func (c *Client) Names(ctx context.Context, req proto.NamesRequest) (proto.Names
 	if err != nil {
 		return proto.NamesResponse{}, fmt.Errorf("encode names: %w", err)
 	}
-	r, err := c.signed(ctx, http.MethodPut, proto.PathNames, body)
-	if err != nil {
-		return proto.NamesResponse{}, err
-	}
 	var resp proto.NamesResponse
-	if _, err := c.do(r, &resp); err != nil {
+	if err := c.call(ctx, http.MethodPut, proto.PathNames, body, true, &resp); err != nil {
 		return proto.NamesResponse{}, err
 	}
 	return resp, nil
 }
 
 // Events opens the node's SSE stream and calls fn for every config event,
-// and mesh for every mesh event, until the stream ends, goes silent for
-// streamIdle, or ctx is cancelled. It always returns an error saying why the
-// stream ended.
+// and mesh for every mesh event, and answers every challenge, until the
+// stream ends, goes silent for streamIdle, or ctx is cancelled. It always
+// returns an error saying why the stream ended. The stream presents the
+// session without moving the ticket on, so it waits for no other request.
 func (c *Client) Events(ctx context.Context, fn func(proto.ConfigEvent), mesh func()) error {
+	if err := c.waitSession(ctx); err != nil {
+		return err
+	}
 	sctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	r, err := c.signed(sctx, http.MethodGet, proto.PathEvents, nil)
+	s := c.Session()
+	r, err := c.signed(sctx, http.MethodGet, proto.PathEvents, s.ID, s.Ticket, nil)
 	if err != nil {
 		return err
 	}
 	r.Header.Set("Accept", "text/event-stream")
+	// A proxy that never answers must not hold the stream open forever.
+	opening := time.AfterFunc(requestTimeout, cancel)
 	resp, err := c.streams.Do(r)
+	opening.Stop()
 	if err != nil {
 		return fmt.Errorf("open event stream: %w", err)
 	}
@@ -347,6 +610,13 @@ func (c *Client) Events(ctx context.Context, fn func(proto.ConfigEvent), mesh fu
 		}
 		if ev.Name == proto.EventMesh {
 			mesh()
+			continue
+		}
+		if ev.Name == proto.EventChallenge {
+			var ce proto.ChallengeEvent
+			if json.Unmarshal(ev.Data, &ce) == nil && proto.ValidChallenge(ce.Nonce) {
+				_ = c.Alive(sctx, ce.Nonce) // a failure is left to the next answer, which carries it again
+			}
 			continue
 		}
 		if ev.Name != proto.EventConfig {

@@ -41,6 +41,7 @@ func (c *countingDB) Tx(ctx context.Context, fn func(*store.Tx) error) error {
 }
 
 type harness struct {
+	t     *testing.T
 	st    *store.Store
 	db    *countingDB
 	hub   *Hub
@@ -65,7 +66,7 @@ func newHarness(t *testing.T) *harness {
 	rec := NewReconciler(db, hub, nil)
 	d := Deps{DB: db, Hub: hub, Reconciler: rec, Now: clock.Now, ServerURL: testURL, Version: "v1.0.0", KeepAlive: 20 * time.Millisecond,
 		ConfigKey: testfix.ConfigKey()}
-	return &harness{st: st, db: db, hub: hub, rec: rec, clock: clock, pub: New(d), admin: NewAdmin(d)}
+	return &harness{t: t, st: st, db: db, hub: hub, rec: rec, clock: clock, pub: New(d), admin: NewAdmin(d)}
 }
 
 func storeNode(f testfix.Node, enrolled bool) store.Node {
@@ -96,7 +97,29 @@ func (h *harness) seed(t *testing.T, nodes ...store.Node) {
 	if _, err := h.rec.Apply(context.Background(), Change{Mesh: store.FirstMesh, Actor: "test"}, nil); err != nil {
 		t.Fatal(err)
 	}
+	for _, n := range nodes {
+		if n.Enrolled {
+			h.giveSession(t, n.ID)
+		}
+	}
 	h.db.n.Store(0)
+}
+
+// giveSession gives node its fixture session (testfix.Session and Ticket,
+// which signed presents), as a granted hello would (amendment A50), and
+// pins it to testfix.MachineID.
+func (h *harness) giveSession(t *testing.T, node int64) {
+	t.Helper()
+	now := h.clock.Now().Unix()
+	if err := h.st.Tx(context.Background(), func(tx *store.Tx) error {
+		if err := tx.PutAgentSession(store.AgentSession{NodeID: node, SessionHash: secretHash(testfix.Session(node)),
+			TicketHash: secretHash(testfix.Ticket(node)), LastSeen: now}); err != nil {
+			return err
+		}
+		return tx.PinMachine(node, store.Machine{Hash: secretHash(testfix.MachineID), Hostname: "host", PinnedAt: now})
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (h *harness) seedServers(t *testing.T) {
@@ -130,11 +153,13 @@ func (h *harness) latestVersion(t *testing.T) int64 {
 	return v
 }
 
-// signed builds a request signed by node f at time at.
+// signed builds a request signed by node f at time at, presenting f's
+// fixture session and first ticket. The server takes that ticket at every
+// request after the first, as the retry of a lost answer (amendment A50).
 func signed(method, target string, body []byte, f testfix.Node, at time.Time) *http.Request {
 	r := httptest.NewRequest(method, target, bytes.NewReader(body))
 	_, priv := testfix.IdentityKey(f.Key)
-	proto.Sign(priv, f.ID, method, r.URL.RequestURI(), at, body).Apply(r.Header)
+	proto.SignSession(priv, f.ID, method, r.URL.RequestURI(), at, testfix.Session(f.ID), testfix.Ticket(f.ID), body).Apply(r.Header)
 	return r
 }
 
@@ -238,7 +263,7 @@ func TestReplayIsRefusedBeforeTheDatabase(t *testing.T) {
 func joinBody(t *testing.T, token string, f testfix.Node, edit func(*proto.JoinRequest)) []byte {
 	t.Helper()
 	req := proto.JoinRequest{Token: token, Hostname: f.Name + ".example.com", OS: "linux", Arch: "amd64", WGBackend: "kernel",
-		WGPublicKey: testfix.WGKey(f.Key), IdentityPublicKey: testfix.IdentityKeyB64(f.Key), AgentVersion: "v1.0.0"}
+		WGPublicKey: testfix.WGKey(f.Key), IdentityPublicKey: testfix.IdentityKeyB64(f.Key), AgentVersion: "v1.0.0", MachineID: testfix.MachineID}
 	if edit != nil {
 		edit(&req)
 	}
@@ -266,15 +291,22 @@ func (h *harness) issue(t *testing.T, name string) string {
 	return tok
 }
 
+// postJoin joins, and gives the node that joined its fixture session, as
+// its agent's first hello would.
 func postJoin(h *harness, body []byte) (*httptest.ResponseRecorder, proto.ErrorBody) {
-	return serve(h.pub, httptest.NewRequest(http.MethodPost, proto.PathJoin, bytes.NewReader(body)))
+	w, eb := serve(h.pub, httptest.NewRequest(http.MethodPost, proto.PathJoin, bytes.NewReader(body)))
+	var resp proto.JoinResponse
+	if w.Code == http.StatusOK && json.Unmarshal(w.Body.Bytes(), &resp) == nil {
+		h.giveSession(h.t, resp.NodeID)
+	}
+	return w, eb
 }
 
 func TestJoinEnrollsAndConsumesTheToken(t *testing.T) {
 	h := newHarness(t)
 	h.seed(t, storeNode(testfix.VPS1, true), storeNode(testfix.VPS2, false))
 	tok := h.issue(t, "vps-2")
-	events, _, _, cancel := h.hub.Subscribe(testfix.VPS1.ID, store.FirstMesh)
+	events, _, _, _, cancel := h.hub.Subscribe(testfix.VPS1.ID, store.FirstMesh)
 	defer cancel()
 
 	w, eb := postJoin(h, joinBody(t, tok, testfix.VPS2, func(r *proto.JoinRequest) { r.PublicIP = "198.51.100.7" }))
@@ -448,7 +480,8 @@ func TestEventsStreamPushesChanges(t *testing.T) {
 			t.Fatal(err)
 		}
 		_, priv := testfix.IdentityKey(testfix.VPS1.Key)
-		proto.Sign(priv, testfix.VPS1.ID, http.MethodGet, r.URL.RequestURI(), testfix.Epoch, nil).Apply(r.Header)
+		proto.SignSession(priv, testfix.VPS1.ID, http.MethodGet, r.URL.RequestURI(), testfix.Epoch, testfix.Session(testfix.VPS1.ID),
+			testfix.Ticket(testfix.VPS1.ID), nil).Apply(r.Header)
 		resp, err := srv.Client().Do(r)
 		if err != nil {
 			t.Fatal(err)

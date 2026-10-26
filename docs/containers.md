@@ -202,7 +202,7 @@ services:
     read_only: true
     tmpfs: ["/tmp:size=16m,mode=1777"]
     devices: ["/dev/net/tun:/dev/net/tun"]
-    volumes: ["/volume1/docker/meshctl:/data"]
+    volumes: ["/volume1/docker/meshctl:/data", "/etc/machine-id:/etc/machine-id:ro"]
     restart: unless-stopped
     mem_limit: 256m
     pids_limit: 256
@@ -217,14 +217,20 @@ It runs as uid 0 because capabilities do not survive `no-new-privileges` for ano
 `NET_ADMIN` for its interface and routes and `NET_BIND_SERVICE` for DNS on port 53. The tun device
 is for wireguard-go; where the host has the WireGuard module (`ls /sys/module/wireguard`), set
 `MESHCTL_WG_BACKEND: kernel` and leave `devices` out -- a kernel interface also stays up while the
-container restarts. The data directory holds the node's keys: keep it on the host.
+container restarts. The data directory holds the node's keys: keep it on the host. Every node's
+container mounts the host's `/etc/machine-id` read-only (amendment A50): a node stays on the
+machine it joined on, and an image has no machine id of its own (a container's hostname changes at
+every recreate). A copy of the data volume started on another machine is refused, removes its data
+and needs a new join token; a second container with the same volume on this machine is refused
+while the first runs. Where the host keeps its id elsewhere, mount that file and set
+`MESHCTL_MACHINE_ID_FILE`.
 
 With Podman:
 
 ```sh
 podman run -d --name meshctl --network=host --user=0:0 --cap-drop=ALL --cap-add=NET_ADMIN \
   --cap-add=NET_BIND_SERVICE --security-opt=no-new-privileges --read-only \
-  --tmpfs=/tmp:size=16m,mode=1777 --device=/dev/net/tun -v /var/lib/meshctl:/data \
+  --tmpfs=/tmp:size=16m,mode=1777 --device=/dev/net/tun -v /var/lib/meshctl:/data -v /etc/machine-id:/etc/machine-id:ro \
   -e MESHCTL_URL=https://mesh.example.com -e MESHCTL_NAME=nas -e MESHCTL_TOKEN \
   ghcr.io/hafio/vpn-mesh-utility:1.0.0
 ```
@@ -284,11 +290,18 @@ spec:
             - name: token
               mountPath: /run/secrets/meshctl
               readOnly: true
+            - name: machine-id
+              mountPath: /etc/machine-id
+              readOnly: true
       volumes:
         - name: data
           hostPath:
             path: /var/lib/meshctl
             type: DirectoryOrCreate
+        - name: machine-id
+          hostPath:
+            path: /etc/machine-id
+            type: File
         - name: tmp
           emptyDir:
             sizeLimit: 16Mi
@@ -373,6 +386,7 @@ services:
       net.ipv4.conf.all.proxy_arp: "1"
     volumes:
       - meshctl-data:/data
+      - /etc/machine-id:/etc/machine-id:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks: [egress, meshctl-mesh]
     restart: unless-stopped
@@ -410,7 +424,7 @@ podman network create meshctl-egress
 podman run -d --name meshctl --user=0:0 --cap-drop=ALL --cap-add=NET_ADMIN --cap-add=NET_BIND_SERVICE \
   --security-opt=no-new-privileges --read-only --tmpfs=/tmp:size=16m,mode=1777 --device=/dev/net/tun \
   --sysctl=net.ipv4.ip_forward=1 --sysctl=net.ipv4.conf.all.proxy_arp=1 \
-  -v meshctl-data:/data -v /run/podman/podman.sock:/var/run/docker.sock:ro \
+  -v meshctl-data:/data -v /etc/machine-id:/etc/machine-id:ro -v /run/podman/podman.sock:/var/run/docker.sock:ro \
   --network=meshctl-egress --network=meshctl-mesh \
   -e MESHCTL_URL=https://mesh.example.com -e MESHCTL_NAME=box -e MESHCTL_TOKEN \
   ghcr.io/hafio/vpn-mesh-utility:1.0.0

@@ -147,7 +147,7 @@ func (s *Nodes) Phone(ctx context.Context, by Actor, name string, req PhoneReque
 // reported.
 func withHandshake(tx *store.MeshTx, info *NodeInfo) error {
 	if info.Role != string(proto.RolePhone) {
-		return nil
+		return withCopy(tx, info)
 	}
 	var err error
 	info.LastHandshake, err = tx.LastHandshakeWith(info.ID)

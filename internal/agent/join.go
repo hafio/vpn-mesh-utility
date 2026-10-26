@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/hafio/vpn-mesh-utility/internal/agent/client"
+	"github.com/hafio/vpn-mesh-utility/internal/agent/hostid"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/state"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/wg"
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
@@ -45,11 +46,19 @@ type JoinOptions struct {
 	Log       *slog.Logger
 	Now       func() time.Time
 
+	// MachineIDFile holds the host's machine id (amendment A50); empty
+	// reads the platform's.
+	MachineIDFile string
+	// Pause waits before `meshctl start` gives up on a spent token
+	// (JoinOnStart); nil is time.Sleep.
+	Pause func(time.Duration)
+
 	Transport  http.RoundTripper
 	Hostname   func() (string, error)
 	Backend    func() string
 	PublicIPv4 func() (netip.Addr, bool)
 	PublicIPv6 func() (netip.Addr, bool)
+	MachineID  func() (string, error)
 }
 
 // Join enrolls this node (spec S6.1): it generates the keys locally if they
@@ -75,6 +84,10 @@ func Join(ctx context.Context, o JoinOptions) (proto.JoinResponse, error) {
 	if o.PublicIPv6 == nil {
 		o.PublicIPv6 = PublicIPv6
 	}
+	if o.MachineID == nil {
+		file := o.MachineIDFile
+		o.MachineID = func() (string, error) { return hostid.Read(file) }
+	}
 	server, err := validate.ServerURL("--server", o.Server)
 	if err != nil {
 		return proto.JoinResponse{}, err
@@ -89,6 +102,11 @@ func Join(ctx context.Context, o JoinOptions) (proto.JoinResponse, error) {
 		return proto.JoinResponse{}, err
 	}
 	defer unlock()
+	// The node is pinned to this machine (amendment A50).
+	machine, err := o.MachineID()
+	if err != nil {
+		return proto.JoinResponse{}, err
+	}
 	// Fresh keys at every join (amendment A50), written only once the
 	// control plane has accepted them: a copied data dir that joins again
 	// can never share keys with the original, and a failed join changes
@@ -102,7 +120,7 @@ func Join(ctx context.Context, o JoinOptions) (proto.JoinResponse, error) {
 	req := proto.JoinRequest{
 		Token: o.Token, Name: o.Name, Hostname: cleanHostname(host), OS: runtime.GOOS, Arch: runtime.GOARCH,
 		WGBackend: o.Backend(), WGPublicKey: wgPub, IdentityPublicKey: keys.IdentityPublic(),
-		Endpoint: o.Endpoint, AgentVersion: o.Version, Endpoint6: o.Endpoint6,
+		Endpoint: o.Endpoint, AgentVersion: o.Version, Endpoint6: o.Endpoint6, MachineID: hostid.Presented(machine),
 	}
 	if ip, ok := o.PublicIPv4(); ok {
 		req.PublicIP = ip.String()
@@ -142,6 +160,13 @@ func Join(ctx context.Context, o JoinOptions) (proto.JoinResponse, error) {
 	if err := dir.SaveEnrollment(state.Enrollment{Server: server, NodeID: resp.NodeID, Name: resp.Name, Role: resp.Role,
 		MeshIP: resp.MeshIP, JoinedAt: o.Now().Unix(), Mesh: resp.Mesh, MeshUUID: resp.MeshUUID, Slot: slot, ConfigKey: resp.ConfigKey}); err != nil {
 		return resp, err
+	}
+	// The join ended the session the old keys held, and this machine is
+	// where the data dir runs now; a refusal from before is over.
+	for _, err := range []error{dir.ClearSession(), dir.SaveHost(state.Host{Machine: hostid.Local(machine)}), dir.ClearRefused()} {
+		if err != nil {
+			return resp, err
+		}
 	}
 	fmt.Fprintf(o.Out, "joined %s as %s (%s, mesh %s, node id %d)\n", server, resp.Name, resp.Role, meshAddresses(resp), resp.NodeID)
 	if resp.Mesh != "" {

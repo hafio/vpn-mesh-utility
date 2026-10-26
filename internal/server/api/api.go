@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"strconv"
 	"time"
 
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
@@ -55,6 +56,10 @@ type Deps struct {
 	// agent API answers (amendment A50); its public half goes out with
 	// every join. The agent API answers those with 500 without it.
 	ConfigKey ed25519.PrivateKey
+	// SessionWindow is how long a challenged session holder has to answer,
+	// and how long a silent one counts as alive (amendment A50); zero means
+	// proto.SessionWindow seconds.
+	SessionWindow time.Duration
 }
 
 // ConfigKeyFile holds the control plane's signing key (an Ed25519 seed) in
@@ -112,6 +117,9 @@ type route struct {
 func (a *api) routes() []route {
 	return []route{
 		{Route{http.MethodPost, proto.PathJoin, "token"}, a.join},
+		{Route{http.MethodPost, proto.PathHello, "signature"}, a.hello},
+		{Route{http.MethodPost, proto.PathAlive, "signature"}, a.alive},
+		{Route{http.MethodPost, proto.PathBye, "signature"}, a.bye},
 		{Route{http.MethodGet, proto.PathConfig, "signature"}, a.config},
 		{Route{http.MethodGet, proto.PathEvents, "signature"}, a.events},
 		{Route{http.MethodPost, proto.PathStatus, "signature"}, a.status},
@@ -221,8 +229,11 @@ func (a *api) fail(w http.ResponseWriter, r *http.Request, err error) {
 	} else {
 		a.Log.Info("request refused", "method", r.Method, "path", r.URL.Path, "status", ae.status, "code", ae.code, "reason", ae.msg)
 	}
-	if ae.status == http.StatusTooManyRequests {
+	switch ae.code {
+	case proto.CodeRateLimited:
 		w.Header().Set("Retry-After", "60")
+	case proto.CodeWait:
+		w.Header().Set("Retry-After", strconv.Itoa(proto.WaitRetry))
 	}
 	writeJSON(w, ae.status, body)
 }

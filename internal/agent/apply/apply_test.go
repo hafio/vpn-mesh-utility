@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -911,5 +912,46 @@ func TestTeardownThroughTheHost(t *testing.T) {
 	}
 	if _, err := e.Teardown(ctx, &cfg); err != nil || n.HasBlackhole() {
 		t.Fatalf("Teardown = %v; the containers' blackhole stayed: %v", err, n.HasBlackhole())
+	}
+}
+
+// blockingHost holds an apply in its first look at the interface until
+// released, so the apply is still running.
+type blockingHost struct {
+	*agentfake.Host
+	entered, release chan struct{}
+	once             sync.Once
+}
+
+func (h *blockingHost) Link(name string) (wg.Link, error) {
+	h.once.Do(func() {
+		close(h.entered)
+		<-h.release
+	})
+	return h.Host.Link(name)
+}
+
+// TryStats answers at once: the peers, or ErrBusy while an apply runs
+// (amendment A50: the heartbeat does not wait behind an apply).
+func TestTryStats(t *testing.T) {
+	h := &blockingHost{Host: agentfake.NewHost(), entered: make(chan struct{}), release: make(chan struct{})}
+	k, _ := wg.ParseKey(testfix.WGKey(1))
+	e := apply.New(apply.Deps{Host: h, Routes: agentfake.NewRoutes(), Exit: &agentfake.Policy{}, Sysctl: &agentfake.Sysctl{}, Iface: "wg0", Key: k})
+	cfg := testfix.ServerConfig()
+	done := make(chan error, 1)
+	go func() {
+		_, err := e.Apply(context.Background(), cfg)
+		done <- err
+	}()
+	<-h.entered
+	if _, err := e.TryStats(cfg); !errors.Is(err, apply.ErrBusy) {
+		t.Fatalf("TryStats during an apply = %v", err)
+	}
+	close(h.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.TryStats(cfg); err != nil {
+		t.Fatalf("TryStats after the apply = %v", err)
 	}
 }

@@ -38,6 +38,9 @@
 {{- if .DNS}}
 <tr><th>DNS</th><td>{{.DNS}}</td></tr>
 {{- end}}
+{{- if .Copy}}
+<tr><th>Second copy</th><td>{{.Copy}}</td></tr>
+{{- end}}
 </table>
 {{- with .Node.Rollback}}
 <p class="error">Safe apply rolled this server back from v{{.From}} to v{{.To}}: {{.Reason}}. It stays on v{{.To}} until the next change.</p>

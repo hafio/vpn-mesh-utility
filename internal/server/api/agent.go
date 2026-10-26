@@ -18,11 +18,29 @@ import (
 	"github.com/hafio/vpn-mesh-utility/internal/server/store"
 )
 
-// authenticate checks a signed agent request and returns the node and the
+// authenticate checks a signed agent request that presents the node's
+// session and ticket, and moves the ticket on (amendment A50).
+func (a *api) authenticate(w http.ResponseWriter, r *http.Request) (store.Node, []byte, error) {
+	return a.authenticateAs(w, r, useTicket)
+}
+
+// The ways a signed request uses the node's session (amendment A50).
+const (
+	// useTicket presents the session and its ticket, and moves the ticket
+	// on: every request but these two.
+	useTicket = iota
+	// useStream presents them and leaves the ticket where it is: the event
+	// stream, which lives outside the agent's one-at-a-time requests.
+	useStream
+	// useHello presents neither: it opens a session.
+	useHello
+)
+
+// authenticateAs checks a signed agent request and returns the node and the
 // body the signature covered. The cheap checks -- body size, header shape,
 // clock, replay -- run before the database is touched, so a flood of junk
-// costs no reads.
-func (a *api) authenticate(w http.ResponseWriter, r *http.Request) (store.Node, []byte, error) {
+// costs no reads. The session is checked last, as use says.
+func (a *api) authenticateAs(w http.ResponseWriter, r *http.Request, use int) (store.Node, []byte, error) {
 	body, err := readBody(w, r)
 	if err != nil {
 		return store.Node{}, nil, err
@@ -65,6 +83,7 @@ func (a *api) authenticate(w http.ResponseWriter, r *http.Request) (store.Node, 
 		// A50): this copy stops instead of retrying forever.
 		for _, k := range retired {
 			if old, err := base64.StdEncoding.DecodeString(k); err == nil && signed.Verify(old, r.Method, r.URL.RequestURI(), body, now) == nil {
+				a.audit(r, node, "node.replaced", nil)
 				return store.Node{}, nil, errorf(http.StatusForbidden, proto.CodeReplaced,
 					"node %q no longer has this agent's key: a new join token was issued for it, or it joined again elsewhere; "+
 						"this copy stops -- join it with a new token (`meshctl node token %s`) if it should run here", node.Name, node.Name)
@@ -84,6 +103,15 @@ func (a *api) authenticate(w http.ResponseWriter, r *http.Request) (store.Node, 
 			"node %q is disabled; an operator can run `meshctl node enable %s`", node.Name, node.Name)
 	}
 	if err := a.replay.Add(sig, now); err != nil {
+		return store.Node{}, nil, err
+	}
+	switch use {
+	case useTicket:
+		err = a.advance(r.Context(), w, node, signed)
+	case useStream:
+		err = a.presented(r.Context(), node, signed)
+	}
+	if err != nil {
 		return store.Node{}, nil, err
 	}
 	return node, body, nil
@@ -171,6 +199,14 @@ func (a *api) join(w http.ResponseWriter, r *http.Request) {
 				return errorf(http.StatusConflict, proto.CodeConflict,
 					"another node already uses this WireGuard or identity key; was this data dir copied from another node? Remove its keys and join again")
 			}
+			return err
+		}
+		// A join pins the node to its machine and ends the session its
+		// earlier keys held (amendment A50).
+		if err := tx.PinMachine(n.ID, store.Machine{Hash: secretHash(req.MachineID), Hostname: req.Hostname, PinnedAt: a.Now().Unix()}); err != nil {
+			return err
+		}
+		if err := tx.DeleteAgentSession(n.ID); err != nil {
 			return err
 		}
 		c.Actor = "node:" + strconv.FormatInt(n.ID, 10)
@@ -301,19 +337,27 @@ func (a *api) config(w http.ResponseWriter, r *http.Request) {
 // mesh view changed (amendment A38) and a comment every KeepAlive so
 // proxies keep the connection open.
 func (a *api) events(w http.ResponseWriter, r *http.Request) {
-	node, _, err := a.authenticate(w, r)
+	node, _, err := a.authenticateAs(w, r, useStream)
 	if err != nil {
 		a.fail(w, r, err)
 		return
 	}
 	// Subscribe before reading the current state: a change committed in
 	// between is then queued rather than lost.
-	events, mesh, done, cancel := a.Hub.Subscribe(node.ID, node.MeshID)
+	events, mesh, challenge, done, cancel := a.Hub.Subscribe(node.ID, node.MeshID)
 	defer cancel()
+	open := ""
 	if err := a.DB.Tx(r.Context(), func(tx *store.Tx) error {
 		var err error
-		node, err = tx.NodeByID(node.ID)
-		return err
+		if node, err = tx.NodeByID(node.ID); err != nil {
+			return err
+		}
+		// A challenge already open is sent at once (amendment A50).
+		s, err := tx.AgentSession(node.ID)
+		if err == nil && s.ChallengeAt != 0 && !s.Answered {
+			open = a.challengeNonce(node.ID, s)
+		}
+		return nil
 	}); err != nil {
 		a.fail(w, r, err)
 		return
@@ -340,7 +384,17 @@ func (a *api) events(w http.ResponseWriter, r *http.Request) {
 	if !send(func() error { return proto.WriteRetry(w, sseRetry) }) {
 		return
 	}
+	sendChallenge := func(nonce string) bool {
+		data, err := json.Marshal(proto.ChallengeEvent{Nonce: nonce})
+		if err != nil {
+			return false
+		}
+		return send(func() error { return proto.WriteEvent(w, proto.Event{Name: proto.EventChallenge, Data: data}) })
+	}
 	if node.ConfigHash != "" && !sendConfig(proto.ConfigEvent{Version: node.ConfigVersion, Hash: node.ConfigHash}) {
+		return
+	}
+	if open != "" && !sendChallenge(open) {
 		return
 	}
 	ka := time.NewTicker(a.KeepAlive)
@@ -357,6 +411,10 @@ func (a *api) events(w http.ResponseWriter, r *http.Request) {
 			}
 		case <-mesh:
 			if !send(func() error { return proto.WriteEvent(w, proto.Event{Name: proto.EventMesh, Data: []byte("{}")}) }) {
+				return
+			}
+		case nonce := <-challenge:
+			if !sendChallenge(nonce) {
 				return
 			}
 		case <-ka.C:

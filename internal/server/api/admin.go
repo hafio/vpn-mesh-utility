@@ -884,6 +884,9 @@ func (s *Nodes) Token(ctx context.Context, by Actor, name string) (NodeChange, e
 		if err := tx.UpdateNode(n); err != nil {
 			return err
 		}
+		if err := tx.DeleteAgentSession(n.ID); err != nil {
+			return err
+		}
 		enroll = s.enrollment(token, exp.Unix())
 		c.Detail = map[string]any{"cut_off": cutOff, "expires_at": exp.Unix()}
 		return nil

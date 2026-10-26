@@ -94,6 +94,9 @@ type JoinRequest struct {
 	// IPv6 endpoint is chosen from them as its IPv4 one is.
 	Endpoint6 string `json:"endpoint6,omitempty"`
 	PublicIP6 string `json:"public_ip6,omitempty"`
+	// MachineID is the host's machine id as HelloRequest carries it
+	// (amendment A50): the node is pinned to this machine.
+	MachineID string `json:"machine_id"`
 }
 
 // Validate normalises the request in place and reports every bad field.
@@ -154,6 +157,9 @@ func (r *JoinRequest) Validate() error {
 	}
 	s, err = validate.Version("agent_version", r.AgentVersion)
 	keep(s, err, &r.AgentVersion)
+	if !ValidSecret(r.MachineID) {
+		errs = append(errs, errors.New("machine_id must be 64 lowercase hex characters"))
+	}
 	return errors.Join(errs...)
 }
 

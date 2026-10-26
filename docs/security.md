@@ -26,6 +26,7 @@ The web UI (internal/server/ui) and the `meshctl user` commands share these acco
 | TOTP secrets at rest | AES-256-GCM with `<data>/secret.key` (32 random bytes, created at first start, mode 0600, refused when readable by others), bound to the user id. A database copy without the key does not reveal them. Back the key up with the database; losing it means `meshctl user reset-totp` for everyone. |
 | What agents apply | amendment A50: the control plane signs every config, mesh view and definitive refusal with an Ed25519 key, `<data>/config.key` (made at first start like `secret.key`), over the node, its mesh's slot, the request's nonce and the exact body. The agent pins the public key at join and checks every answer, and every cache at boot (`config.json.sig`, `mesh.json.sig`): a TLS terminator or proxy in the path can read configs (no secrets in them) but can neither change nor replay one, nor make an agent stop. Losing the key means every node joins again. |
 | Node keys | amendment A50: every join makes fresh WireGuard and identity keys, written only once the control plane accepted them; a key any node ever had is refused at a join. A new token retires the node's key at once (its peers drop it), and a request signed with any earlier key of the node is answered, signed, `replaced`, so a copy of an old data dir takes down what it brought up (tunnel, routes, rules, firewalld zone, DNS) and stops instead of retrying. One process uses a data dir at a time (`agent.lock`): a second agent, or a join under a running one, is refused before it touches anything. |
+| One running copy | amendment A50: a node holds one session; every request presents it with a one-time ticket, so two copies that share a data dir fall out of step within a heartbeat. The copy sent back to hello waits while the holder is challenged, and is refused (signed `duplicate`) when the holder answers with its valid ticket; a copy on a machine other than the node's (the machine id it presents, a hash, pinned at join) is refused (signed `foreign`) and wipes its data dir. Sessions, tickets, challenge nonces and machine ids are random or hashed, kept as sha256, compared in constant time, and never logged, audited or written to `refused.json`. A second agent of the mesh in the same network namespace is refused before it starts (an abstract socket; a global mutex on Windows). The machine id is self-reported: it stops copies, not someone with root on the node's machine, who has its keys anyway. |
 | Sessions | a 256-bit cookie `__Host-meshctl`: HttpOnly, Secure, SameSite=Strict, Path=/, host-only. The server stores only its sha256. 12 h idle, 7 days absolute; a session that passed the password but not the second factor lives 5 min and authorizes nothing else. A password change, a TOTP reset or disabling the user ends every session of that user. |
 | CSRF | a per-session token, required (header `X-CSRF-Token` or form field `csrf`) on every request that changes something, compared in constant time. |
 | Guessing | 5 failures from one address within 15 min lock it out for 15 min; 20 failures for one username within an hour lock the username, from any address. Addresses come from `X-Forwarded-For` only when the peer is a `--trusted-proxies` network. |
@@ -129,6 +130,7 @@ that owns the host's `wg0` needs:
 | devices | `/dev/net/tun`, unless the host's module is used (`MESHCTL_WG_BACKEND=kernel`) | wireguard-go's interface |
 | root file system | read-only; `/tmp` is a 16 MiB tmpfs | |
 | storage | one bind mount: a host directory at `/data` (Kubernetes: a `hostPath` of `/var/lib/meshctl`) | keys and the cached config |
+| machine id | the host's `/etc/machine-id`, read-only (Kubernetes: a `hostPath` of that file) | pins the node to its machine (amendment A50); the agent sends only a hash of it |
 | limits | 256 MiB memory, 256 pids | |
 
 Every value `meshctl start` reads from the environment passes `internal/validate` before it is
@@ -167,6 +169,7 @@ the sample to this list and forbids every other widening token, including the ho
 | ports | one UDP port, on a server node only | the node's endpoint; nothing else is published |
 | root file system | read-only; `/tmp` is a 16 MiB tmpfs | |
 | storage | a named volume, or a host directory, at `/data` | keys and the cached config |
+| machine id | the host's `/etc/machine-id`, read-only | pins the node to its machine (amendment A50) |
 | runtime socket | the host's Docker (or Podman) API socket at `/var/run/docker.sock`, `:ro`; left out with `MESHCTL_RUNTIME_SOCKET=off` | the containers' names (amendment A38, below) |
 | limits | 256 MiB memory, 256 pids | |
 

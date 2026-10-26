@@ -48,6 +48,16 @@ const (
 	JoinFile = "join.json"
 	// LockFile is held by the one process that uses the data dir (Lock).
 	LockFile = "agent.lock"
+	// HostFile is the machine the data dir last ran on, as hostid.Local
+	// (amendment A50): the cached config is applied at boot only there.
+	HostFile = "host.json"
+	// SessionFile is the agent's session with the control plane and the
+	// ticket its next request presents (amendment A50), so a restart
+	// carries on at once.
+	SessionFile = "session.json"
+	// RefusedFile says why the control plane refused this copy of the node
+	// (amendment A50); it outlives the wipe after a foreign refusal.
+	RefusedFile = "refused.json"
 	// sigSuffix names the signature beside a cached body: config.json.sig.
 	sigSuffix = ".sig"
 )

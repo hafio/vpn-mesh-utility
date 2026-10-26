@@ -17,7 +17,7 @@ func closed(ch <-chan struct{}) bool {
 
 func TestHubLatestWins(t *testing.T) {
 	h := NewHub()
-	events, _, _, cancel := h.Subscribe(1, 1)
+	events, _, _, _, cancel := h.Subscribe(1, 1)
 	defer cancel()
 	h.Notify(map[int64]proto.ConfigEvent{1: {Version: 1}, 2: {Version: 1}})
 	h.Notify(map[int64]proto.ConfigEvent{1: {Version: 2}})
@@ -33,8 +33,8 @@ func TestHubLatestWins(t *testing.T) {
 
 func TestHubReplacesKicksAndCloses(t *testing.T) {
 	h := NewHub()
-	_, _, done1, cancel1 := h.Subscribe(1, 1)
-	_, _, done2, cancel2 := h.Subscribe(1, 1)
+	_, _, _, done1, cancel1 := h.Subscribe(1, 1)
+	_, _, _, done2, cancel2 := h.Subscribe(1, 1)
 	if !closed(done1) || closed(done2) || h.Subscribers() != 1 {
 		t.Fatal("a new subscription must end the old one")
 	}
@@ -47,10 +47,10 @@ func TestHubReplacesKicksAndCloses(t *testing.T) {
 		t.Fatal("Kick must end the stream")
 	}
 	cancel2()
-	_, _, done3, cancel3 := h.Subscribe(3, 1)
+	_, _, _, done3, cancel3 := h.Subscribe(3, 1)
 	defer cancel3()
 	h.Close()
-	_, _, done4, cancel4 := h.Subscribe(4, 1)
+	_, _, _, done4, cancel4 := h.Subscribe(4, 1)
 	defer cancel4()
 	if !closed(done3) || !closed(done4) || h.Subscribers() != 0 {
 		t.Fatal("Close must end every stream and refuse new ones")
@@ -61,11 +61,11 @@ func TestHubReplacesKicksAndCloses(t *testing.T) {
 // that pile up collapse into one.
 func TestHubNudgesEveryStream(t *testing.T) {
 	h := NewHub()
-	_, mesh1, _, cancel1 := h.Subscribe(1, 1)
+	_, mesh1, _, _, cancel1 := h.Subscribe(1, 1)
 	defer cancel1()
-	_, mesh2, _, cancel2 := h.Subscribe(2, 1)
+	_, mesh2, _, _, cancel2 := h.Subscribe(2, 1)
 	defer cancel2()
-	_, other, _, cancel3 := h.Subscribe(3, 2)
+	_, other, _, _, cancel3 := h.Subscribe(3, 2)
 	defer cancel3()
 	h.NotifyMesh(1)
 	h.NotifyMesh(1)
@@ -79,5 +79,24 @@ func TestHubNudgesEveryStream(t *testing.T) {
 		if closed(ch) {
 			t.Fatalf("stream %d got two nudges; they must collapse", i+1)
 		}
+	}
+}
+
+// A challenge reaches the node's own stream, latest wins, and a node
+// without one is skipped (amendment A50).
+func TestHubDeliversChallenges(t *testing.T) {
+	h := NewHub()
+	_, _, challenge, _, cancel := h.Subscribe(1, 1)
+	defer cancel()
+	h.Challenge(1, "first")
+	h.Challenge(1, "second")
+	h.Challenge(2, "nobody")
+	if got := <-challenge; got != "second" {
+		t.Fatalf("challenge %q", got)
+	}
+	select {
+	case got := <-challenge:
+		t.Fatalf("a second challenge %q", got)
+	default:
 	}
 }

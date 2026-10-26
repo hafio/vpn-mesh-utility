@@ -43,11 +43,16 @@ func newClient(t *testing.T, h http.Handler) *Client {
 	t.Cleanup(srv.Close)
 	_, priv := testfix.IdentityKey(testfix.VPS1.Key)
 	c, err := New(Options{Server: srv.URL, NodeID: testfix.VPS1.ID, Key: priv, ConfigKey: testfix.Pinned(testfix.VPS1.ID).Key, Version: "v1.0.0",
-		Now: func() time.Time { return testfix.Epoch }})
+		Now: func() time.Time { return testfix.Epoch }, Session: testSession()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return c
+}
+
+// testSession is vps-1's session in the tests.
+func testSession() *Session {
+	return &Session{ID: testfix.Session(testfix.VPS1.ID), Ticket: testfix.Ticket(testfix.VPS1.ID), Heartbeat: proto.Heartbeat}
 }
 
 // sign answers with v as the control plane signs it for vps-1 (amendment
@@ -281,7 +286,7 @@ func TestUnreachableAndMalformedAnswers(t *testing.T) {
 		t.Errorf("Join with the server down = %v", err)
 	}
 	_, priv := testfix.IdentityKey(testfix.VPS1.Key)
-	c, err := New(Options{Server: down.URL, NodeID: testfix.VPS1.ID, Key: priv, Version: "v1.0.0"})
+	c, err := New(Options{Server: down.URL, NodeID: testfix.VPS1.ID, Key: priv, Version: "v1.0.0", Session: testSession()})
 	if err != nil {
 		t.Fatal(err)
 	}

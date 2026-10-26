@@ -11,7 +11,10 @@ Public listener (`--listen`, behind the reverse proxy):
 
 | Route | Auth | Purpose |
 | --- | --- | --- |
-| `POST /api/v1/agent/join` | one-time token | enroll a node: register its public keys, get its id and mesh IP |
+| `POST /api/v1/agent/join` | one-time token | enroll a node: register its public keys and its machine, get its id and mesh IP |
+| `POST /api/v1/agent/hello` | signature | open the node's session: its machine id and hostname; granted, or `wait` while another copy holds it (amendment A50, Sessions below) |
+| `POST /api/v1/agent/alive` | signature | the session holder answers a challenge: `{"nonce"}` |
+| `POST /api/v1/agent/bye` | signature | end the session at a clean stop, so the next start is let in at once |
 | `GET /api/v1/agent/config` | signature | the node's full desired config; `If-None-Match` answers 304 |
 | `GET /api/v1/agent/events` | signature | server-sent events: one `config` event per change, a `mesh` event when the mesh view changed |
 | `POST /api/v1/agent/status` | signature | heartbeat every 30 s and after each apply |
@@ -61,11 +64,14 @@ X-Mesh-Node:      <node id>
 X-Mesh-Timestamp: <unix seconds>
 X-Mesh-Nonce:     <26 base32 characters, fresh per request>
 X-Mesh-Signature: base64(ed25519_sign(identity_key, canonical))
+X-Mesh-Session:   <the session, 64 hex characters; not on a hello>
+X-Mesh-Ticket:    <the ticket the previous answer carried; not on a hello>
 
-canonical = METHOD "\n" PATH?RAWQUERY "\n" TIMESTAMP "\n" NONCE "\n" hex(sha256(body))
+canonical = METHOD "\n" PATH?RAWQUERY "\n" TIMESTAMP "\n" NONCE "\n" SESSION "\n" TICKET "\n" hex(sha256(body))
 ```
 
-The query string is covered so a relay cannot rewrite parameters. The nonce exists because
+The query string is covered so a relay cannot rewrite parameters, and so are the session and the
+ticket (empty when the request has none). The nonce exists because
 Ed25519 signatures are deterministic: without it, two identical requests in the same second (a
 poll and an SSE-triggered fetch) would carry the same signature, and the second would be refused
 as a replay.
@@ -81,6 +87,7 @@ The server checks, in this order, and stops at the first failure:
 | node exists and has joined | 401 `unauthorized` |
 | signature verifies with the node's identity key | 403 `replaced` when it verifies with a key the node had before (amendment A50), else 401 `unauthorized` |
 | node is not disabled | 403 `node_disabled` |
+| the session and ticket are the node's (amendment A50; not for a hello, read only for the event stream) | 409 `session`: say hello |
 
 The first four need no database read. A signature is remembered only after it verifies, and when
 the replay cache is full of live entries the server answers 503 `rate_limited` rather than evict
@@ -96,8 +103,9 @@ Every non-2xx answer is JSON:
 
 Agents branch on `code`, never on `message`. Codes: `bad_request`, `unauthorized`,
 `clock_skew`, `replay`, `node_disabled`, `token_invalid`, `not_found`, `conflict`,
-`rate_limited`, `too_large`, `internal`, `replaced`. Messages say what failed and what to do; they never
-contain a token or a key. A 500 says only "internal error"; the detail is in the server log.
+`rate_limited`, `too_large`, `internal`, `replaced`, and for sessions (amendment A50) `wait`, `session`,
+`duplicate` and `foreign`. Messages say what failed and what to do; they never contain a token, a
+key, a session or a ticket. A 500 says only "internal error"; the detail is in the server log.
 
 **Signed answers** (amendment A50). The control plane signs with its key (`<data>/config.key`,
 Ed25519, pinned by the agent at join):
@@ -105,7 +113,7 @@ Ed25519, pinned by the agent at join):
 | Answer | Header | Covers |
 | --- | --- | --- |
 | a config, a mesh view (200 with a body) | `X-Mesh-Config-Signature` | `"meshctl-config"` or `"meshctl-mesh"`, the node id, its mesh's slot, the request's nonce, then the exact body, joined by newlines |
-| a definitive refusal (`replaced`) | `X-Mesh-Refusal-Signature` | `"meshctl-refusal"`, the node id, the code, the request's nonce and the body's `server_time`, joined by newlines |
+| a definitive refusal (`replaced`, `duplicate`, `foreign`) | `X-Mesh-Refusal-Signature` | `"meshctl-refusal"`, the node id, the code, the request's nonce and the body's `server_time`, joined by newlines |
 
 The agent uses a config or mesh view only when its signature verifies for the request it sent,
 and keeps it with its nonce and signature (`config.json.sig`, `mesh.json.sig`), checked again at
@@ -120,7 +128,8 @@ and unsigned, it is logged and retried like any other error.
 ```json
 {"token": "...", "name": "vps-2", "hostname": "vps-2.example.com", "os": "linux", "arch": "amd64",
  "wg_backend": "kernel", "wg_public_key": "...", "identity_public_key": "...",
- "endpoint": "203.0.113.11:51820", "public_ip": "203.0.113.11", "agent_version": "v1.0.0"}
+ "endpoint": "203.0.113.11:51820", "public_ip": "203.0.113.11", "agent_version": "v1.0.0",
+ "machine_id": "<64 hex characters>"}
 ```
 
 `name` is optional: when given it must be the node the token was issued for. The token is
@@ -137,6 +146,14 @@ every peer's config until it joins again; a request signed with any retired key 
 answered 403 `replaced`, signed. The agent holds `<data>/agent.lock` while it joins and while it
 runs: a join under a running agent, or a second agent, is refused before it touches anything.
 
+`machine_id` pins the node to its machine (amendment A50): the agent reads the host's machine id
+(`/etc/machine-id`, else `/var/lib/dbus/machine-id`, else the firmware's product UUID; Windows'
+`MachineGuid`; `--machine-id-file` names another file) and sends a hash of it that names meshctl,
+never the id itself; the server keeps a hash of that. A host without a machine id cannot join:
+the error says to mount the host's into a container. The join also ends any session the node had,
+and the agent writes `host.json` (another hash of the id) and removes `session.json` and
+`refused.json`.
+
 A server node's endpoint is `endpoint` (from `--endpoint`), else `public_ip` (the first public
 IPv4 on the agent's interfaces) with the node's listen port, else the endpoint set with
 `meshctl node add --endpoint`, else the address the request came from if it is public
@@ -151,6 +168,68 @@ The answer: `{"node_id", "name", "role", "mesh_ip", "config_version", "server_ti
 (amendment A50). The agent records them in `state.json` (a slot outside 0..63, or no valid key,
 is refused and nothing recorded) and names everything it makes on the host after the slot
 (below).
+
+## Sessions
+
+One node identity, one live connection (amendment A50). A node holds at most one session; it lives
+in the control plane's database (`agent_sessions`, operational: never in snapshots or exports),
+so a control plane restart keeps it, and in the agent's `session.json`, so an agent restart
+carries on with it at once.
+
+`POST /api/v1/agent/hello`, signed, no session: `{"machine_id", "hostname"}`. The control plane
+decides, in order:
+
+| Case | Answer |
+| --- | --- |
+| a key the node had before | 403 `replaced`, signed (as any request) |
+| a machine id other than the node's (pinned at its join, re-pinned at every granted hello; a node without one is pinned now) | 403 `foreign`, signed; recorded and audited `node.foreign` |
+| a live holder (its session not ended, seen less than 90 s ago) and no challenge open | the holder is challenged, on its event stream (event `challenge`, `{"nonce"}`) and in the answer to its next request (`X-Mesh-Challenge`); 409 `wait`, `Retry-After: 5` |
+| a challenge open less than 90 s and the holder answered (`POST /alive {"nonce"}`) | 403 `duplicate`, signed; recorded and audited `node.duplicate` |
+| a challenge open less than 90 s, not answered | 409 `wait`; the challenge is sent again, its deadline stays |
+| a challenge not answered for 90 s, no live holder, an ended session, or none | granted: `{"session", "ticket", "heartbeat": 30, "server_time"}`; the machine is re-pinned; audited `node.session` (`lapsed` when it took the session over) |
+
+The challenge's nonce is derived from the control plane's key, the session and when the challenge
+opened, so it is the same at every delivery, also after a restart. A copy that waits holds no
+ticket, so it can never answer one. A wrong nonce is ignored.
+
+Every other signed request presents the session and a ticket, and its answer -- whatever its
+status -- carries the next ticket in `X-Mesh-Next-Ticket`:
+
+| The request presents | Answer |
+| --- | --- |
+| the current ticket | accepted; the next ticket is issued |
+| the ticket before it | a retry after a lost answer: accepted; the ticket it never got is replaced by a fresh one |
+| anything else, or an unknown or ended session | 409 `session`: say hello |
+
+Two copies that share the session (a copied data dir, a VM cloned while running) fall out of step
+within a heartbeat; the one sent to hello waits while the other is challenged, and is refused when
+that one answers. Nothing on this table is definitive. The agent sends these requests one at a time,
+advances its ticket only on an answer that carries the next one, and answers a challenge before its
+next request. The event stream presents the session and the current or previous ticket without
+moving it, so it waits for no other request; it opens with a challenge that is already open. A
+heartbeat (`status`) is the holder's sign of life; `--status-every` may only shorten the 30 s the
+hello answered, and a heartbeat built while an apply runs goes without the peers rather than late.
+`POST /api/v1/agent/bye` at a clean stop ends the session (204), and the agent marks
+`session.json` released.
+
+What `agent run` does at start, after the data-dir lock and the per-mesh lock (an abstract unix
+socket `@meshctl-<hash of the mesh uuid>`, scoped to the network namespace; a `Global\` mutex on
+Windows), and the enrollment and keys:
+
+1. It reads the host's machine id. The cached config is applied only when `host.json` names this
+   machine and `session.json` exists (released or not): offline resilience stays, and a copy on
+   another machine applies nothing before the control plane has had its say.
+2. It carries on with the saved session when there is one and it was not released; otherwise it
+   says hello, and again whenever an answer is 409 `session`. While the answer is `wait` it retries
+   every 5 s and sends nothing else; a granted hello writes `host.json` and removes `refused.json`.
+
+A definitive refusal (`replaced`, `duplicate`, `foreign`, signed for the request) ends the run
+(exit 3) after the agent took off the host what it made (Teardown, under Apply) and wrote
+`refused.json` (the code, when, the message, and the fingerprint of the join token from
+`join.json`). After `duplicate` or `replaced` it removes `session.json` and keeps its enrollment:
+a later start says hello again. After `foreign` it wipes its data dir but `refused.json` (and the
+Windows service's log): a container restarted with the same join token is told it needs a new one
+without asking the server, after a 30 s pause so a restart loop stays quiet.
 
 ## Config and events
 

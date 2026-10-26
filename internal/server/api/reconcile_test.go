@@ -24,7 +24,7 @@ func TestReconcilerVersionsOnlyRealChanges(t *testing.T) {
 
 	subs := map[int64]<-chan proto.ConfigEvent{}
 	for _, f := range testfix.Servers {
-		ev, _, _, cancel := h.hub.Subscribe(f.ID, store.FirstMesh)
+		ev, _, _, _, cancel := h.hub.Subscribe(f.ID, store.FirstMesh)
 		defer cancel()
 		subs[f.ID] = ev
 	}
@@ -141,7 +141,7 @@ func TestRollbackIsANewVersion(t *testing.T) {
 	if _, err := h.rec.Apply(ctx, Change{Mesh: store.FirstMesh, Actor: "test", Action: "node.set"}, move); err != nil {
 		t.Fatal(err)
 	}
-	events, _, _, cancel := h.hub.Subscribe(testfix.VPS1.ID, store.FirstMesh)
+	events, _, _, _, cancel := h.hub.Subscribe(testfix.VPS1.ID, store.FirstMesh)
 	defer cancel()
 
 	res, err := h.rec.Rollback(ctx, Change{Mesh: store.FirstMesh, Actor: "user:admin", UserID: 1}, v1)

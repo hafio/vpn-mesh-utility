@@ -47,30 +47,44 @@ type Signed struct {
 	// would be refused as a replay.
 	Nonce     string
 	Signature []byte
+	// Session and Ticket are the agent's session and the one-time ticket
+	// this request presents (amendment A50); a hello, a join and a request
+	// made without a session have neither.
+	Session string
+	Ticket  string
 }
 
 // CanonicalRequest is the byte string a request signature covers:
 //
-//	METHOD "\n" PATH?RAWQUERY "\n" UNIX-SECONDS "\n" NONCE "\n" hex(sha256(body))
+//	METHOD "\n" PATH?RAWQUERY "\n" UNIX-SECONDS "\n" NONCE "\n" SESSION "\n" TICKET "\n" hex(sha256(body))
 //
 // The query string is covered (amendment A8) so a relay cannot rewrite
-// parameters of a signed request.
-func CanonicalRequest(method, requestURI string, ts int64, nonce string, body []byte) []byte {
+// parameters of a signed request, and so are the session and the ticket
+// (amendment A50), empty when the request has none.
+func CanonicalRequest(method, requestURI string, ts int64, nonce, session, ticket string, body []byte) []byte {
 	sum := sha256.Sum256(body)
-	return []byte(method + "\n" + requestURI + "\n" + strconv.FormatInt(ts, 10) + "\n" + nonce + "\n" + hex.EncodeToString(sum[:]))
+	return []byte(method + "\n" + requestURI + "\n" + strconv.FormatInt(ts, 10) + "\n" + nonce + "\n" + session + "\n" + ticket + "\n" +
+		hex.EncodeToString(sum[:]))
 }
 
 // Sign returns the header values for one request made by node nodeID at time
-// now, with a fresh random nonce. requestURI is the path plus raw query
-// exactly as sent (http.Request.URL.RequestURI()).
+// now, with a fresh random nonce and no session. requestURI is the path plus
+// raw query exactly as sent (http.Request.URL.RequestURI()).
 func Sign(priv ed25519.PrivateKey, nodeID int64, method, requestURI string, now time.Time, body []byte) Signed {
+	return SignSession(priv, nodeID, method, requestURI, now, "", "", body)
+}
+
+// SignSession is Sign for a request that presents session and ticket.
+func SignSession(priv ed25519.PrivateKey, nodeID int64, method, requestURI string, now time.Time, session, ticket string, body []byte) Signed {
 	ts := now.Unix()
 	nonce := rand.Text()
 	return Signed{
 		NodeID:    nodeID,
 		Timestamp: ts,
 		Nonce:     nonce,
-		Signature: ed25519.Sign(priv, CanonicalRequest(method, requestURI, ts, nonce, body)),
+		Signature: ed25519.Sign(priv, CanonicalRequest(method, requestURI, ts, nonce, session, ticket, body)),
+		Session:   session,
+		Ticket:    ticket,
 	}
 }
 
@@ -80,6 +94,12 @@ func (s Signed) Apply(h http.Header) {
 	h.Set(HeaderTimestamp, strconv.FormatInt(s.Timestamp, 10))
 	h.Set(HeaderNonce, s.Nonce)
 	h.Set(HeaderSignature, base64.StdEncoding.EncodeToString(s.Signature))
+	if s.Session != "" {
+		h.Set(HeaderSession, s.Session)
+	}
+	if s.Ticket != "" {
+		h.Set(HeaderTicket, s.Ticket)
+	}
 }
 
 // ParseSigned reads the signing headers. It checks shape only; Verify checks
@@ -102,7 +122,13 @@ func ParseSigned(h http.Header) (Signed, error) {
 	if err != nil || len(sig) != ed25519.SignatureSize {
 		return s, fmt.Errorf("%w: %s must be a base64 ed25519 signature", ErrUnsigned, HeaderSignature)
 	}
-	return Signed{NodeID: id, Timestamp: ts, Nonce: nonce, Signature: sig}, nil
+	session, ticket := h.Get(HeaderSession), h.Get(HeaderTicket)
+	for name, v := range map[string]string{HeaderSession: session, HeaderTicket: ticket} {
+		if v != "" && !ValidSecret(v) {
+			return s, fmt.Errorf("%w: %s must be 64 lowercase hex characters", ErrUnsigned, name)
+		}
+	}
+	return Signed{NodeID: id, Timestamp: ts, Nonce: nonce, Signature: sig, Session: session, Ticket: ticket}, nil
 }
 
 // Verify checks the clock first (cheap, and the most common real failure),
@@ -114,7 +140,7 @@ func (s Signed) Verify(pub ed25519.PublicKey, method, requestURI string, body []
 	if len(pub) != ed25519.PublicKeySize {
 		return fmt.Errorf("%w: node has no valid identity key", ErrBadSignature)
 	}
-	if !ed25519.Verify(pub, CanonicalRequest(method, requestURI, s.Timestamp, s.Nonce, body), s.Signature) {
+	if !ed25519.Verify(pub, CanonicalRequest(method, requestURI, s.Timestamp, s.Nonce, s.Session, s.Ticket, body), s.Signature) {
 		return ErrBadSignature
 	}
 	return nil

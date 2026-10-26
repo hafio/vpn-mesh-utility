@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
@@ -47,4 +48,24 @@ func Signed(kind string, node int64, v any) proto.SignedBody {
 // SignedConfig is c signed for its own node.
 func SignedConfig(c proto.NodeConfig) proto.SignedBody {
 	return Signed(proto.SignedConfig, c.Node.ID, c)
+}
+
+// MachineID is the machine id the tests' hosts present (amendment A50), and
+// OtherMachine another host's.
+const (
+	MachineID    = "6d616368696e652d69642d6f662d7468652d746573742d686f73742d30303031"
+	OtherMachine = "6d616368696e652d69642d6f662d616e6f746865722d686f73742d3030303032"
+)
+
+// Session and Ticket are a node's session and ticket in the tests,
+// deterministic by node id.
+func Session(node int64) string { return secret(0x5e, node) }
+
+// Ticket is node's first ticket in the tests.
+func Ticket(node int64) string { return secret(0x71, node) }
+
+func secret(kind byte, node int64) string {
+	b := bytes.Repeat([]byte{kind}, 32)
+	b[31] = byte(node)
+	return hex.EncodeToString(b)
 }

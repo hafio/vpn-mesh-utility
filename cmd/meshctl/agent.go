@@ -38,6 +38,7 @@ func joinFlags(fs *flag.FlagSet, e *env) func() (agent.JoinOptions, error) {
 	endpoint := fs.String("endpoint", "", "servers only: public IPv4:port, when auto-detection would be wrong")
 	endpoint6 := fs.String("endpoint6", "", "servers only: public [IPv6]:port, when auto-detection would be wrong")
 	data := fs.String("data", defaultAgentData(e), "agent data directory")
+	machine := machineIDFlag(fs)
 	return func() (agent.JoinOptions, error) {
 		tok := *token
 		if tok == "" {
@@ -46,9 +47,28 @@ func joinFlags(fs *flag.FlagSet, e *env) func() (agent.JoinOptions, error) {
 		if *srv == "" || tok == "" {
 			return agent.JoinOptions{}, usagef("--server and --token (or MESHCTL_TOKEN) are required; `meshctl node add` prints both")
 		}
+		if err := checkMachineIDFile(*machine); err != nil {
+			return agent.JoinOptions{}, err
+		}
 		return agent.JoinOptions{DataDir: *data, Server: *srv, Token: tok, Name: *name, Endpoint: *endpoint, Version: e.version,
-			Out: e.stdout, Now: e.now, Endpoint6: *endpoint6}, nil
+			Out: e.stdout, Now: e.now, Endpoint6: *endpoint6, MachineIDFile: *machine}, nil
 	}
+}
+
+// machineIDFlag registers --machine-id-file (amendment A50).
+func machineIDFlag(fs *flag.FlagSet) *string {
+	return fs.String("machine-id-file", "", "the file holding this host's machine id, which pins the node to it "+
+		"(default: /etc/machine-id, /var/lib/dbus/machine-id or the firmware's UUID; MachineGuid on Windows); a container mounts the host's")
+}
+
+func checkMachineIDFile(path string) error {
+	if path == "" {
+		return nil
+	}
+	if _, err := validate.FilePath("--machine-id-file", path); err != nil {
+		return usagef("%v", err)
+	}
+	return nil
 }
 
 func setupAgentJoin(fs *flag.FlagSet, e *env) action {
@@ -132,8 +152,12 @@ func setupAgentRun(fs *flag.FlagSet, e *env) action {
 		"how often the agent reports to the server; the server's --hub-down-after must be longer on a server")
 	endpointRetry := fs.Duration("endpoint-retry", 45*time.Second,
 		"how long a spoke waits for a first handshake on a server's endpoint before it dials the server's other-family one")
+	machine := machineIDFlag(fs)
 	return func(ctx context.Context, args []string) error {
 		if err := wantArgs(args, 0, ""); err != nil {
+			return err
+		}
+		if err := checkMachineIDFile(*machine); err != nil {
 			return err
 		}
 		if *statusEvery < time.Second || *statusEvery > 5*time.Minute {
@@ -171,7 +195,7 @@ func setupAgentRun(fs *flag.FlagSet, e *env) action {
 		d := agent.Deps{
 			DataDir: *data, Socket: sock(), UIListen: uiListen, Version: e.version,
 			NoFirewall: *noFirewall, Backend: *backend, Log: log, Logs: ring, Now: e.now, RuntimeSocket: *runtime,
-			StatusEvery: *statusEvery, EndpointRetry: *endpointRetry,
+			StatusEvery: *statusEvery, EndpointRetry: *endpointRetry, MachineIDFile: *machine,
 		}
 		if asService {
 			return service.RunWindowsService(func(ctx context.Context) error {

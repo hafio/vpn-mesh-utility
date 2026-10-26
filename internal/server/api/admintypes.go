@@ -62,6 +62,21 @@ type NodeInfo struct {
 	// HostFamilies are the families its agent reported the host can use;
 	// empty when it has not said.
 	HostFamilies []string `json:"host_families,omitempty"`
+	// Copy is another copy of the node the control plane saw (amendment
+	// A50): one waiting while this one is asked whether it runs, else the
+	// last one refused.
+	Copy *CopyInfo `json:"copy,omitempty"`
+}
+
+// CopyInfo is a second copy of a node: Waiting since At while the holder
+// is challenged, or refused at At as Code (proto.CodeDuplicate or
+// proto.CodeForeign); Hostname is where it runs.
+type CopyInfo struct {
+	Waiting     bool   `json:"waiting,omitempty"`
+	Code        string `json:"code,omitempty"`
+	Hostname    string `json:"hostname"`
+	SameMachine bool   `json:"same_machine,omitempty"`
+	At          int64  `json:"at"`
 }
 
 // NodeList is GET /admin/v1/nodes.

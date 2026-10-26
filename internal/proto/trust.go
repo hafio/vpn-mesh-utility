@@ -35,8 +35,11 @@ const (
 const CodeReplaced = "replaced"
 
 // Definitive reports whether a refusal with code ends the agent's run --
-// when, and only when, its signature verifies.
-func Definitive(code string) bool { return code == CodeReplaced }
+// when, and only when, its signature verifies: replaced, duplicate and
+// foreign.
+func Definitive(code string) bool {
+	return code == CodeReplaced || code == CodeDuplicate || code == CodeForeign
+}
 
 // SignedBody is an answer as the control plane signed it: the exact body,
 // the nonce of the request it answers and the signature.

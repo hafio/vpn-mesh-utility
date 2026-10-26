@@ -194,7 +194,7 @@ func containerNAS() store.Node {
 func TestNamesEndpoint(t *testing.T) {
 	h := newHarness(t)
 	h.seed(t, storeNode(testfix.VPS1, true), storeNode(testfix.VPS2, true), storeNode(testfix.VPS3, true), containerNAS())
-	_, mesh, _, cancel := h.hub.Subscribe(testfix.VPS1.ID, store.FirstMesh)
+	_, mesh, _, _, cancel := h.hub.Subscribe(testfix.VPS1.ID, store.FirstMesh)
 	defer cancel()
 	web := proto.ContainerName{Name: "web", Kind: proto.NameService, IP: "10.77.128.129"}
 	names := []proto.ContainerName{web, {Name: "vps-2", Kind: proto.NameAlias, IP: "10.77.128.129"},

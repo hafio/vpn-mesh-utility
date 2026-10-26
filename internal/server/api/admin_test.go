@@ -111,7 +111,7 @@ func TestAdminSetDisableEnableRemove(t *testing.T) {
 		t.Fatalf("bad mtu: %d", code)
 	}
 
-	_, _, done, cancel := h.hub.Subscribe(testfix.VPS3.ID, store.FirstMesh)
+	_, _, _, done, cancel := h.hub.Subscribe(testfix.VPS3.ID, store.FirstMesh)
 	defer cancel()
 	if code, _ := adminCall(t, h, http.MethodPost, AdminNodes+"/vps-3/disable", nil, &ch); code != 200 || !ch.Node.Disabled {
 		t.Fatalf("disable: %d %+v", code, ch.Node)

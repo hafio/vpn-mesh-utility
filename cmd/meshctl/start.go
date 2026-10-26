@@ -58,6 +58,7 @@ func startVars() []envVar {
 		{name: "MESHCTL_WG_BACKEND", mode: modeNode, flag: "wg-backend"},
 		{name: "MESHCTL_RUNTIME_SOCKET", mode: modeNode, flag: "runtime-socket"},
 		{name: "MESHCTL_UI_LISTEN", mode: modeNode, flag: "ui-listen"},
+		{name: "MESHCTL_MACHINE_ID_FILE", mode: modeNode, flag: "machine-id-file"},
 	}
 }
 
@@ -162,8 +163,12 @@ func startJoin(e *env, data string) (agent.JoinOptions, error) {
 	if err != nil {
 		return agent.JoinOptions{}, fmt.Errorf("%w (MESHCTL_LOG_LEVEL)", err)
 	}
+	machine := e.getenv("MESHCTL_MACHINE_ID_FILE")
+	if err := checkMachineIDFile(machine); err != nil {
+		return agent.JoinOptions{}, fmt.Errorf("%w (MESHCTL_MACHINE_ID_FILE)", err)
+	}
 	return agent.JoinOptions{DataDir: data, Server: srv, Token: token, Name: name, Endpoint: e.getenv("MESHCTL_ENDPOINT"),
-		Endpoint6: e.getenv("MESHCTL_ENDPOINT6"), Version: e.version, Now: e.now, Log: log}, nil
+		Endpoint6: e.getenv("MESHCTL_ENDPOINT6"), Version: e.version, Now: e.now, Log: log, MachineIDFile: machine}, nil
 }
 
 func logLevel(e *env) string {

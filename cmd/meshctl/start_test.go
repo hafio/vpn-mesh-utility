@@ -106,6 +106,7 @@ func TestStartNodeJoin(t *testing.T) {
 		{map[string]string{"MESHCTL_TOKEN": "short-secret"}, exitUsage, "MESHCTL_TOKEN"},
 		{map[string]string{"MESHCTL_TOKEN": testfix.Token, "MESHCTL_URL": down, "MESHCTL_NAME": "NAS 1"}, exitUsage, "MESHCTL_NAME"},
 		{map[string]string{"MESHCTL_LOG_LEVEL": "loud"}, exitUsage, "(MESHCTL_LOG_LEVEL)"},
+		{map[string]string{"MESHCTL_MACHINE_ID_FILE": "/etc/machine-id?x"}, exitUsage, "(MESHCTL_MACHINE_ID_FILE)"},
 		{map[string]string{"MESHCTL_TOKEN": testfix.Token, "MESHCTL_URL": down, "MESHCTL_NAME": "nas"}, exitFailure, "the next start tries again"},
 		{map[string]string{"MESHCTL_TOKEN_FILE": good, "MESHCTL_URL": down}, exitFailure, "the next start tries again"},
 	} {

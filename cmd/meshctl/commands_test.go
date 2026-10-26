@@ -275,6 +275,13 @@ func TestAgentRunNeedsAJoin(t *testing.T) {
 	if code, _, errOut := runArgs("agent", "run", "--data", data, "--log-level", "loud"); code != exitUsage || !strings.Contains(errOut, "--log-level") {
 		t.Fatalf("agent run --log-level loud = %d %q", code, errOut)
 	}
+	// The machine id file (amendment A50) is a path, checked before use.
+	for _, args := range [][]string{{"agent", "run", "--data", data}, {"agent", "join", "--server", "https://mesh.example.com", "--token", testfix.Token,
+		"--data", data, "--no-service"}} {
+		if code, _, errOut := runArgs(append(args, "--machine-id-file", "/etc/machine-id?x")...); code != exitUsage || !strings.Contains(errOut, "--machine-id-file") {
+			t.Errorf("%v --machine-id-file with '?' = %d %q", args[:2], code, errOut)
+		}
+	}
 }
 
 // `agent reset` needs a data dir with a node in it; it refuses before it

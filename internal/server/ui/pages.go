@@ -274,6 +274,9 @@ type nodeData struct {
 	DNS string
 	// Profile says, for a phone, whether the profile it holds is current.
 	Profile string
+	// Copy says what the control plane saw of a second copy of the node
+	// (amendment A50).
+	Copy string
 }
 
 type peerRow struct {
@@ -295,6 +298,9 @@ func (u *ui) nodeView(r *http.Request, name string) (nodeData, error) {
 		InContainer: d.Node.Mode == proto.ModeContainer, Containers: d.Containers}
 	out.Class, out.State = api.Health(d.Node, now)
 	out.DNS = dnsState(d.Node.DNS)
+	if c := d.Node.Copy; c != nil {
+		out.Copy = api.CopyLine(*c, now.Location())
+	}
 	if out.IPv6, err = u.meshHasIPv6(r); err != nil {
 		return nodeData{}, err
 	}

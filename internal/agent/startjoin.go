@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"time"
 
 	"github.com/hafio/vpn-mesh-utility/internal/agent/client"
 	"github.com/hafio/vpn-mesh-utility/internal/agent/state"
@@ -29,6 +30,10 @@ import (
 func JoinOnStart(ctx context.Context, o JoinOptions) error {
 	return joinOnStart(ctx, o, Join)
 }
+
+// refusedPause is how long a start refused for a spent token waits before
+// it exits, so a container's restart loop stays quiet.
+const refusedPause = 30 * time.Second
 
 // ErrNoToken is JoinOnStart's error for a node that has never joined and
 // was given no join token.
@@ -61,6 +66,18 @@ func joinOnStart(ctx context.Context, o JoinOptions, join func(context.Context, 
 		return err
 	}
 	sum := tokenFingerprint(o.Token)
+	// A copy refused on another machine than the node's wiped itself and
+	// kept why (amendment A50): the token it joined with is spent here, and
+	// a restart loop is told so without asking the server again.
+	if ref, ok, _ := dir.Refused(); !joined && ok && ref.Token == sum { // a damaged refused.json just lets the join ask
+		pause := o.Pause
+		if pause == nil {
+			pause = time.Sleep
+		}
+		pause(refusedPause)
+		return fmt.Errorf("the control plane refused this node on this machine (%s: %s), so its data dir was wiped and this join token "+
+			"is spent here; set MESHCTL_TOKEN (or MESHCTL_TOKEN_FILE) to a new token from `meshctl node token <name>`", ref.Code, ref.Message)
+	}
 	if rec.Token == sum {
 		if !joined {
 			return errors.New("the server refused this join token on an earlier start and the node has not joined: " +

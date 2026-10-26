@@ -392,6 +392,19 @@ func TestNodeLifecycle(t *testing.T) {
 	if w := r.do(http.MethodGet, "/m/default/nodes/vps-1", cookie, nil); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "203.0.113.10:51820") {
 		t.Fatalf("node page = %d", w.Code)
 	}
+	// A second copy the control plane refused (amendment A50) is named.
+	if err := r.st.Tx(context.Background(), func(tx *store.Tx) error {
+		n, err := tx.In(store.FirstMesh).NodeByName("vps-1")
+		if err != nil {
+			return err
+		}
+		return tx.RecordRefusal(n.ID, store.Refusal{Code: proto.CodeDuplicate, Hostname: "copy.example.com", SameMachine: true, At: r.clock.Now().Unix()})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if w := r.do(http.MethodGet, "/m/default/nodes/vps-1", cookie, nil); !strings.Contains(w.Body.String(), "a second copy on copy.example.com, the same machine, was refused") {
+		t.Fatalf("node page without the refused copy:\n%s", w.Body.String())
+	}
 	if w := post("/m/default/nodes/vps-1", url.Values{"endpoint": {"203.0.113.10:51820"}, "listen_port": {"51820"}, "mtu": {"1380"}}); w.Code != http.StatusOK ||
 		!strings.Contains(w.Body.String(), "Saved") {
 		t.Fatalf("edit = %d\n%s", w.Code, w.Body)

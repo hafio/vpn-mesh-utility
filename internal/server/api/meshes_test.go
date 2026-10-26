@@ -79,7 +79,7 @@ func TestMeshesAreApartOnTheAgentAPI(t *testing.T) {
 	lab := h.addLab(t)
 	labNodes := h.nodes().In(lab.ID)
 	before := h.latestVersion(t)
-	events, _, _, cancel := h.hub.Subscribe(testfix.VPS1.ID, store.FirstMesh)
+	events, _, _, _, cancel := h.hub.Subscribe(testfix.VPS1.ID, store.FirstMesh)
 	defer cancel()
 
 	// The same name as a node of the first mesh, the laptop's (unused) keys.
