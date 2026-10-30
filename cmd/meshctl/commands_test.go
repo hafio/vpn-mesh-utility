@@ -402,6 +402,26 @@ func TestMeshFlags(t *testing.T) {
 	}
 }
 
+// A mesh whose data dir lives elsewhere (install.sh --data, amendment A54) is
+// found through its link under the agent root; a link to a directory with no
+// enrollment is no mesh.
+func TestOnlyMeshFollowsALink(t *testing.T) {
+	e, _, _ := testEnv(nil)
+	root, elsewhere := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(elsewhere, state.EnrollmentFile), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(elsewhere, filepath.Join(root, "nas")); err != nil {
+		t.Skipf("no symbolic links here: %v", err)
+	}
+	if err := os.Symlink(t.TempDir(), filepath.Join(root, "empty")); err != nil {
+		t.Fatal(err)
+	}
+	if dir, err := onlyMesh(e, root); err != nil || dir != meshDir(e, root, "nas") {
+		t.Fatalf("the linked mesh = %q, %v", dir, err)
+	}
+}
+
 // The agent logs to stderr, or as the Windows service to agent.log in its
 // data dir; a data dir that cannot be opened is the error.
 func TestAgentLog(t *testing.T) {

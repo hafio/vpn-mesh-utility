@@ -281,7 +281,9 @@ func meshDir(e *env, root, mesh string) string {
 	return root + "/" + mesh
 }
 
-// onlyMesh is the data dir of the one mesh that has joined under root.
+// onlyMesh is the data dir of the one mesh that has joined under root. A
+// mesh's entry may be a link to its data dir elsewhere (install.sh --data,
+// amendment A54).
 func onlyMesh(e *env, root string) (string, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -289,7 +291,7 @@ func onlyMesh(e *env, root string) (string, error) {
 	}
 	var meshes []string
 	for _, en := range entries {
-		if _, err := os.Stat(meshDir(e, root, en.Name()) + sep(e) + state.EnrollmentFile); err == nil && en.IsDir() {
+		if _, err := os.Stat(meshDir(e, root, en.Name()) + sep(e) + state.EnrollmentFile); err == nil {
 			meshes = append(meshes, en.Name())
 		}
 	}

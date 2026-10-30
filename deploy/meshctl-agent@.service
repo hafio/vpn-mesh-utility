@@ -1,6 +1,9 @@
 # meshctl agent, one instance per mesh (amendment A51): meshctl-agent@<mesh>
 # runs the agent of the mesh <mesh> on /var/lib/meshctl/<mesh>. install.sh
-# installs this file unchanged to /etc/systemd/system/meshctl-agent@.service.
+# installs this file unchanged to /etc/systemd/system/meshctl-agent@.service;
+# with --data <dir> it links /var/lib/meshctl/<mesh> to <dir> and adds the
+# drop-in meshctl-agent@<mesh>.service.d/data.conf, which lets the instance
+# write there (amendment A54).
 # The agent runs as root (it owns its interface, routes, sysctls and, on
 # servers, firewalld), but only with the two capabilities that needs, on a
 # read-only system. docs/security.md explains each setting; deploy_test.go

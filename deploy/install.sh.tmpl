@@ -9,7 +9,9 @@
 # unit meshctl-agent@.service, runs `meshctl agent join` and starts the
 # mesh's instance, meshctl-agent@<mesh> (amendment A51). The token may also
 # come from the MESHCTL_TOKEN environment variable, the mesh from
-# MESHCTL_MESH.
+# MESHCTL_MESH. The agent keeps its data in /var/lib/meshctl/<mesh>; with
+# --data <dir> (or MESHCTL_DATA) it keeps it in <dir> instead, which
+# /var/lib/meshctl/<mesh> then links to (amendment A54).
 set -eu
 
 ORIGIN='@@MESHCTL_ORIGIN@@'
@@ -23,7 +25,52 @@ die() {
 }
 
 usage() {
-  echo "usage: install.sh --token <token> [--mesh <mesh>] [--name <name>] [--endpoint <ipv4:port>] [--endpoint6 <[ipv6]:port>]"
+  echo "usage: install.sh --token <token> [--mesh <mesh>] [--name <name>] [--endpoint <ipv4:port>] [--endpoint6 <[ipv6]:port>] [--data <dir>]"
+}
+
+# hidden fails when the agent's unit cannot keep data in $1: ProtectHome
+# hides /home, /root and /run/user, PrivateTmp and boot empty /tmp,
+# /var/tmp and /run, /proc, /sys and /dev are the kernel's, and
+# /var/lib/meshctl holds the link to the data.
+hidden() {
+  case "$1/" in
+    /home/* | /root/* | /run/* | /tmp/* | /var/tmp/* | /proc/* | /sys/* | /dev/* | /var/lib/meshctl/*) return 0 ;;
+  esac
+  return 1
+}
+
+# datadir checks a --data value before it reaches a command, a link or a unit
+# file: an absolute path of letters, digits, '.', '_', '-' and '/', which a
+# unit file takes without quoting, somewhere the agent's unit can write.
+datadir() {
+  case "$1" in
+    /*) ;;
+    *) die "--data must be an absolute path, not '$1'" ;;
+  esac
+  case "$1" in
+    *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._/-]*)
+      die "--data may hold only letters, digits, '.', '_', '-' and '/', not '$1'" ;;
+    */ | *//* | */./* | */../* | */. | */..) die "--data must not hold '.' or '..' parts, '//' or a trailing '/': '$1'" ;;
+  esac
+  if hidden "$1"; then
+    die "--data cannot be under /home, /root, /run, /tmp, /var/tmp, /proc, /sys, /dev or /var/lib/meshctl, which the agent's unit hides, empties or links from: '$1'"
+  fi
+}
+
+# dropin prints the unit drop-in for the data dir $1 (checked by datadir):
+# the instance waits for $1's file system, makes no state directory of its
+# own (/var/lib/meshctl/<mesh> is the link) and may write in $1.
+dropin() {
+  cat <<MESHCTL_DROPIN
+# Written by install.sh --data (amendment A54): the agent of the mesh $mesh
+# keeps its data in $1, which /var/lib/meshctl/$mesh links to.
+[Unit]
+RequiresMountsFor=$1
+
+[Service]
+StateDirectory=
+ReadWritePaths=$1
+MESHCTL_DROPIN
 }
 
 # unit writes the agent's systemd unit, unchanged, to $1.
@@ -36,6 +83,7 @@ MESHCTL_UNIT
 main() {
   token="${MESHCTL_TOKEN:-}"
   mesh="${MESHCTL_MESH:-default}"
+  data="${MESHCTL_DATA:-}"
   name=""
   endpoint=""
   endpoint6=""
@@ -46,6 +94,7 @@ main() {
       --name) [ $# -ge 2 ] || die "--name needs a value"; name="$2"; shift 2 ;;
       --endpoint) [ $# -ge 2 ] || die "--endpoint needs a value"; endpoint="$2"; shift 2 ;;
       --endpoint6) [ $# -ge 2 ] || die "--endpoint6 needs a value"; endpoint6="$2"; shift 2 ;;
+      --data) [ $# -ge 2 ] || die "--data needs a value"; data="$2"; shift 2 ;;
       -h | --help) usage; exit 0 ;;
       *) usage >&2; die "unknown argument: $1" ;;
     esac
@@ -56,6 +105,7 @@ main() {
     '' | -* | *- | *[!a-z0-9-]*) die "--mesh must be a mesh name (a-z, 0-9 and '-'), not '$mesh'" ;;
   esac
   [ "${#mesh}" -le 32 ] || die "--mesh must be at most 32 characters"
+  [ -z "$data" ] || datadir "$data"
   [ "$(id -u)" -eq 0 ] || die "must run as root: pipe into 'sudo sh -s -- --mesh <mesh> --token <token>'"
   [ "$(uname -s)" = Linux ] || die "this installer is for Linux; on Windows, use install.ps1"
   case "$(uname -m)" in
@@ -65,6 +115,32 @@ main() {
   esac
   command -v curl >/dev/null 2>&1 || die "curl is required"
   command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required (coreutils)"
+
+  # The mesh's data dir is /var/lib/meshctl/<mesh>, a directory, or with
+  # --data a link to its own directory elsewhere.
+  link="/var/lib/meshctl/$mesh"
+  if [ -n "$data" ]; then
+    if [ -e "$link" ] && [ ! -L "$link" ]; then
+      die "$link holds this mesh's data from an install without --data; the join gives the node new keys, so nothing in it is needed after: stop meshctl-agent@$mesh, remove $link and run this again"
+    fi
+    real="$(readlink -f "$data" 2>/dev/null || true)"
+    if [ -n "$real" ] && hidden "$real"; then
+      die "--data $data is $real, which the agent's unit hides, empties or links from"
+    fi
+    if [ -e "$data" ]; then
+      [ -d "$data" ] || die "--data $data is not a directory"
+      if [ -n "$(ls -A "$data")" ] && [ ! -e "$data/agent.lock" ]; then
+        die "--data $data holds files but no meshctl data: pick a new or empty directory"
+      fi
+      for other in /var/lib/meshctl/*; do
+        if [ -L "$other" ] && [ "$other" != "$link" ] && [ "$(readlink -f "$other")" = "$real" ]; then
+          die "--data $data is the data dir of the mesh ${other##*/} already: each mesh's agent needs its own"
+        fi
+      done
+    fi
+  elif [ -L "$link" ]; then
+    echo "the agent of $mesh keeps its data in $(readlink "$link") (an earlier install.sh --data)"
+  fi
   case "$ORIGIN" in
     https://*) protos='=https' ;;
     *) protos='=http,https' ;; # the server only allows plain http on loopback
@@ -95,11 +171,25 @@ main() {
     fi
   fi
 
+  # The data dir moves only for the join; a failed join puts the link back.
+  previous=""
+  if [ -n "$data" ]; then
+    [ ! -L "$link" ] || previous="$(readlink "$link")"
+    mkdir -p "$data" /var/lib/meshctl
+    chmod 0700 "$data"
+    rm -f "$link"
+    ln -s "$data" "$link"
+  fi
+
   set -- --server "$ORIGIN" --mesh "$mesh"
   [ -z "$name" ] || set -- "$@" --name "$name"
   [ -z "$endpoint" ] || set -- "$@" --endpoint "$endpoint"
   [ -z "$endpoint6" ] || set -- "$@" --endpoint6 "$endpoint6"
   if ! MESHCTL_TOKEN="$token" /usr/local/bin/meshctl agent join "$@"; then
+    if [ -n "$data" ]; then
+      rm -f "$link"
+      [ -z "$previous" ] || ln -s "$previous" "$link"
+    fi
     if [ "$running" = yes ]; then
       systemctl start "$service" && echo "started $service again on its earlier enrollment" >&2
     fi
@@ -107,6 +197,16 @@ main() {
   fi
 
   if [ "$systemd" = yes ]; then
+    if [ -n "$data" ]; then
+      mkdir -p "/etc/systemd/system/$service.d"
+      dropin "$data" >"/etc/systemd/system/$service.d/data.conf"
+      systemctl daemon-reload
+      echo "the agent of $mesh keeps its data in $data ($link links to it)"
+    elif [ ! -L "$link" ] && [ -e "/etc/systemd/system/$service.d/data.conf" ]; then
+      # The data is back in /var/lib/meshctl/<mesh>: the drop-in goes.
+      rm -f "/etc/systemd/system/$service.d/data.conf"
+      systemctl daemon-reload
+    fi
     systemctl enable "$service" >/dev/null
     systemctl restart "$service"
     echo "started $service"

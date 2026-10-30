@@ -100,6 +100,25 @@ The server's public endpoint is detected from the VPS's own interfaces. When tha
 NAT'd VPS), pass it: `sudo sh -s -- --mesh default --token <token> --endpoint 203.0.113.10:51820`, or set it on
 the server with `meshctl node set vps-1 --endpoint 203.0.113.10:51820`.
 
+To keep the agent's data somewhere else, such as a NAS's data volume, add `--data <dir>` (or set
+`MESHCTL_DATA`; amendment A54): `sudo sh -s -- --mesh default --token <token> --data
+/volume1/meshctl/default`. install.sh makes the directory (mode 0700) and links
+`/var/lib/meshctl/<mesh>` to it. After the join it adds the drop-in
+`/etc/systemd/system/meshctl-agent@<mesh>.service.d/data.conf`, which waits for the directory's
+file system (`RequiresMountsFor`) and lets the agent write there. The socket and every local
+command stay as they were. The directory must be:
+
+- an absolute path of letters, digits, `.`, `_`, `-` and `/`;
+- new, empty, or an earlier meshctl data dir;
+- used by one mesh only;
+- outside `/home`, `/root`, `/run`, `/tmp`, `/var/tmp` and `/var/lib/meshctl`.
+
+Later installs without `--data` keep the directory. To move a mesh that already runs from
+`/var/lib/meshctl/<mesh>`, stop `meshctl-agent@<mesh>` and remove that directory: the join gives
+the node new keys, so nothing in it is needed afterwards. Then install again with a new token and
+`--data`. To move it back, remove the link and install without `--data`; that also removes the
+drop-in. `--data` is for Linux only; install.ps1 keeps `%ProgramData%\meshctl\<mesh>`.
+
 Within a minute `meshctl node list` shows the node `in sync` and `wg show` on the other servers
 lists it. WireGuard handshakes on first traffic: `ping 10.77.0.2` from vps-1 starts one.
 
@@ -369,7 +388,7 @@ node ...`. Each change is versioned, audited and pushed to the affected agents a
 | put it back | `node enable vps-3` |
 | re-install a node from scratch | `node token vps-3`, then the install command again |
 | a phone's new profile (a new key) | `node phone <name>`, `--exit vps-2` for all its traffic |
-| remove a node | `node rm vps-3`; on its host, `systemctl disable --now meshctl-agent@default` and then `meshctl agent reset` take its tunnel, routes, rules, firewalld zone and DNS registration off the host (the data dir `/var/lib/meshctl/default` stays until you delete it) |
+| remove a node | `node rm vps-3`; on its host, `systemctl disable --now meshctl-agent@default` and then `meshctl agent reset` take its tunnel, routes, rules, firewalld zone and DNS registration off the host (the data dir `/var/lib/meshctl/default` stays until you delete it; with install.sh `--data`, so do the link, its directory and the drop-in directory `/etc/systemd/system/meshctl-agent@default.service.d`) |
 | move a node to another mesh IP | `node set laptop --mesh-ip 10.77.2.9`, or Mesh IP on its page: peers, its DNS name and its agent follow; the answer lists what does not (a server's Swarm advertise address, a phone's profile, a firewall zone, object or policy naming the old address) |
 | put a node in firewall groups | `node add laptop --role spoke --groups laptops,office`, `node set laptop --groups laptops`, or Groups on its page |
 
@@ -768,6 +787,7 @@ server is back. When it is, agents reconnect within a minute.
 | `userspace WireGuard needs /dev/net/tun` | the container has no tun device: map it (`devices: ["/dev/net/tun:/dev/net/tun"]`), or set `MESHCTL_WG_BACKEND=kernel` if the host has the module |
 | `wg show` does not list a userspace wg0 | the agent could not create `/var/run/wireguard/wg0.sock` (its log says why; a container has no `wg` anyway): use `meshctl status` |
 | `another node already uses this WireGuard or identity key` | a data dir was copied between hosts; remove `/var/lib/meshctl/<mesh>` on the copy and join it with its own token |
+| `meshctl-agent@<mesh>` fails with `status=226/NAMESPACE` | its install.sh `--data` directory is missing, or its file system is not mounted (`RequiresMountsFor` waits only for mounts systemd knows about); mount it, or install again with a new token |
 | a node stays `applying` | it applied an older version and is failing the new one; `meshctl status` on it shows the error |
 | `exit "vps-3" is not exit-capable` | allow it first: `node set vps-3 --can-exit` |
 | `only spokes choose an exit or a keepalive` | `meshctl exit` ran on a server; exits are for spokes |

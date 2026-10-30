@@ -474,7 +474,8 @@ func TestEnrollmentShowsSamples(t *testing.T) {
 		notWant []string
 	}{
 		{url.Values{"name": {"vps-1"}, "role": {"server"}, "endpoint": {"203.0.113.10:51820"}},
-			[]string{"Or in a container", "runs from install.sh", "add it again in container mode"}, []string{"<details", "docker compose"}},
+			[]string{"Or in a container", "runs from install.sh", "add it again in container mode", "add <code>--data &lt;dir&gt;</code>"},
+			[]string{"<details", "docker compose"}},
 		{url.Values{"name": {"nas"}, "role": {"spoke"}},
 			[]string{"Or in a container", "network_mode: host", "image: ghcr.io/hafio/vpn-mesh-utility:1.0.0", "MESHCTL_NAME: nas",
 				"node.labels.meshctl.default.nas == true", "docker stack deploy -c meshctl-default-nas.yml meshctl-default-nas"},

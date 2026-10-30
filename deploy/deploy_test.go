@@ -236,6 +236,100 @@ func TestInstallRefusesHostileValues(t *testing.T) {
 	}
 }
 
+// install.sh --data (amendment A54) checks the directory before anything
+// else happens: a value that is not a plain absolute path, or that lies where
+// the agent's unit cannot keep data, stops the script before its root check,
+// so before it downloads, links or writes anything. A plain path gets as far
+// as the root check.
+func TestInstallChecksTheDataDir(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh on this runner")
+	}
+	script, err := RenderInstall(testParams())
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(env []string, args ...string) (string, error) {
+		cmd := exec.Command(sh, append([]string{"-s", "--", "--token", "t0ken"}, args...)...)
+		cmd.Stdin = bytes.NewReader(script)
+		for _, kv := range os.Environ() {
+			if !strings.HasPrefix(kv, "MESHCTL_") {
+				cmd.Env = append(cmd.Env, kv)
+			}
+		}
+		cmd.Env = append(cmd.Env, env...)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	for _, c := range []struct{ data, want string }{
+		{"relative/dir", "absolute path"},
+		{"-x", "absolute path"},
+		{"/srv/$(id)", "only letters"},
+		{"/srv/a b", "only letters"},
+		{"/srv/x;id", "only letters"},
+		{"/srv/x%i", "only letters"},
+		{"/srv/x'y", "only letters"},
+		{"/srv/x\nid", "only letters"},
+		{"/srv/x\nExecStartPre=/bin/id", "only letters"},
+		{"/srv/../etc", "'..' parts"},
+		{"/srv/./x", "'..' parts"},
+		{"/srv//x", "'..' parts"},
+		{"/srv/x/", "'..' parts"},
+		{"/", "'..' parts"},
+		{"/home/me/meshctl", "cannot be under"},
+		{"/root", "cannot be under"},
+		{"/tmp/meshctl", "cannot be under"},
+		{"/run/meshctl", "cannot be under"},
+		{"/var/lib/meshctl", "cannot be under"},
+		{"/var/lib/meshctl/default", "cannot be under"},
+	} {
+		out, err := run(nil, "--data", c.data)
+		if err == nil || !strings.Contains(out, "--data") || !strings.Contains(out, c.want) || strings.Contains(out, "must run as root") {
+			t.Errorf("--data %q = %v\n%s", c.data, err, out)
+		}
+		if out, err := run([]string{"MESHCTL_DATA=" + c.data}); err == nil || !strings.Contains(out, c.want) {
+			t.Errorf("MESHCTL_DATA=%q = %v\n%s", c.data, err, out)
+		}
+	}
+	if os.Geteuid() == 0 {
+		return // past the checks a root run would download from the test origin
+	}
+	for _, data := range []string{"/volume1/meshctl/default", "/srv/meshctl-lab_1.0", "/var/lib/meshctl-nas"} {
+		if out, err := run(nil, "--data", data); err == nil || !strings.Contains(out, "must run as root") {
+			t.Errorf("--data %q stopped before the root check: %v\n%s", data, err, out)
+		}
+	}
+}
+
+// The drop-in install.sh --data writes (amendment A54) waits for the data
+// dir's file system, drops the instance's own state directory (the link
+// stands in for it) and lets it write in the data dir: nothing else, and no
+// path but the checked one.
+func TestInstallDataDropIn(t *testing.T) {
+	tmpl := string(mustRead(t, "install.sh.tmpl"))
+	start := strings.Index(tmpl, "cat <<MESHCTL_DROPIN\n")
+	end := strings.Index(tmpl, "\nMESHCTL_DROPIN\n")
+	if start < 0 || end < start {
+		t.Fatal("install.sh.tmpl has no MESHCTL_DROPIN here-document")
+	}
+	got, sections := map[string]string{}, []string{}
+	for _, line := range strings.Split(tmpl[start+len("cat <<MESHCTL_DROPIN\n"):end], "\n") {
+		switch line = strings.TrimSpace(line); {
+		case line == "" || strings.HasPrefix(line, "#"):
+		case strings.HasPrefix(line, "["):
+			sections = append(sections, line)
+		default:
+			k, v, _ := strings.Cut(line, "=")
+			got[k] = v
+		}
+	}
+	want := map[string]string{"RequiresMountsFor": "$1", "StateDirectory": "", "ReadWritePaths": "$1"}
+	if !reflect.DeepEqual(got, want) || !reflect.DeepEqual(sections, []string{"[Unit]", "[Service]"}) {
+		t.Fatalf("drop-in %v in %v, want exactly %v in [Unit] and [Service]", got, sections, want)
+	}
+}
+
 // Every token that would widen a container's privileges.
 var widening = []string{"cap_add", "devices", "network_mode", "pid:", "ipc:", "userns_mode", "privileged: true",
 	"docker.sock", "seccomp", "apparmor", "SYS_ADMIN", "/dev/", "host:"}

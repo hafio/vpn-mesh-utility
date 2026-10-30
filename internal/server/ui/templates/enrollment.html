@@ -3,6 +3,7 @@
 <p><code class="secret">{{.Data.Token}}</code></p>
 <h2>On {{.Data.Node}}, as root</h2>
 <pre>{{.Data.Install}}</pre>
+<p class="hint">To keep the agent's data somewhere other than /var/lib/meshctl/&lt;mesh&gt;, add <code>--data &lt;dir&gt;</code>.</p>
 {{- with .Data.InstallWindows}}
 <h2>On Windows, in an elevated PowerShell</h2>
 <pre>{{.}}</pre>

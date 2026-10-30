@@ -122,6 +122,24 @@ pins its `[Service]` section exactly. The agent owns its interface, its routes, 
 | `UMask=0077`, `StateDirectory=meshctl/%i`, `StateDirectoryMode=0700` | each mesh's data dir, and everything it writes, is private |
 | `RestartPreventExitStatus=3` | an agent the control plane refused (exit 3, amendment A50) stays stopped until an operator acts; every other exit is restarted |
 
+install.sh `--data <dir>` (amendment A54) adds one drop-in to the mesh's instance, which
+`TestInstallDataDropIn` pins. It contains exactly three settings:
+
+- `RequiresMountsFor=<dir>`;
+- `StateDirectory=`, so the instance makes no state directory (`/var/lib/meshctl/<mesh>` is the
+  link to `<dir>`);
+- `ReadWritePaths=<dir>`, so the agent can still write only in its data dir.
+
+install.sh accepts `<dir>` only as an absolute path of letters, digits, `.`, `_`, `-` and `/`, so
+no quote, unit-file specifier or extra line can reach the unit file. It refuses:
+
+- a path under `/home`, `/root`, `/run`, `/tmp`, `/var/tmp`, `/proc`, `/sys`, `/dev` or
+  `/var/lib/meshctl`, checked again after links are followed;
+- a non-empty directory with no meshctl data in it;
+- another mesh's directory.
+
+It makes the directory 0700 (`TestInstallChecksTheDataDir`).
+
 `systemd-analyze security --offline=true deploy/meshctl-agent.service` (the unit before it became
 a template) rated it 4.3, "OK",
 on EL10 before `ProtectKernelLogs=yes` was added (2026-10-16). What it still counts is what the
