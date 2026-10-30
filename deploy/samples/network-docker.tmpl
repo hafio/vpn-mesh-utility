@@ -1,0 +1,14 @@
+{{- if .Container -}}
+docker network create --internal --subnet {{.Network}} --ip-range {{.Range}} \
+  --gateway {{.Gateway}}{{if .Network6}} --ipv6 --subnet {{.Network6}} --ip-range {{.Range6}} \
+  --gateway {{.Gateway6}}{{end}} -o com.docker.network.bridge.name={{.BridgeName}} {{.NetworkName}}
+{{- else -}}
+docker network create --subnet {{.Network}} --ip-range {{.Range}} --gateway {{.Gateway}} \
+{{- if .Network6}}
+  --ipv6 --subnet {{.Network6}} --ip-range {{.Range6}} --gateway {{.Gateway6}} \
+  -o com.docker.network.bridge.gateway_mode_ipv6=nat-unprotected \
+{{- end}}
+  -o com.docker.network.bridge.name={{.BridgeName}} -o com.docker.network.bridge.inhibit_ipv4=true \
+  -o com.docker.network.bridge.enable_ip_masquerade=false \
+  -o com.docker.network.bridge.gateway_mode_ipv4=nat-unprotected {{.NetworkName}}
+{{- end}}

@@ -1,0 +1,53 @@
+services:
+  meshctl:
+    image: {{.Image}}
+    environment:
+      MESHCTL_URL: {{.URL}}
+      MESHCTL_NAME: {{.Name}}
+      MESHCTL_TOKEN: ${MESHCTL_TOKEN:-}
+      MESHCTL_WG_BACKEND: kernel
+    user: "0:0"
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN, NET_BIND_SERVICE]
+    read_only: true
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.proxy_arp: "1"
+{{- if .Network6}}
+      net.ipv6.conf.all.disable_ipv6: "0"
+      net.ipv6.conf.all.forwarding: "1"
+      net.ipv6.conf.all.proxy_ndp: "1"
+{{- end}}
+    volumes:
+      - meshctl-data:/data
+      - /etc/machine-id:/etc/machine-id:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 16777216
+{{- if .Server}}
+    ports:
+      - target: {{.ListenPort}}
+        published: {{.PublishPort}}
+        protocol: udp
+        mode: host
+{{- end}}
+    networks: [egress, {{.NetworkName}}]
+    deploy:
+      placement:
+        constraints: [node.labels.{{.Label}} == true]
+      update_config:
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s
+      resources:
+        limits:
+          memory: 256M
+networks:
+  egress: {}
+  {{.NetworkName}}:
+    external: true
+volumes:
+  meshctl-data: {}

@@ -1,10 +1,12 @@
 // Package deploy holds the artifacts meshctl installs or serves: the agent's
-// systemd unit, the install.sh and install.ps1 templates and the control
-// plane's compose and stack files. meshctl generates no container deployment of a node
-// (amendment A48); docs/containers.md has samples, and samples_test.go
-// holds them to the posture the files here state: each one states its
-// security posture explicitly instead of inheriting defaults, and the tests
-// pin it (docs/security.md explains every widening).
+// systemd unit, the install.sh and install.ps1 templates, the control
+// plane's compose and stack files, and the samples of a node's compose and
+// Swarm files the web UI fills with a node's values (samples.go, amendment
+// A53; meshctl deploys none itself, amendment A48). docs/containers.md shows
+// the samples, and samples_test.go holds them to the posture the files here
+// state: each one states its security posture explicitly instead of
+// inheriting defaults, and the tests pin it (docs/security.md explains every
+// widening).
 //
 // It imports only internal/validate. The scripts install the agent's
 // service (amendment A51); the binary installs none.

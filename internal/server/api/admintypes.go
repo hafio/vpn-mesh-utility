@@ -66,6 +66,9 @@ type NodeInfo struct {
 	// A50): one waiting while this one is asked whether it runs, else the
 	// last one refused.
 	Copy *CopyInfo `json:"copy,omitempty"`
+	// SharesMachine are the other nodes of the mesh on this node's machine
+	// (amendment A53).
+	SharesMachine []string `json:"shares_machine,omitempty"`
 }
 
 // CopyInfo is a second copy of a node: Waiting since At while the holder

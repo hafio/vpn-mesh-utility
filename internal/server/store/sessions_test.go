@@ -46,6 +46,19 @@ func TestAgentSessions(t *testing.T) {
 		if got, err := t2.Machine(id); err != nil || got != m {
 			t.Errorf("machine = %+v, %v", got, err)
 		}
+		// Another node of the mesh on vps-1's machine is its mate (amendment
+		// A53); one on another machine is not.
+		for name, hash := range map[string]string{"vps-2": "m2", "vps-3": "m3"} {
+			if err := t2.PinMachine(nodes[name].ID, Machine{Hash: hash, Hostname: name, PinnedAt: 10}); err != nil {
+				return err
+			}
+		}
+		if got, err := t2.MachineMates(id); err != nil || len(got) != 1 || got[0] != "vps-2" {
+			t.Errorf("vps-1's machine mates = %v, %v", got, err)
+		}
+		if got, err := t2.MachineMates(nodes["vps-3"].ID); err != nil || len(got) != 0 {
+			t.Errorf("vps-3's machine mates = %v, %v", got, err)
+		}
 		r := Refusal{Code: "duplicate", Hostname: "copy", SameMachine: true, At: 11}
 		if err := t2.RecordRefusal(id, r); err != nil {
 			return err
@@ -90,6 +103,7 @@ func TestAgentSessionErrors(t *testing.T) {
 			"write session":  t2.PutAgentSession(AgentSession{NodeID: 1}),
 			"end session":    t2.DeleteAgentSession(1),
 			"read machine":   func() error { _, err := t2.Machine(1); return err }(),
+			"machine mates":  func() error { _, err := t2.MachineMates(1); return err }(),
 			"pin":            t2.PinMachine(1, Machine{}),
 			"read refused":   func() error { _, err := t2.Refusal(1); return err }(),
 			"record refused": t2.RecordRefusal(1, Refusal{}),

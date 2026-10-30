@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/hafio/vpn-mesh-utility/deploy"
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
 	"github.com/hafio/vpn-mesh-utility/internal/server/api"
 	"github.com/hafio/vpn-mesh-utility/internal/server/auth"
@@ -241,6 +242,10 @@ type enrollmentData struct {
 	Warnings []string
 	// InstallWindows is the install for Windows (amendment A51).
 	InstallWindows string
+	// Samples are the ways to run the node in a container (amendment A53);
+	// Note says why a node has none.
+	Samples []deploy.Sample
+	Note    string
 }
 
 // showEnrollment shows a join token once; the server keeps only its hash.
@@ -248,6 +253,7 @@ func (u *ui) showEnrollment(w http.ResponseWriter, r *http.Request, s auth.Sessi
 	d := enrollmentData{Node: ch.Node.Name, Warnings: ch.Warnings}
 	if e := ch.Enrollment; e != nil {
 		d.Token, d.Expires, d.Install, d.Join, d.InstallWindows = e.Token, u.stamp(e.ExpiresAt), e.Install, e.Join, e.InstallWindows
+		d.Samples, d.Note = u.nodeSamples(r, ch.Node, e.Token)
 	}
 	u.show(w, r, s, http.StatusOK, "enrollment", "nodes", "Join "+ch.Node.Name, page{Flash: flash, Data: d})
 }
@@ -279,6 +285,9 @@ type nodeData struct {
 	// Copy says what the control plane saw of a second copy of the node
 	// (amendment A50).
 	Copy string
+	// Shares says which other nodes of the mesh run on its machine
+	// (amendment A53).
+	Shares string
 }
 
 type peerRow struct {
@@ -302,6 +311,9 @@ func (u *ui) nodeView(r *http.Request, name string) (nodeData, error) {
 	out.DNS = dnsState(d.Node.DNS)
 	if c := d.Node.Copy; c != nil {
 		out.Copy = api.CopyLine(*c, now.Location())
+	}
+	if len(d.Node.SharesMachine) > 0 {
+		out.Shares = api.SharesLine(d.Node.SharesMachine)
 	}
 	if out.IPv6, err = u.meshHasIPv6(r); err != nil {
 		return nodeData{}, err

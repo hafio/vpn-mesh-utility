@@ -5,6 +5,22 @@ The wire contract between the control plane (`meshctl control`) and its agents, 
 `internal/server/api` (routes). `TestRoutesAreDocumented` fails when a route served by the API is
 missing here, so this list is complete.
 
+## Contents
+
+- [Routes](#routes)
+- [Signed requests](#signed-requests)
+- [Errors](#errors)
+- [Join](#join)
+- [Sessions](#sessions)
+- [Config and events](#config-and-events)
+- [Status](#status)
+- [Prefs](#prefs)
+- [Mesh view](#mesh-view)
+- [Container names](#container-names)
+- [The reconciler](#the-reconciler)
+- [Apply (agent)](#apply-agent)
+- [Local API](#local-api)
+
 ## Routes
 
 Public listener (`--listen`, behind the reverse proxy):

@@ -5,6 +5,49 @@ Every `meshctl` command and flag. This file is generated from the command regist
 `./scripts/dev.sh regen` and commit the result. Flags may come before or after the
 positional arguments, and `-flag` and `--flag` are the same. Defaults are the Linux ones.
 
+## Contents
+
+- [meshctl agent join](#meshctl-agent-join)
+- [meshctl agent reset](#meshctl-agent-reset)
+- [meshctl agent run](#meshctl-agent-run)
+- [meshctl control](#meshctl-control)
+- [meshctl dns](#meshctl-dns)
+- [meshctl exit](#meshctl-exit)
+- [meshctl export](#meshctl-export)
+- [meshctl firewall apply](#meshctl-firewall-apply)
+- [meshctl firewall check](#meshctl-firewall-check)
+- [meshctl firewall show](#meshctl-firewall-show)
+- [meshctl healthcheck agent](#meshctl-healthcheck-agent)
+- [meshctl healthcheck control](#meshctl-healthcheck-control)
+- [meshctl healthcheck start](#meshctl-healthcheck-start)
+- [meshctl import](#meshctl-import)
+- [meshctl ipv6](#meshctl-ipv6)
+- [meshctl logs](#meshctl-logs)
+- [meshctl mesh add](#meshctl-mesh-add)
+- [meshctl mesh list](#meshctl-mesh-list)
+- [meshctl mesh rm](#meshctl-mesh-rm)
+- [meshctl mesh set](#meshctl-mesh-set)
+- [meshctl mesh show](#meshctl-mesh-show)
+- [meshctl node add](#meshctl-node-add)
+- [meshctl node disable](#meshctl-node-disable)
+- [meshctl node enable](#meshctl-node-enable)
+- [meshctl node list](#meshctl-node-list)
+- [meshctl node phone](#meshctl-node-phone)
+- [meshctl node rm](#meshctl-node-rm)
+- [meshctl node set](#meshctl-node-set)
+- [meshctl node show](#meshctl-node-show)
+- [meshctl node token](#meshctl-node-token)
+- [meshctl start](#meshctl-start)
+- [meshctl status](#meshctl-status)
+- [meshctl ui](#meshctl-ui)
+- [meshctl user add](#meshctl-user-add)
+- [meshctl user grant](#meshctl-user-grant)
+- [meshctl user list](#meshctl-user-list)
+- [meshctl user passwd](#meshctl-user-passwd)
+- [meshctl user reset-totp](#meshctl-user-reset-totp)
+- [meshctl user revoke](#meshctl-user-revoke)
+- [meshctl version](#meshctl-version)
+
 ## meshctl agent join
 
 Enroll this node with a one-time token (install.sh and install.ps1 run it, then start the service).
@@ -492,7 +535,7 @@ meshctl start [flags]
 | `MESHCTL_HUB_DOWN_AFTER` | control | `2m0s` | `meshctl control --hub-down-after`: relay failover: a hub silent this long, with no handshake for half as long again, has its pairs relayed by another hub; 0 turns it off |
 | `MESHCTL_NAME` | node |  | the node's name: a token issued for another node is refused |
 | `MESHCTL_TOKEN` | node |  | the node's join token: start joins with a token it has not used before, then runs; with the same token or none, a node that has joined just runs |
-| `MESHCTL_TOKEN_FILE` | node |  | an absolute path to a file holding the join token, in place of MESHCTL_TOKEN (a compose secret) |
+| `MESHCTL_TOKEN_FILE` | node |  | an absolute path to a file holding the join token, in place of MESHCTL_TOKEN (a compose secret); a file that does not exist holds none |
 | `MESHCTL_ENDPOINT` | node |  | server nodes only: the public IPv4:port to join with, when auto-detection would be wrong |
 | `MESHCTL_ENDPOINT6` | node |  | server nodes only: the public [IPv6]:port to join with, when auto-detection would be wrong |
 | `MESHCTL_WG_BACKEND` | node | `auto` | `meshctl agent run --wg-backend`: WireGuard backend: auto (kernel when the module is there), kernel or userspace (wireguard-go on /dev/net/tun) |

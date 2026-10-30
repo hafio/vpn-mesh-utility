@@ -9,7 +9,17 @@ meshctl builds and operates the private network only. It never configures Traefi
 Docker, Swarm or any application; it exposes each node's mesh IP and `<name>.mesh` hostname
 for other tools to use.
 
-**Status: pre-release.** Delivery follows the milestones in [docs/spec.md](docs/spec.md) S15.
+## Contents
+
+- [Status](#status)
+- [Quick start](#quick-start)
+- [How it fits together](#how-it-fits-together)
+- [Building](#building)
+- [Documentation](#documentation)
+
+## Status
+
+**Pre-release.** Delivery follows the milestones in [docs/spec.md](docs/spec.md) S15.
 M1 (server via CLI, agent join/run, kernel WireGuard, the server full mesh with its firewalld
 zone) and M2 (the web UI with password + TOTP sign-in, versions and rollback, audit, users,
 import/export) are implemented. M3 has Linux spokes, relaying, `meshctl exit`, safe apply, the

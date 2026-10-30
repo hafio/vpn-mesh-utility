@@ -298,6 +298,9 @@ func setupNodeShow(fs *flag.FlagSet, e *env) action {
 		if n.Copy != nil {
 			row("second copy", api.CopyLine(*n.Copy, e.now().Location()))
 		}
+		if len(n.SharesMachine) > 0 {
+			row("same machine", api.SharesLine(n.SharesMachine))
+		}
 		row("platform", joinNonEmpty("/", n.OS, n.Arch))
 		row("agent", joinNonEmpty(", ", n.AgentVersion, n.WGBackend))
 		row("version", fmt.Sprintf("applied v%d, current v%d", n.AppliedVersion, n.ConfigVersion))

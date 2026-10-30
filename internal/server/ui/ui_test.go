@@ -24,6 +24,7 @@ import (
 	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
 
+	"github.com/hafio/vpn-mesh-utility/deploy"
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
 	"github.com/hafio/vpn-mesh-utility/internal/server/api"
 	"github.com/hafio/vpn-mesh-utility/internal/server/auth"
@@ -440,6 +441,68 @@ func TestTokenForARunningNode(t *testing.T) {
 	}
 	if w := post("/m/default/nodes/ghost/token", url.Values{}); w.Code != http.StatusNotFound {
 		t.Fatalf("token for an unknown node = %d", w.Code)
+	}
+}
+
+// The page after a node is added, or given a new token, shows the ways to
+// run it in a container, filled with its values and its token (amendment
+// A53): compose and Swarm on the host network for a client node, the mesh
+// network, compose and Swarm for a container-mode node, a note for a
+// server node on its host's network, nothing for a phone.
+func TestEnrollmentShowsSamples(t *testing.T) {
+	r := newRig(t)
+	cookie, csrf := r.signIn()
+	post := func(path string, form url.Values) string {
+		t.Helper()
+		form.Set("csrf", csrf)
+		w := r.do(http.MethodPost, path, cookie, form)
+		if w.Code != http.StatusOK {
+			t.Fatalf("POST %s = %d\n%s", path, w.Code, w.Body)
+		}
+		return w.Body.String()
+	}
+	token := func(body string) string {
+		m := regexp.MustCompile(`<code class="secret">([A-Za-z0-9_-]{43})</code>`).FindStringSubmatch(body)
+		if m == nil {
+			t.Fatalf("no token on the page:\n%s", body)
+		}
+		return m[1]
+	}
+	for _, c := range []struct {
+		form    url.Values
+		want    []string
+		notWant []string
+	}{
+		{url.Values{"name": {"vps-1"}, "role": {"server"}, "endpoint": {"203.0.113.10:51820"}},
+			[]string{"runs from install.sh"}, []string{"Or in a container"}},
+		{url.Values{"name": {"nas"}, "role": {"spoke"}},
+			[]string{"Or in a container", "network_mode: host", "image: ghcr.io/hafio/vpn-mesh-utility:1.0.0", "MESHCTL_NAME: nas",
+				"node.labels.meshctl.default.nas == true", "docker stack deploy -c meshctl-default-nas.yml meshctl-default-nas"},
+			[]string{"runs from install.sh", "docker network create"}},
+		{url.Values{"name": {"box"}, "role": {"spoke"}, "mode": {"container"}},
+			[]string{"docker network create --internal --subnet 10.77.0.0/16", "--config-from meshctl-mesh-config meshctl-mesh",
+				"networks: [egress, meshctl-mesh]", "meshctl-default-box"}, []string{"network_mode: host"}},
+		{url.Values{"name": {"phone"}, "role": {"phone"}}, nil, []string{"Or in a container", "runs from install.sh"}},
+	} {
+		body := post("/m/default/nodes", c.form)
+		want := c.want
+		if len(want) > 0 && c.form.Get("role") != "server" {
+			want = append(want, "MESHCTL_TOKEN="+token(body)+" docker")
+		}
+		for _, w := range want {
+			if !strings.Contains(body, w) {
+				t.Errorf("%s: no %q on the page", c.form.Get("name"), w)
+			}
+		}
+		for _, w := range c.notWant {
+			if strings.Contains(body, w) {
+				t.Errorf("%s: %q on the page", c.form.Get("name"), w)
+			}
+		}
+	}
+	if body := post("/m/default/nodes/nas/token", url.Values{}); !strings.Contains(body, "network_mode: host") ||
+		!strings.Contains(body, "MESHCTL_TOKEN="+token(body)+" docker compose up -d") {
+		t.Errorf("a new token's page has no samples:\n%s", body)
 	}
 }
 
@@ -1317,7 +1380,7 @@ func TestEveryPageRenders(t *testing.T) {
 	}
 	data := map[string]any{
 		"login": loginData{Setup: true}, "setup": setupData{Username: "boss"}, "totp": nil, "enroll": enrollData{Account: "admin", Secret: "ABCD EFGH"}, "dashboard": dashboardData{},
-		"nodes": nodesData{}, "enrollment": enrollmentData{Node: "vps-1", Token: "t"},
+		"nodes": nodesData{}, "enrollment": enrollmentData{Node: "vps-1", Token: "t", Note: "n", Samples: []deploy.Sample{{Title: "s", Note: "n", Text: "t", Run: "r"}}},
 		"node": nodeData{Node: api.NodeInfo{Rollback: &proto.Rollback{From: 5, To: 4, Reason: "no answer from the server"}}}, "remove": api.NodeInfo{Name: "x"}, "token": tokenData{Node: api.NodeInfo{Name: "x"}, Ago: time.Minute},
 		"versions": versionsData{}, "version": versionData{Current: true}, "audit": auditData{}, "settings": settingsData{},
 		"users": usersData{Rows: []userRow{{Name: "ops"}, {Name: "admin", Self: true}}, Meshes: []string{"default"}}, "account": nil, "error": nil, "meshes": meshesData{Meshes: []api.MeshInfo{{Name: "default"}}},

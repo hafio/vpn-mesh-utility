@@ -1,0 +1,38 @@
+services:
+  meshctl:
+    image: {{.Image}}
+    environment:
+      MESHCTL_URL: {{.URL}}
+      MESHCTL_TOKEN_FILE: /run/meshctl/{{.Mesh}}.token
+      MESHCTL_WG_BACKEND: kernel
+    user: "0:0"
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN, NET_BIND_SERVICE]
+    read_only: true
+    networks: [hostnet]
+    volumes:
+      - meshctl-data:/data
+      - /etc/machine-id:/etc/machine-id:ro
+      - /etc/meshctl:/run/meshctl:ro
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 16777216
+    deploy:
+      mode: global
+      placement:
+        constraints: [node.labels.{{.Label}} == true]
+      update_config:
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s
+      resources:
+        limits:
+          memory: 256M
+networks:
+  hostnet:
+    external: true
+    name: host
+volumes:
+  meshctl-data: {}

@@ -4,6 +4,29 @@ Every test file, what it pins, and the fixtures and seams it uses. Update this f
 change as the tests. Tests are stdlib-only and table-driven; security and error boundaries
 assert that bad input is rejected **and** that the downstream call is not made.
 
+## Contents
+
+- [Shared fixtures -- `internal/testfix`](#shared-fixtures----internaltestfix)
+- [`internal/validate`](#internalvalidate)
+- [`internal/proto`](#internalproto)
+- [`internal/archtest`](#internalarchtest)
+- [`internal/server/store`](#internalserverstore)
+- [`internal/server/auth`](#internalserverauth)
+- [`internal/server/ui`](#internalserverui)
+- [`internal/server/versions`](#internalserverversions)
+- [`internal/server/phone`](#internalserverphone)
+- [`internal/server/api`](#internalserverapi)
+- [`internal/server` and `internal/server/export`](#internalserver-and-internalserverexport)
+- [`deploy`](#deploy)
+- [Agent (`internal/agent/...`)](#agent-internalagent)
+- [`cmd/meshctl`](#cmdmeshctl)
+- [End to end -- `test/e2e`](#end-to-end----teste2e)
+- [`internal/server/planner`](#internalserverplanner)
+- [`internal/fsutil`](#internalfsutil)
+- [Coverage](#coverage)
+- [`internal/tools/fetchwintun`](#internaltoolsfetchwintun)
+- [`internal/tools/vulnjudge`](#internaltoolsvulnjudge)
+
 ## Shared fixtures -- `internal/testfix`
 
 | Fixture | Use |
@@ -111,7 +134,7 @@ one sanctioned exec site) so a checker that matched nothing cannot pass.
 | Test | Pins |
 | --- | --- |
 | `TestOpenAppliesMigrations`, `TestOpenIsIdempotent` | schema v12 and the first mesh's default settings (`dns_zone` = mesh); reopening is a no-op |
-| `TestAgentSessions`, `TestAgentSessionErrors` (`sessions_test.go`) | amendment A50: a node's session, machine and last refused copy read back as written and replaced by a later write, `ErrNotFound` without one, gone with the node; every accessor names what failed |
+| `TestAgentSessions`, `TestAgentSessionErrors` (`sessions_test.go`) | amendment A50: a node's session, machine and last refused copy read back as written and replaced by a later write, `ErrNotFound` without one, gone with the node; every accessor names what failed; the other nodes of the mesh on a node's machine (amendment A53) |
 | `TestKeyHistory`, `TestRestoreKeepsWhatTheNodeBrought` (`keys_test.go`) | amendment A50: a node's retired identity keys in order, a key retired twice keeps its first time, an empty key is none, the history goes with the node; a rollback or import keeps an existing node's keys, enrollment and platform (a key a token cut off never comes back) and restores its desired fields; a node the snapshot re-creates gets its keys back |
 | `TestOpenRefusesNewerSchema` | a database newer than the binary is refused with an upgrade hint |
 | `TestOpenRejectsDSNInjection` | a path carrying `?` cannot rewrite the driver DSN |
@@ -178,6 +201,7 @@ in through the UI itself (password, then TOTP enrolment).
 | `TestPagesNeedAFullSession` | redirects and 401s without a session; htmx refreshes get `HX-Redirect`; a pending session reaches no page |
 | `TestChangesNeedOriginAndCSRF` | missing or wrong CSRF token, another origin, no Origin: refused, and nothing written |
 | `TestTokenForARunningNode` | amendment A50: a token for a node seen within five minutes asks first and changes nothing; confirmed, it cuts the node off and says so |
+| `TestEnrollmentShowsSamples` | amendment A53: the page after adding a node or giving it a token shows, filled with its values and token, compose and Swarm on the host network for a client node, the mesh network, compose and Swarm for a container-mode node; a note for a server node on its host's network; nothing for a phone |
 | `TestNodeLifecycle` | add (token shown once, form kept on errors), edit, disable, enable, new token, remove with confirmation, audited as `user:admin`; a refused second copy named on the node page (amendment A50) |
 | `TestEditSpoke` | a spoke's hub, exit and keepalive edit; the hub and exit choices offered; refused edits (400/404) change nothing; a new mesh IP from the form with its note, a taken one refused; no token for a disabled node; the computed config on a server's page |
 | `TestDNSPage` | the zone with automatic names and the upstreams; a custom record added and removed; a record named like a node (409) and a refusal without CSRF (403) changing nothing |
@@ -263,7 +287,7 @@ and counts transactions, so a refusal can be shown to happen before any database
 | | `TestAdminErrorCodes`, `TestAdminSetClearsReferences` | every refusal of every admin write (404, 400, 409) leaves state untouched, a phone's profile included (a server, a bad, unknown or non-exit exit, an unknown field); clearing an endpoint warns |
 | `phone_test.go` | `TestPhoneProfile` | a phone added without a token; a mesh-only profile whose private key matches the public key all three servers peer with, the hub's resolver as DNS; a via-exit profile replaces the key and adds `0.0.0.0/0, ::/0` to the exit's peer; no audit row carries a private key; a hub change marks the profile out of date; the servers' reported handshake in `node list` and `node show` |
 | | `TestPhoneProfileNeedsAServer` | without a joined server with an endpoint: 409, the phone keeps no key and nothing is audited |
-| `health_test.go` | `TestDashboardHealth` | the dashboard colour and label the web UI and the mesh view share: disabled, not joined, no or a silent heartbeat, a rollback, degraded, applying, a late heartbeat; a phone by its profile and its servers' handshakes; a phone is seen by its handshake; a hub relay failover judged down says since when, in the server's time zone |
+| `health_test.go` | `TestDashboardHealth` | the dashboard colour and label the web UI and the mesh view share: disabled, not joined, no or a silent heartbeat, a rollback, degraded, applying, a late heartbeat; a phone by its profile and its servers' handshakes; a phone is seen by its handshake; a hub relay failover judged down says since when, in the server's time zone; two nodes of one mesh on one machine a named warning (amendment A53) |
 | `reconcile_test.go` | `TestReconcilerVersionsOnlyRealChanges` | a no-op writes no version; a change notifies exactly the nodes whose config changed; the snapshot is stored (amendment A16) |
 | | `TestReconcilerRollsBackAFailedMutation`, `TestPlanErrorListsTheProblems`, `TestLoadInputRefusesBrokenSettings` | rollback, the 409 mapping, broken settings |
 | | `TestRollbackIsANewVersion` | restoring version N writes a new version recording N, notifies the changed nodes, writes nothing when the state already matches, 404 for an unknown N |
@@ -318,7 +342,8 @@ mesh firewall included), `TestToSnapshotReadsAnOlderExport` (custom rules become
 | `TestInstallRefusesHostileValues` | quotes, paths, `$(...)`, newlines and bad checksums are refused before rendering, by every script that uses the value (install.sh and install.ps1) |
 | `TestControlComposePosture`, `TestDevComposePosture` | the exact service keys (no `command`), user, no privileges, no capabilities, read-only root, named volumes only, no widening token anywhere in the file; the control plane's environment exactly (`MESHCTL_MODE=control`, the port, the required origin, the optional variables, `TZ`; amendments A47, A48), `expose` of that port only, the `healthcheck start` check |
 | `TestControlStackPosture` | the Swarm stack's exact service keys, user, no capabilities, read-only root, the named volume and a tmpfs only, one replicated task on the node labelled `meshctl.control=true` stopped before the next, the external network, the compose file's environment and healthcheck; no widening token |
-| `TestContainerSamples` (`samples_test.go`) | every node sample mounts the host's `/etc/machine-id` read-only (amendment A50); every sample in docs/containers.md (amendment A48) parses: the control plane's, a client node's on the host network and a container-mode agent's compose services, the two Kubernetes Deployments and the three `podman run` lines (counted, so none drops out of the check); each keeps privileged off, every capability dropped, no-new-privileges and a read-only root, uid 65532 for the control plane and 0 for a node; a node adds only NET_ADMIN and NET_BIND_SERVICE, the tun device, the gateway's sysctls, the host network, its data directory and the runtime socket read-only, the control plane none of them; ports on loopback (the control plane) or UDP (a node); no join token written into a sample |
+| `TestContainerSamples` (`samples_test.go`) | every node sample mounts the host's `/etc/machine-id` read-only (amendment A50); every sample in docs/containers.md (amendment A48) parses: the control plane's, a client node's on the host network and a container-mode agent's compose services, three Swarm services (amendment A53: kernel WireGuard, the two capabilities, read-only, pinned by a label, UDP published in host mode, nothing a stack cannot state), the two Kubernetes Deployments and the three `podman run` lines (counted, so none drops out of the check); each keeps privileged off, every capability dropped, no-new-privileges and a read-only root, uid 65532 for the control plane and 0 for a node; a node adds only NET_ADMIN and NET_BIND_SERVICE, the tun device, the gateway's sysctls, the host network, its data directory and the runtime socket read-only, the control plane none of them; ports on loopback (the control plane) or UDP (a node); no join token written into a sample |
+| `TestContainersDocSamples`, `TestNodeSamples`, `TestSampleImage`, `TestSamplesRefuseHostileValues` (`samples_render_test.go`) | amendment A53: docs/containers.md shows every sample kind as `deploy/samples` renders it for its example nodes (`regen` rewrites a stale one); a node gets the samples that fit it (a host-network server none but its containers' network, a host-network client compose and Swarm, a container-mode node its network, compose and Swarm; a server's port and the containers' IPv6 where they apply), each passing the posture checks; the image is the release (a build that is none says `<release>`); a value off its grammar fails the render and yields no text |
 
 ## Agent (`internal/agent/...`)
 
@@ -446,12 +471,13 @@ and `Policy.Fail`/`FailOn` inject a failure into one method, also while an agent
 | Test | Pins |
 | --- | --- |
 | `TestCommandsDoc` | docs/commands.md equals the registry's rendering (`./scripts/dev.sh regen` rewrites it) |
+| `TestDocsOpenWithContents`, `TestWithContents` | README.md and every docs/*.md open with a `## Contents` section that lists their `##` and `###` headings with GitHub's anchors (repeats numbered, fenced code skipped); `regen` rewrites a stale one |
 | `TestContainersDocNamesRealVariables` | every `MESHCTL_` variable docs/containers.md names is one `meshctl start` reads (or `MESHCTL_VERSION`), so a sample sets none that does nothing |
 | `TestEveryCommandHasHelp`, `TestHelpShowsFlagsAsTheDocsDo`, `TestGroupsNeedASubcommand`, `TestFlagsMayFollowPositionalArguments` | the command tree; help spells flags as the docs do (`--name`, a one-letter `-f`) with their kind and a non-zero default |
 | `TestNodeLifecycle`, `TestNodeCommandsExplainAMissingServer` | every `node` command against a real admin socket (`node set --mesh-ip` with its note), `node show` with a container network's values in container and host mode and none without one (amendment A48); a missing control plane named as `meshctl control` |
 | `TestIPv6Command` (`ipv6_test.go`) | `meshctl ipv6` (M8): IPv4 only, a prefix, `--json`, a swap refused, two arguments a usage error, `off`; the node flags `--family`, `--ip6`, `--endpoint6`, `--containers6` at add and `--family`, `--mesh-ip6` (with its note), `--endpoint6 none`, `--containers6=false` at set, and how list and show print an IPv6-only node and an IPv6 endpoint |
 | `TestNodePhone` | `node add --role phone` prints the profile command, not a token; `node phone` prints the profile alone on stdout (the note on stderr) and `--json`; `node list` and `node show` of a phone; a server and a non-exit exit refused |
-| `TestStartMode`, `TestStartControl`, `TestStartNodeJoin`, `TestStartNodeRuns`, `TestHealthcheckStart`, `TestStartVarsNameRealFlags` (`start_test.go`) | `meshctl start` (amendments A47, A48): an unset mode is a node, and one that never joined says the control plane sets `MESHCTL_MODE=control`; an unknown mode and the old `server` and `agent` refused; the control plane's and a node's variables reach `control`'s and `agent run`'s flags (`MESHCTL_URL` only the control plane's), an error naming the variable; the port, data dir, token and token file (absolute, capped, its grammar) checked before anything is asked and the token never shown; both token sources refused; a joined node runs with no token; `healthcheck start` finds the port or the socket as start does, a node when the mode is unset; every variable start hands on is a real flag of one of its modes' commands |
+| `TestStartMode`, `TestStartControl`, `TestStartNodeJoin`, `TestStartNodeRuns`, `TestHealthcheckStart`, `TestStartVarsNameRealFlags` (`start_test.go`) | `meshctl start` (amendments A47, A48): an unset mode is a node, and one that never joined says the control plane sets `MESHCTL_MODE=control`; an unknown mode and the old `server` and `agent` refused; the control plane's and a node's variables reach `control`'s and `agent run`'s flags (`MESHCTL_URL` only the control plane's), an error naming the variable; the port, data dir, token and token file (absolute, capped, its grammar) checked before anything is asked and the token never shown; both token sources refused; a joined node runs with no token; `healthcheck start` finds the port or the socket as start does, a node when the mode is unset; every variable start hands on is a real flag of one of its modes' commands; a token file that does not exist holds no token: the error names it for a node that has not joined, and a joined node runs on (amendment A53) |
 | `TestExportCommand`, `TestControlFlagErrors`, `TestAgentJoinTakesTheTokenFromTheEnvironment`, `TestHealthcheckControl`, `TestStatusAndAgentHealthcheck`, `TestPrintStatusOfALaptop`, `TestBytesize` | the other commands; the token never echoed, `agent join --endpoint6` sent; `status` of a laptop with nothing applied, an exit and errors; `control --hub-down-after` only 0 or 1s to 1h |
 | `TestNodeShowAnEnrolledServer` | `node show` of a joined server: rows, peers, the computed config, a reported rollback; `node list` shows it rolled back |
 | `TestAgentRunRuntimeSocket` (`agent_test.go`) | `agent run --runtime-socket` takes auto, off or a clean absolute path; a relative path, `..`, a metacharacter and an empty value are usage errors before the agent starts; `--status-every` only from 1s to 5m, `--endpoint-retry` only from 5s to 5m |

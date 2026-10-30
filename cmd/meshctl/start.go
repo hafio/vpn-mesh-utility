@@ -52,7 +52,7 @@ func startVars() []envVar {
 		{name: "MESHCTL_NAME", mode: modeNode, meaning: "the node's name: a token issued for another node is refused"},
 		{name: "MESHCTL_TOKEN", mode: modeNode,
 			meaning: "the node's join token: start joins with a token it has not used before, then runs; with the same token or none, a node that has joined just runs"},
-		{name: "MESHCTL_TOKEN_FILE", mode: modeNode, meaning: "an absolute path to a file holding the join token, in place of MESHCTL_TOKEN (a compose secret)"},
+		{name: "MESHCTL_TOKEN_FILE", mode: modeNode, meaning: "an absolute path to a file holding the join token, in place of MESHCTL_TOKEN (a compose secret); a file that does not exist holds none"},
 		{name: "MESHCTL_ENDPOINT", mode: modeNode, meaning: "server nodes only: the public IPv4:port to join with, when auto-detection would be wrong"},
 		{name: "MESHCTL_ENDPOINT6", mode: modeNode, meaning: "server nodes only: the public [IPv6]:port to join with, when auto-detection would be wrong"},
 		{name: "MESHCTL_WG_BACKEND", mode: modeNode, flag: "wg-backend"},
@@ -87,6 +87,9 @@ func setupStart(_ *flag.FlagSet, e *env) action {
 			return err
 		}
 		if err := agent.JoinOnStart(ctx, o); err != nil {
+			if file := e.getenv("MESHCTL_TOKEN_FILE"); errors.Is(err, agent.ErrNoToken) && file != "" {
+				err = fmt.Errorf("%w; MESHCTL_TOKEN_FILE names %s, which does not exist or is empty", err, file)
+			}
 			if errors.Is(err, agent.ErrNoToken) && e.getenv("MESHCTL_MODE") == "" {
 				// The likeliest container without a token and a mode: a
 				// control plane whose file left MESHCTL_MODE out.
@@ -183,7 +186,9 @@ func logLevel(e *env) string {
 const maxTokenFile = 1024
 
 // startToken is the join token in MESHCTL_TOKEN, or in the file
-// MESHCTL_TOKEN_FILE names; "" when neither holds one. Errors never show it.
+// MESHCTL_TOKEN_FILE names; "" when neither holds one -- a file that does
+// not exist holds none, so a node that joined runs on once its token file is
+// gone (amendment A53). Errors never show it.
 func startToken(e *env) (string, error) {
 	tok, file := strings.TrimSpace(e.getenv("MESHCTL_TOKEN")), e.getenv("MESHCTL_TOKEN_FILE")
 	field := "MESHCTL_TOKEN"
@@ -195,7 +200,10 @@ func startToken(e *env) (string, error) {
 			return "", usagef("MESHCTL_TOKEN_FILE must be an absolute path, such as /run/secrets/meshctl_token (got %q)", file)
 		}
 		b, err := readCapped(file, maxTokenFile)
-		if err != nil {
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			return "", nil
+		case err != nil:
 			return "", fmt.Errorf("read the join token from MESHCTL_TOKEN_FILE: %w", err)
 		}
 		tok, field = strings.TrimSpace(string(b)), "the token in MESHCTL_TOKEN_FILE"

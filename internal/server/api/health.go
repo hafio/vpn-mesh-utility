@@ -41,6 +41,8 @@ func Health(n NodeInfo, now time.Time) (string, string) {
 		return proto.HealthBad, fmt.Sprintf("rolled back v%d to v%d", n.Rollback.From, n.Rollback.To)
 	case n.Copy != nil && now.Sub(time.Unix(n.Copy.At, 0)) < recentCopy:
 		return proto.HealthWarn, CopyLine(*n.Copy, now.Location())
+	case len(n.SharesMachine) > 0:
+		return proto.HealthWarn, SharesLine(n.SharesMachine)
 	case len(n.Degraded) > 0:
 		return proto.HealthWarn, "degraded: " + strings.Join(n.Degraded, ", ")
 	case !n.InSync:
@@ -67,8 +69,20 @@ func CopyLine(c CopyInfo, loc *time.Location) string {
 	return fmt.Sprintf("a second copy on %s, the same machine, was refused at %s", c.Hostname, at)
 }
 
-// withCopy adds the node's second copy, if the control plane saw one.
+// SharesLine says a node runs on one machine with other nodes of its mesh
+// (amendment A53).
+func SharesLine(names []string) string {
+	return "on one machine with " + strings.Join(names, ", ") + " of this mesh: run one node per machine and mesh (docs/containers.md)"
+}
+
+// withCopy adds the node's second copy, if the control plane saw one, and
+// the other nodes of its mesh on its machine.
 func withCopy(tx *store.MeshTx, info *NodeInfo) error {
+	mates, err := tx.MachineMates(info.ID)
+	if err != nil {
+		return err
+	}
+	info.SharesMachine = mates
 	s, err := tx.AgentSession(info.ID)
 	switch {
 	case err == nil && s.ChallengeAt != 0 && !s.Answered:

@@ -105,6 +105,32 @@ type Refusal struct {
 	At          int64
 }
 
+// MachineMates are the names of the other nodes of the mesh pinned to the
+// machine node is pinned to (amendment A53): one machine running two nodes
+// of one mesh.
+func (t *MeshTx) MachineMates(node int64) ([]string, error) {
+	rows, err := t.query(`SELECT n.name FROM node_machines a
+		JOIN node_machines b ON b.machine_hash = a.machine_hash AND b.node_id != a.node_id
+		JOIN nodes n ON n.id = b.node_id
+		WHERE a.node_id = ? AND n.mesh_id = ? ORDER BY n.name`, node, t.mesh)
+	if err != nil {
+		return nil, fmt.Errorf("list the nodes on node %d's machine: %w", node, err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("list the nodes on node %d's machine: %w", node, err)
+		}
+		out = append(out, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list the nodes on node %d's machine: %w", node, err)
+	}
+	return out, nil
+}
+
 // Refusal returns node's last refused copy, or ErrNotFound.
 func (t *Tx) Refusal(node int64) (Refusal, error) {
 	var r Refusal

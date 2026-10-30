@@ -1,11 +1,29 @@
 # Containers
 
 meshctl ships one image, `ghcr.io/hafio/vpn-mesh-utility:<release>` (the tag has no `v`), and
-writes no container deployment of its own (amendment A48): the samples below are starting points
-for your own compose files, `podman run` lines or Kubernetes manifests. Each one states its
+deploys no container of its own (amendment A48): the samples below are starting points for your
+own compose files, Swarm stacks, `podman run` lines or Kubernetes manifests. The web UI shows the
+compose, Swarm and network samples that fit a node, filled with its values, on the page after
+the node is added or given a new token (amendment A53); the ones here are rendered from the same
+templates (`deploy/samples/`, kept in step by `TestContainersDocSamples`). Each one states its
 posture -- what it is allowed beyond a locked-down container, and nothing else -- and
 `TestContainerSamples` (deploy/samples_test.go) parses every sample here and fails on a widening
 it does not expect; [security.md](security.md) explains each one.
+
+## Contents
+
+- [One image, two modes](#one-image-two-modes)
+- [Choosing how to run each node](#choosing-how-to-run-each-node)
+- [The control plane](#the-control-plane)
+- [A client node on the host network](#a-client-node-on-the-host-network)
+- [Container mode](#container-mode)
+  - [1. The mesh network, once per host](#1-the-mesh-network-once-per-host)
+  - [2. The agent](#2-the-agent)
+  - [3. A service on the mesh](#3-a-service-on-the-mesh)
+- [A host-mode node's containers](#a-host-mode-nodes-containers)
+- [Every Swarm node a client node](#every-swarm-node-a-client-node)
+- [Container names](#container-names)
+- [Posture](#posture)
 
 ## One image, two modes
 
@@ -49,6 +67,37 @@ node's page in the web UI list them under "containers on the mesh". The samples 
 | the runtime's side of the bridge | gateway | `10.77.128.1` (`fd10:77::8000:1`) |
 | the agent, in container mode | agent | `10.77.128.2` (`fd10:77::8000:2`) |
 | the network and the bridge | network | `meshctl-mesh`, `meshctl0` (a mesh in slot s: `meshctl-mesh<s>`, `meshctl<s>`) |
+
+## Choosing how to run each node
+
+| Node | Swarm runs over | Run its agent with |
+| --- | --- | --- |
+| a server node whose host is on the mesh | anything | `install.sh` (systemd): it needs firewalld on the host for its public port, the relay and the exit |
+| a server node with only its containers on the mesh | not this mesh | container mode: compose, or a Swarm service |
+| a client node whose host is on the mesh | not this mesh | `install.sh`, compose on the host network, or a Swarm service on the host network |
+| a client node with only its containers on the mesh | not this mesh | container mode: compose, or a Swarm service |
+| any node above | this mesh | `install.sh`, or compose -- never a Swarm service |
+| every node of a Swarm, as clients | not this mesh | the global Swarm service below |
+| a laptop | -- | `install.sh`, or `install.ps1` on Windows |
+| a phone | -- | the WireGuard app, by QR code |
+
+**Swarm over this mesh.** A Swarm whose nodes advertise their mesh addresses cannot run the agents
+that make the mesh: after a reboot it reaches its managers only through the mesh, so it could never
+start them. Their hosts run the agent from `install.sh` or compose (`restart: unless-stopped`: the
+engine restarts it by itself). The control plane may still be a Swarm stack: agents start from
+their signed cache without it, and Swarm comes back over the mesh they bring up.
+
+**Swarm over the internet or a LAN.** Any node's agent may then be a Swarm service, pinned to its
+host by a node label. Swarm cannot map `/dev/net/tun`, so the host needs the WireGuard kernel module
+(`MESHCTL_WG_BACKEND: kernel`); capabilities need Docker 20.10 or later; and a stack cannot set
+`no-new-privileges` -- the agent runs as uid 0 with two capabilities in an image with no setuid
+binary, the same reasoning as the control plane's stack.
+
+**One node per machine and mesh.** Two nodes of one mesh on one machine -- a host-mode node beside
+a container-mode one, or two container-mode ones -- work, but give nothing a host-mode node's
+`--containers` does not, take two of the host's UDP ports, fail together, and clash on the mesh
+network's and the bridge's names; the control plane warns about them. Nodes of different meshes
+share a host in any mix: each mesh's interface, ports, network and bridge are named after its slot.
 
 ## The control plane
 
@@ -185,6 +234,7 @@ A NAS, or any Linux host with a container runtime, can run its agent in a contai
 network: the whole host joins the mesh, as with `install.sh`. Add it as a spoke (`node add nas
 --role spoke --always-on`), then:
 
+<!-- sample: compose-host nas -->
 ```yaml
 services:
   meshctl:
@@ -224,6 +274,51 @@ every recreate). A copy of the data volume started on another machine is refused
 and needs a new join token; a second container with the same volume on this machine is refused
 while the first runs. Where the host keeps its id elsewhere, mount that file and set
 `MESHCTL_MACHINE_ID_FILE`.
+
+As a Swarm service, where Swarm does not run over this mesh, pinned to its host by the label
+`meshctl.<mesh>.<node>` (`docker node update --label-add meshctl.default.nas=true <swarm node>`, then
+`MESHCTL_TOKEN=<token> docker stack deploy -c meshctl-default-nas.yml meshctl-default-nas`):
+
+<!-- sample: stack-host nas -->
+```yaml
+services:
+  meshctl:
+    image: ghcr.io/hafio/vpn-mesh-utility:1.0.0
+    environment:
+      MESHCTL_URL: https://mesh.example.com
+      MESHCTL_NAME: nas
+      MESHCTL_TOKEN: ${MESHCTL_TOKEN:-}
+      MESHCTL_WG_BACKEND: kernel
+    user: "0:0"
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN, NET_BIND_SERVICE]
+    read_only: true
+    networks: [hostnet]
+    volumes:
+      - meshctl-data:/data
+      - /etc/machine-id:/etc/machine-id:ro
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 16777216
+    deploy:
+      placement:
+        constraints: [node.labels.meshctl.default.nas == true]
+      update_config:
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s
+      resources:
+        limits:
+          memory: 256M
+networks:
+  hostnet:
+    external: true
+    name: host
+volumes:
+  meshctl-data: {}
+```
 
 With Podman:
 
@@ -338,6 +433,7 @@ meshctl node show box
 
 With Docker (the values from `node show`):
 
+<!-- sample: network-docker box -->
 ```sh
 docker network create --internal --subnet 10.77.0.0/16 --ip-range 10.77.128.128/25 \
   --gateway 10.77.128.1 -o com.docker.network.bridge.name=meshctl0 meshctl-mesh
@@ -346,6 +442,7 @@ docker network create --internal --subnet 10.77.0.0/16 --ip-range 10.77.128.128/
 With rootful or rootless Podman (`--disable-dns`: Podman's resolver on an internal network
 answers every outside name with NXDOMAIN):
 
+<!-- sample: network-podman box -->
 ```sh
 podman network create --internal --disable-dns --subnet 10.77.0.0/16 --ip-range 10.77.128.128/25 \
   --gateway 10.77.128.1 --interface-name meshctl0 meshctl-mesh
@@ -354,6 +451,7 @@ podman network create --internal --disable-dns --subnet 10.77.0.0/16 --ip-range 
 For Swarm services, a config-only network on each node with mesh services, and one swarm-scoped
 network from it, once, on a manager:
 
+<!-- sample: network-swarm box -->
 ```sh
 docker network create --config-only --subnet 10.77.0.0/16 --ip-range 10.77.128.128/25 \
   --gateway 10.77.128.1 meshctl-mesh-config
@@ -365,6 +463,7 @@ With the containers' IPv6 on the mesh (`--containers6`), add the IPv6 values aft
 
 ### 2. The agent
 
+<!-- sample: compose-container box -->
 ```yaml
 services:
   meshctl:
@@ -414,8 +513,54 @@ services:
 ```
 
 The capabilities act in the agent's namespace only; the host's network is untouched. Swarm
-services attach to the swarm-scoped network, but the agent itself is this plain compose service on
-each node (a Swarm service cannot have the tun device or the capabilities).
+services attach to the swarm-scoped network. The agent itself may be a Swarm service too, where
+Swarm does not run over this mesh, with the host's WireGuard module, pinned to its host by its
+label (a server node publishes its port in host mode, so its peers see their own addresses):
+
+<!-- sample: stack-container box -->
+```yaml
+services:
+  meshctl:
+    image: ghcr.io/hafio/vpn-mesh-utility:1.0.0
+    environment:
+      MESHCTL_URL: https://mesh.example.com
+      MESHCTL_NAME: box
+      MESHCTL_TOKEN: ${MESHCTL_TOKEN:-}
+      MESHCTL_WG_BACKEND: kernel
+    user: "0:0"
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN, NET_BIND_SERVICE]
+    read_only: true
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.proxy_arp: "1"
+    volumes:
+      - meshctl-data:/data
+      - /etc/machine-id:/etc/machine-id:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 16777216
+    networks: [egress, meshctl-mesh]
+    deploy:
+      placement:
+        constraints: [node.labels.meshctl.default.box == true]
+      update_config:
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s
+      resources:
+        limits:
+          memory: 256M
+networks:
+  egress: {}
+  meshctl-mesh:
+    external: true
+volumes:
+  meshctl-data: {}
+```
 
 With Podman (rootful; rootless for a client node, with its own socket below):
 
@@ -475,6 +620,7 @@ containers mesh addresses too: the host's agent owns the bridge `meshctl0` and r
 bridge once, with the node's values (here a server node at 10.77.129.0/24, whose gateway is the
 bridge):
 
+<!-- sample: network-docker vps -->
 ```sh
 docker network create --subnet 10.77.0.0/16 --ip-range 10.77.129.128/25 --gateway 10.77.129.1 \
   -o com.docker.network.bridge.name=meshctl0 -o com.docker.network.bridge.inhibit_ipv4=true \
@@ -487,6 +633,7 @@ port the mesh may reach (`nat-unprotected`; the agent's rules keep the subnet to
 the containers' IPv6, add the IPv6 values and `-o
 com.docker.network.bridge.gateway_mode_ipv6=nat-unprotected`. Podman attaches unmanaged:
 
+<!-- sample: network-podman vps -->
 ```sh
 podman network create --disable-dns --subnet 10.77.0.0/16 --ip-range 10.77.129.128/25 \
   --gateway 10.77.129.1 --interface-name meshctl0 -o mode=unmanaged -o no_default_route=true meshctl-mesh
@@ -494,6 +641,57 @@ podman network create --disable-dns --subnet 10.77.0.0/16 --ip-range 10.77.129.1
 
 Swarm builds the swarm-scoped network from a config-only one with Docker's options, as in container
 mode. A service attaches as above, with the bridge (`10.77.129.1`) as its `dns`.
+
+## Every Swarm node a client node
+
+Where Swarm does not run over this mesh, one global service makes every labelled Swarm node a
+client node on its host's network. Add a node per host (`meshctl node add <name> --role spoke`),
+write that node's token to `/etc/meshctl/<mesh>.token` on its host (mode 0600; it may go once the
+node joined), label the host (`docker node update --label-add meshctl.default=true <swarm node>`),
+then `docker stack deploy -c meshctl-default.yml meshctl-default`. Each task joins with its own
+host's token and keeps its data in that host's own volume:
+
+<!-- sample: stack-global global -->
+```yaml
+services:
+  meshctl:
+    image: ghcr.io/hafio/vpn-mesh-utility:1.0.0
+    environment:
+      MESHCTL_URL: https://mesh.example.com
+      MESHCTL_TOKEN_FILE: /run/meshctl/default.token
+      MESHCTL_WG_BACKEND: kernel
+    user: "0:0"
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN, NET_BIND_SERVICE]
+    read_only: true
+    networks: [hostnet]
+    volumes:
+      - meshctl-data:/data
+      - /etc/machine-id:/etc/machine-id:ro
+      - /etc/meshctl:/run/meshctl:ro
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 16777216
+    deploy:
+      mode: global
+      placement:
+        constraints: [node.labels.meshctl.default == true]
+      update_config:
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 5s
+      resources:
+        limits:
+          memory: 256M
+networks:
+  hostnet:
+    external: true
+    name: host
+volumes:
+  meshctl-data: {}
+```
 
 ## Container names
 
@@ -515,6 +713,9 @@ containers for SELinux may refuse the agent the socket; the same setting is the 
 | control plane | nothing (uid 65532, no capability, read-only root) | it only serves https behind a proxy |
 | client node on the host network | uid 0, `network_mode: host` / `hostNetwork`, `NET_ADMIN`, `NET_BIND_SERVICE`, `/dev/net/tun`, a host data directory | its interface, routes and DNS are the host's |
 | container-mode agent | uid 0, `NET_ADMIN`, `NET_BIND_SERVICE`, `/dev/net/tun`, the two (five with IPv6) sysctls, the runtime's socket, a published UDP port on a server node | all in its own namespace, except the socket |
+| a node's Swarm service | as its compose sample, but no `/dev/net/tun` (kernel WireGuard), the host network as the external network `host`, a UDP port published in host mode, and no `no-new-privileges`, which a stack cannot set; the global service mounts `/etc/meshctl` read-only for its token | Swarm has no device mapping and no security options |
 
-Every sample keeps `privileged: false`, drops every capability first, sets `no-new-privileges` and
-a read-only root, and passes no secret on a command line.
+Every compose sample keeps `privileged: false`, drops every capability first, sets
+`no-new-privileges` and a read-only root, and passes no secret on a command line; every Swarm
+sample drops every capability first, keeps a read-only root, and passes no secret on a command
+line.

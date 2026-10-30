@@ -1,6 +1,7 @@
 package api
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -43,6 +44,12 @@ func TestDashboardHealth(t *testing.T) {
 	}
 	if _, label := Health(down, now.In(time.FixedZone("SGT", 8*3600))); label != "down since 2026-10-12 15:00 SGT; its pairs relay through other hubs" {
 		t.Errorf("a down hub, the server in SGT = %q", label)
+	}
+	// Two nodes of one mesh on one machine (amendment A53) are a warning,
+	// named.
+	shared := NodeInfo{Enrolled: true, LastSeen: seen(time.Second), InSync: true, SharesMachine: []string{"box", "hub4"}}
+	if got, label := Health(shared, now); got != proto.HealthWarn || !strings.Contains(label, "on one machine with box, hub4 of this mesh") {
+		t.Errorf("a node sharing its machine = %s %q", got, label)
 	}
 	// A phone is heard of through its servers' handshakes, anything else by
 	// its heartbeat.

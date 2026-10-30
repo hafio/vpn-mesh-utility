@@ -3,6 +3,27 @@
 What protects what, and every place an artifact is wider than the default-deny posture, with
 the reason. The threat model is spec S9; the amendments that changed it are in spec S17.
 
+## Contents
+
+- [Keys and tokens](#keys-and-tokens)
+- [Web UI sign-in (internal/server/auth)](#web-ui-sign-in-internalserverauth)
+- [The web UI's pages (internal/server/ui)](#the-web-uis-pages-internalserverui)
+- [Input and commands](#input-and-commands)
+- [Control plane container](#control-plane-container)
+- [Agent service (systemd)](#agent-service-systemd)
+- [A node's container on the host network (the NAS)](#a-nodes-container-on-the-host-network-the-nas)
+- [Container-mode agent](#container-mode-agent)
+- [A node's agent as a Swarm service](#a-nodes-agent-as-a-swarm-service)
+- [The host firewall](#the-host-firewall)
+- [The mesh firewall](#the-mesh-firewall)
+- [DNS](#dns)
+- [Changes a node asks for](#changes-a-node-asks-for)
+- [What a node sees of the others](#what-a-node-sees-of-the-others)
+- [The local UI (internal/agent/localui)](#the-local-ui-internalagentlocalui)
+- [Windows (M5, in progress)](#windows-m5-in-progress)
+- [Interfaces the agent did not create](#interfaces-the-agent-did-not-create)
+- [Several meshes on one host](#several-meshes-on-one-host)
+
 ## Keys and tokens
 
 | Asset | Protection |
@@ -120,9 +141,12 @@ name the field, never its value (`TestParseUAPIRejectsMalformedValues`).
 
 ## A node's container on the host network (the NAS)
 
-meshctl generates no container deployment (amendment A48): docs/containers.md has the samples
-an operator copies, and `TestContainerSamples` (deploy/samples_test.go) parses each one -- the
-compose files, the `podman run` lines, the Kubernetes manifests -- and fails on any key, capability,
+meshctl deploys no node's container (amendment A48): docs/containers.md has the samples an
+operator copies, rendered from the templates the web UI fills with a node's values
+(deploy/samples/, amendment A53; every value is checked against its grammar first,
+`TestSamplesRefuseHostileValues`), and `TestContainerSamples` (deploy/samples_test.go) parses each
+one -- the compose files, the Swarm stacks, the `podman run` lines, the Kubernetes manifests --
+and fails on any key, capability,
 device, sysctl, volume or port beyond what is listed here, and on a join token written into the
 sample. A client node on the host network (amendments A13, A19, A28) widens exactly what an agent
 that owns the host's `wg0` needs:
@@ -231,6 +255,28 @@ not an open forwarder. A container may then claim any name in such a domain, whi
 operator chooses them: at most 8, never the zone or around it, no .arpa but home.arpa, and never
 the domain of the server's own address (`CheckServerDomains`), which every agent must resolve
 without the mesh.
+
+## A node's agent as a Swarm service
+
+Amendment A53. Where Swarm does not run over the mesh, a node's agent may be a Swarm service
+(docs/containers.md has three samples: a client node on the host network, a container-mode agent,
+and a global service that makes every labelled Swarm node a client node). A stack cannot state all
+a compose file does; `checkStackSample` (deploy/samples_test.go) pins what it does state:
+
+| Setting | Value | Why |
+| --- | --- | --- |
+| `no-new-privileges` | not set | a stack has no security options; the agent runs as uid 0 holding only `NET_ADMIN` and `NET_BIND_SERVICE`, read-only, in an image with no setuid binary, so there is nothing to gain privileges through |
+| `/dev/net/tun` | not mapped | a stack cannot map devices: the agent uses the host's WireGuard module (`MESHCTL_WG_BACKEND: kernel`) |
+| host network | the external network `host` | a stack's way to `network_mode: host` |
+| published port | UDP, `mode: host` | through Swarm's ingress mesh, peers would show up from the ingress's address, and WireGuard follows a peer's address |
+| placement | one node label per agent (`meshctl.<mesh>.<node>`; the global service `meshctl.<mesh>`) | its data volume and its machine id are its host's |
+| the global service's token | `/etc/meshctl` mounted read-only, `MESHCTL_TOKEN_FILE` | a token per host, in a file only root reads; it may go once the node joined (a missing file holds no token) |
+
+A Swarm that runs over the mesh never runs the agents: after a reboot it could not start them.
+
+Two nodes of one mesh on one machine -- their agents present the same machine id -- are a warning on
+the dashboard, the node page and in `node show`: they fail together and clash on the mesh
+network's and the bridge's names. Nodes of different meshes share a host freely.
 
 ## The host firewall
 

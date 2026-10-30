@@ -122,6 +122,21 @@ func (h *harness) giveSession(t *testing.T, node int64) {
 	}
 }
 
+// pinApart pins each named node to a machine of its own, as in a real
+// mesh; giveSession pins every node to the fixture's one machine, which the
+// control plane reports as nodes sharing a machine (amendment A53).
+func (h *harness) pinApart(t *testing.T, names ...string) {
+	t.Helper()
+	for _, name := range names {
+		n := h.node(t, name)
+		if err := h.st.Tx(context.Background(), func(tx *store.Tx) error {
+			return tx.PinMachine(n.ID, store.Machine{Hash: secretHash("machine of " + name), Hostname: name})
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func (h *harness) seedServers(t *testing.T) {
 	t.Helper()
 	h.seed(t, storeNode(testfix.VPS1, true), storeNode(testfix.VPS2, true), storeNode(testfix.VPS3, true))
@@ -690,6 +705,7 @@ func TestMeshViewCarriesNoSecrets(t *testing.T) {
 	nas := storeNode(testfix.NAS, true)
 	nas.Hostname = "nas-private.lan"
 	h.seed(t, storeNode(testfix.VPS1, true), storeNode(testfix.VPS2, true), storeNode(testfix.VPS3, true), nas, storeNode(testfix.Phone, true))
+	h.pinApart(t, "vps-2", "vps-3", "nas", "phone")
 	vps1 := h.node(t, "vps-1")
 	rep := proto.StatusReport{AppliedVersion: vps1.ConfigVersion, AppliedHash: vps1.ConfigHash, AgentVersion: "v1.0.0", WGBackend: "kernel",
 		Peers:  []proto.PeerStatus{{Name: "phone", LastHandshake: testfix.Epoch.Unix() - 60, Endpoint: "198.51.100.9:4500"}},

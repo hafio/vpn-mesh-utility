@@ -228,6 +228,9 @@ fieldset.section {
 }
 fieldset.section > p, fieldset.section > fieldset { grid-column: 1 / -1; margin: 0; }
 [hidden] { display: none !important; }
+details.sample { margin: 0.6rem 0; padding: 0.5rem 0.8rem; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+details.sample > summary { cursor: pointer; font-weight: 600; }
+details.sample[open] > summary { margin-bottom: 0.5rem; }
 fieldset.days { display: flex; flex-wrap: wrap; gap: 0.3rem 0.9rem; margin: 0; padding: 0.6rem 0.8rem; border: 1px solid var(--line-strong); border-radius: 8px; }
 legend { color: var(--muted); font-size: 0.88rem; font-weight: 600; padding: 0 0.3rem; }
 input, select, textarea {

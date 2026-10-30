@@ -38,6 +38,14 @@ var (
 // read-only: it pins the node to its machine (amendment A50).
 const machineID = "/etc/machine-id:/etc/machine-id:ro"
 
+// tokenDir is where the global Swarm service reads each host's token.
+const tokenDir = "/etc/meshctl:/run/meshctl:ro"
+
+// stackKeys are the keys a node's Swarm service may use: a stack has no
+// security_opt, devices, network_mode, restart or compose limits.
+var stackKeys = []string{"image", "environment", "user", "cap_drop", "cap_add", "read_only", "sysctls", "volumes", "ports",
+	"networks", "deploy"}
+
 // block is a fenced code block of the doc: its language and its text.
 type block struct{ lang, text string }
 
@@ -73,7 +81,7 @@ func docBlocks(t *testing.T) []block {
 // and every `podman run` line. The counts keep a sample from dropping out
 // of the check unnoticed.
 func TestContainerSamples(t *testing.T) {
-	var compose, kube, run int
+	var compose, stack, kube, run int
 	for i, b := range docBlocks(t) {
 		switch b.lang {
 		case "yaml":
@@ -88,6 +96,7 @@ func TestContainerSamples(t *testing.T) {
 					t.Fatalf("block %d does not parse: %v\n%s", i, err, b.text)
 				}
 				compose += checkComposeSample(t, doc)
+				stack += checkStackSample(t, doc)
 				kube += checkKubeSample(t, doc)
 			}
 		case "sh":
@@ -102,8 +111,9 @@ func TestContainerSamples(t *testing.T) {
 			t.Errorf("block %d is %q: the doc's samples are yaml or sh", i, b.lang)
 		}
 	}
-	if compose != 3 || kube != 2 || run != 3 {
-		t.Errorf("checked %d compose services, %d Kubernetes containers, %d podman runs; want 3, 2, 3", compose, kube, run)
+	if compose != 3 || stack != 3 || kube != 2 || run != 3 {
+		t.Errorf("checked %d compose services, %d Swarm services, %d Kubernetes containers, %d podman runs; want 3, 3, 2, 3",
+			compose, stack, kube, run)
 	}
 }
 
@@ -113,7 +123,7 @@ func checkComposeSample(t *testing.T, doc map[string]any) int {
 	n := 0
 	for name, v := range svcs {
 		svc, _ := v.(map[string]any)
-		if img, _ := svc["image"].(string); !strings.HasPrefix(img, image) {
+		if img, _ := svc["image"].(string); !strings.HasPrefix(img, image) || svc["deploy"] != nil {
 			continue
 		}
 		n++
@@ -169,6 +179,87 @@ func checkComposeSample(t *testing.T, doc map[string]any) int {
 			if s, _ := v.(string); k == "MESHCTL_TOKEN" && s != "${MESHCTL_TOKEN:-}" {
 				t.Errorf("%s: MESHCTL_TOKEN = %q: a sample takes it from the shell or a .env file, never a value", name, s)
 			}
+		}
+	}
+	return n
+}
+
+// checkStackSample holds a node's Swarm services (amendment A53) to the
+// posture docs/containers.md states: kernel WireGuard, the two
+// capabilities, a read-only root, pinned by a label, UDP published in host
+// mode, and nothing a stack cannot state.
+func checkStackSample(t *testing.T, doc map[string]any) int {
+	t.Helper()
+	svcs, _ := doc["services"].(map[string]any)
+	n := 0
+	for name, v := range svcs {
+		svc, _ := v.(map[string]any)
+		if img, _ := svc["image"].(string); !strings.HasPrefix(img, image) || svc["deploy"] == nil {
+			continue
+		}
+		n++
+		for k := range svc {
+			if !slices.Contains(stackKeys, k) {
+				t.Errorf("%s: %s is not a key a Swarm sample may use", name, k)
+			}
+		}
+		if !reflect.DeepEqual(svc["cap_drop"], []any{"ALL"}) || svc["read_only"] != true || svc["user"] != "0:0" {
+			t.Errorf("%s: cap_drop %v, read_only %v, user %v; want [ALL], true, 0:0", name, svc["cap_drop"], svc["read_only"], svc["user"])
+		}
+		for _, c := range list(svc["cap_add"]) {
+			if !slices.Contains(sampleCaps, c) {
+				t.Errorf("%s: cap_add %s", name, c)
+			}
+		}
+		sysctls, _ := svc["sysctls"].(map[string]any)
+		for k := range sysctls {
+			if !slices.Contains(sampleSysctls, k) {
+				t.Errorf("%s: sysctl %s", name, k)
+			}
+		}
+		env, _ := svc["environment"].(map[string]any)
+		if env["MESHCTL_WG_BACKEND"] != "kernel" {
+			t.Errorf("%s: MESHCTL_WG_BACKEND %v; Swarm cannot map /dev/net/tun, so the agent needs kernel WireGuard", name, env["MESHCTL_WG_BACKEND"])
+		}
+		if tok, ok := env["MESHCTL_TOKEN"]; ok && tok != "${MESHCTL_TOKEN:-}" {
+			t.Errorf("%s: MESHCTL_TOKEN = %v: a sample takes it from the shell, never a value", name, tok)
+		}
+		vols, _ := svc["volumes"].([]any)
+		id := false
+		for _, x := range vols {
+			switch m := x.(type) {
+			case string:
+				id = id || m == machineID
+				if !sampleVolume(m, true) && m != tokenDir {
+					t.Errorf("%s: volume %s", name, m)
+				}
+			case map[string]any:
+				if m["type"] != "tmpfs" || m["target"] != "/tmp" {
+					t.Errorf("%s: volume %v", name, m)
+				}
+			}
+		}
+		if !id {
+			t.Errorf("%s: no %s volume; a node needs the host's machine id", name, machineID)
+		}
+		ports, _ := svc["ports"].([]any)
+		for _, x := range ports {
+			if p, _ := x.(map[string]any); p["protocol"] != "udp" || p["mode"] != "host" {
+				t.Errorf("%s: port %v; a node publishes its WireGuard port, UDP, in host mode", name, x)
+			}
+		}
+		for _, nw := range list(svc["networks"]) {
+			switch {
+			case nw == "hostnet":
+				if h := dig(doc, "networks", "hostnet"); h["external"] != true || h["name"] != "host" {
+					t.Errorf("%s: hostnet is %v, not the external network host", name, h)
+				}
+			case nw != "egress" && !strings.HasPrefix(nw, "meshctl-mesh"):
+				t.Errorf("%s: network %s", name, nw)
+			}
+		}
+		if c := list(dig(svc, "deploy", "placement")["constraints"]); len(c) != 1 || !strings.HasPrefix(c[0], "node.labels.meshctl.") {
+			t.Errorf("%s: placement %v; a node's agent is pinned to its host by its label", name, c)
 		}
 	}
 	return n

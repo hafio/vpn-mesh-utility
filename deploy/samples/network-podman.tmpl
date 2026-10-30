@@ -1,0 +1,9 @@
+{{- if .Container -}}
+podman network create --internal --disable-dns --subnet {{.Network}} --ip-range {{.Range}} \
+  --gateway {{.Gateway}}{{if .Network6}} --ipv6 --subnet {{.Network6}} --ip-range {{.Range6}} \
+  --gateway {{.Gateway6}}{{end}} --interface-name {{.BridgeName}} {{.NetworkName}}
+{{- else -}}
+podman network create --disable-dns --subnet {{.Network}} --ip-range {{.Range}} \
+  --gateway {{.Gateway}}{{if .Network6}} --ipv6 --subnet {{.Network6}} --ip-range {{.Range6}} \
+  --gateway {{.Gateway6}}{{end}} --interface-name {{.BridgeName}} -o mode=unmanaged -o no_default_route=true {{.NetworkName}}
+{{- end}}

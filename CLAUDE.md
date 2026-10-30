@@ -34,7 +34,7 @@ that applies) and continue from the output reported back.
   stdlib.**
 - **`internal/testfix` is for tests only** and imports only `internal/proto`, so both sides'
   tests can share it. `internal/agent/agentfake` (in-memory host fakes) is test-only too.
-- `deploy` (unit, install.sh, install.ps1, the control plane's compose files) imports only `internal/validate` and yaml.v3; both sides use it.
+- `deploy` (unit, install.sh, install.ps1, the control plane's compose files, the node samples) imports only `internal/validate` and yaml.v3; both sides use it.
 - `internal/fsutil` (atomic file writes) is stdlib-only; both sides use it.
 - The server never imports data-plane libraries (wgctrl, wireguard-go, netlink, nftables,
   miekg/dns, godbus, x/sys/windows, go-winio); the agent never imports server ones (sqlite,
@@ -58,9 +58,10 @@ test files included. Change the rules there and here together.
   (phones are the one documented exception, spec Amendments A6). The one secret the control
   plane logs is the first-admin setup code, and only while no admin exists (A52).
 - **Container artifacts state their posture**: privileged false, `cap_drop: [ALL]`,
-  `no-new-privileges=true`, explicit user, read-only root. meshctl generates no node deployment
-  (amendment A48); the control plane's compose files and docs/containers.md's samples are the
-  artifacts. Any widening token (a node's `network_mode: host`, `cap_add`, the tun device, the
+  `no-new-privileges=true`, explicit user, read-only root. meshctl deploys no node (amendment
+  A48); the control plane's compose files and the node samples (deploy/samples, shown filled in
+  by the web UI and in docs/containers.md, A53) are the artifacts; a Swarm sample states what a
+  stack can (no `no-new-privileges`, docs/security.md). Any widening token (a node's `network_mode: host`, `cap_add`, the tun device, the
   runtime socket) is named in docs/security.md and pinned by a test that forbids every other
   widening token (`deploy_test.go`, `samples_test.go`).
 

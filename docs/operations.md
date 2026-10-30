@@ -6,6 +6,25 @@ usual failures. Windows is under way in M5 (spec S15): the service and its local
 place, WireGuard there is not yet. Every command and flag is in
 [commands.md](commands.md).
 
+## Contents
+
+- [1. Run the control plane (Dokploy)](#1-run-the-control-plane-dokploy)
+- [2. Enroll the server nodes](#2-enroll-the-server-nodes)
+- [3. Swarm over the mesh](#3-swarm-over-the-mesh)
+- [4. Spokes and exits](#4-spokes-and-exits)
+  - [Container mode](#container-mode)
+- [5. Day to day](#5-day-to-day)
+- [6. DNS](#6-dns)
+- [7. Firewall](#7-firewall)
+- [8. The web UI](#8-the-web-ui)
+  - [The mesh firewall](#the-mesh-firewall)
+  - [Each node's local UI](#each-nodes-local-ui)
+- [9. Users and recovery](#9-users-and-recovery)
+- [10. Backups](#10-backups)
+- [11. When the control plane is down](#11-when-the-control-plane-is-down)
+- [12. Troubleshooting](#12-troubleshooting)
+- [13. Upgrading](#13-upgrading)
+
 ## 1. Run the control plane (Dokploy)
 
 The control plane (the server: database, web UI, agent API) is one container behind Dokploy's
@@ -98,6 +117,13 @@ docker network create -d overlay --opt com.docker.network.driver.mtu=1370 <name>
 The `mesh` firewalld zone allows 2377/tcp, 7946/tcp+udp and 4789/udp only from the other
 servers' /32s.
 
+A Swarm that runs over the mesh never runs the agents: after a reboot it reaches its managers only
+through the mesh, so it could not start the agent that brings the mesh up. Its hosts run the agent
+from `install.sh` (or compose). Where Swarm runs over the internet or a LAN instead, a node's agent
+may be a Swarm service, and one global service can make every labelled Swarm node a client node:
+[containers.md](containers.md#choosing-how-to-run-each-node) has the guide and the samples
+(amendment A53).
+
 ## 4. Spokes and exits
 
 A spoke is a node without a public address: a laptop, the NAS. It dials every server and keeps
@@ -110,7 +136,10 @@ same one in both directions (amendment A3): the hub of the spoke that was added 
 docker exec <container> /app/meshctl node add laptop --role spoke --hub vps-1
 ```
 
-then, on the laptop as root, the install command it prints. The laptop gets an address from
+then, on the laptop as root, the install command it prints. The page the web UI shows after
+adding a node (or giving it a new token) also lists the ways to run it in a container -- a compose
+file, a Swarm service and, for its containers, the network commands -- filled with the node's
+values and token (amendment A53); a server node on its host's network runs from `install.sh` only. The laptop gets an address from
 10.77.2.0/24; `--hub` names the server that relays for it (default: the mesh's default hub, else
 the first server). A host without the WireGuard kernel module runs WireGuard inside the agent
 instead (wireguard-go on `/dev/net/tun`): the agent picks that itself (`agent run --wg-backend
@@ -728,6 +757,8 @@ server is back. When it is, agents reconnect within a minute.
 | `MESHCTL_MODE must be control or node` | the container's environment has another value: `control` for the control plane, nothing for a node |
 | `... MESHCTL_MODE is not set, so this container runs a node` | a control plane's container without `MESHCTL_MODE=control`: set it |
 | `has not joined a mesh and has no join token` | a node container's first start without a token: `MESHCTL_TOKEN=<token> docker compose up -d` (or `MESHCTL_TOKEN` in `.env`) |
+| `... MESHCTL_TOKEN_FILE names ..., which does not exist or is empty` | a node that has not joined yet found no token file: write the token there, or set `MESHCTL_TOKEN` (a joined node runs on without the file) |
+| `on one machine with box of this mesh` | two nodes of one mesh run on one machine (amendment A53): keep one, and use host mode's `--containers` for the containers |
 | `the server refused this join token on an earlier start` | the token was spent (used or expired) before the node joined: issue a new one with `meshctl node token <name>` and start with it |
 | `userspace WireGuard needs /dev/net/tun` | the container has no tun device: map it (`devices: ["/dev/net/tun:/dev/net/tun"]`), or set `MESHCTL_WG_BACKEND=kernel` if the host has the module |
 | `wg show` does not list a userspace wg0 | the agent could not create `/var/run/wireguard/wg0.sock` (its log says why; a container has no `wg` anyway): use `meshctl status` |

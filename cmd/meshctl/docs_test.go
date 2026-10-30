@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-var update = flag.Bool("update", false, "rewrite docs/commands.md from the command registry")
+var update = flag.Bool("update", false, "rewrite docs/commands.md from the command registry and every doc's table of contents")
 
 const commandsDoc = "../../docs/commands.md"
 
@@ -74,7 +74,7 @@ func renderCommands() string {
 		}
 	}
 	walk("meshctl", commands())
-	return b.String()
+	return withContents(b.String())
 }
 
 // envDoc is a start variable's default and meaning: its own, or for one

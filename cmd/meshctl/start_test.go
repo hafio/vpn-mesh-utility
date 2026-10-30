@@ -100,7 +100,8 @@ func TestStartNodeJoin(t *testing.T) {
 		{map[string]string{"MESHCTL_TOKEN": testfix.Token}, exitUsage, "MESHCTL_URL"},
 		{map[string]string{"MESHCTL_TOKEN": testfix.Token, "MESHCTL_TOKEN_FILE": good}, exitUsage, "not both"},
 		{map[string]string{"MESHCTL_TOKEN_FILE": "token"}, exitUsage, "must be an absolute path"},
-		{map[string]string{"MESHCTL_TOKEN_FILE": filepath.Join(dir, "none")}, exitFailure, "read the join token from MESHCTL_TOKEN_FILE"},
+		{map[string]string{"MESHCTL_TOKEN_FILE": filepath.Join(dir, "none")}, exitFailure, "none, which does not exist or is empty"},
+		{map[string]string{"MESHCTL_TOKEN_FILE": dir}, exitFailure, "read the join token from MESHCTL_TOKEN_FILE"},
 		{map[string]string{"MESHCTL_TOKEN_FILE": big}, exitFailure, "more than 1024 bytes"},
 		{map[string]string{"MESHCTL_TOKEN_FILE": bad}, exitUsage, "the token in MESHCTL_TOKEN_FILE"},
 		{map[string]string{"MESHCTL_TOKEN": "short-secret"}, exitUsage, "MESHCTL_TOKEN"},
@@ -145,6 +146,12 @@ func TestStartNodeRuns(t *testing.T) {
 		if code != exitUsage || !strings.Contains(errOut, "from "+name+")") {
 			t.Errorf("%s: code %d, %s", name, code, errOut)
 		}
+	}
+	// A token file that is gone holds no token: the joined node runs on (a
+	// Swarm global service's token file may go once its node joined).
+	gone := map[string]string{"MESHCTL_TOKEN_FILE": filepath.Join(t.TempDir(), "gone"), "MESHCTL_UI_LISTEN": "0.0.0.0:7443"}
+	if code, errOut := runEnv(with(base, gone), "start"); code != exitUsage || !strings.Contains(errOut, "from MESHCTL_UI_LISTEN)") {
+		t.Errorf("a joined node whose token file is gone: code %d, %s", code, errOut)
 	}
 }
 

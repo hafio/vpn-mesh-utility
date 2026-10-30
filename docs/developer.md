@@ -1,5 +1,20 @@
 # Developer guide
 
+## Contents
+
+- [Toolchain](#toolchain)
+- [Dev script tasks](#dev-script-tasks)
+- [Goldens](#goldens)
+- [Releases](#releases)
+- [Extending the code](#extending-the-code)
+  - [Add a validator](#add-a-validator)
+  - [Add a topology rule](#add-a-topology-rule)
+  - [Add an agent API route](#add-an-agent-api-route)
+  - [Add an apply step](#add-an-apply-step)
+  - [Add a command](#add-a-command)
+  - [Add a web UI page](#add-a-web-ui-page)
+  - [Add a database migration](#add-a-database-migration)
+
 ## Toolchain
 
 Go is pinned exactly in `go.mod`: `go 1.27` is the language floor and `toolchain go1.27.3` is
@@ -53,7 +68,7 @@ local changes, `git rm -r --cached -q . && git reset --hard`.
 | `image` | `docker build` of the root Dockerfile as `vpn-mesh-utility:<version>` |
 | `up` / `down` | the local dev stack in `deploy/compose.dev.yml` |
 | `dist` | cross-compile linux/amd64, linux/arm64, windows/amd64 (local convenience) |
-| `regen` | rewrite golden files with `-update` in planner, the phone profiles, the web UI pages, the firewall argv, the userspace backend's UAPI text, the local UI's dashboard, the mesh firewall's table, deploy (install.sh, install.ps1) and cmd/meshctl (docs/commands.md); not in any aggregate |
+| `regen` | rewrite golden files with `-update` in planner, the phone profiles, the web UI pages, the firewall argv, the userspace backend's UAPI text, the local UI's dashboard, the mesh firewall's table, deploy (install.sh, install.ps1) and cmd/meshctl (docs/commands.md, and every doc's table of contents); not in any aggregate |
 | `e2e` | builds `dist/e2e.test` and `dist/meshctl-e2e` as you, then runs the network-namespace tests against kernel WireGuard under `sudo -n` (Linux; run `sudo -v` first, then the task as yourself -- under `sudo` it fails, as root's PATH has no `go`; not in any aggregate) |
 | `graphify` | refresh the knowledge graph (local only) |
 | `all` | `build vet test` -- CI runs `all scan` |
@@ -68,7 +83,9 @@ still ends `OK`, so the reason is written to its log too, as a `[warn]` line abo
 Golden files live in each package's `testdata/` (and `docs/commands.md`) and are reviewed by
 hand: the planner goldens were derived from the topology rules in
 `internal/server/planner/planner.go`, not captured from the code. `docs/commands.md` is the
-exception that is purely generated: after changing a command or a flag, `regen` rewrites it. When a test reports a stale golden and the new output is what you intended, run
+exception that is purely generated: after changing a command or a flag, `regen` rewrites it.
+Every doc (README.md and docs/*.md) opens with a `## Contents` section listing its `##` and
+`###` headings; after adding, renaming or removing a heading, `regen` rewrites it. When a test reports a stale golden and the new output is what you intended, run
 `./scripts/dev.sh regen` and review the diff before committing it. `regen` stays out of
 `all`/`full` because a gate that rewrote its own expectations could never fail.
 
