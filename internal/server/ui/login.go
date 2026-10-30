@@ -1,11 +1,13 @@
 package ui
 
 import (
+	"errors"
 	"image/png"
 	"net/http"
 	"strings"
 
 	"github.com/hafio/vpn-mesh-utility/internal/server/auth"
+	"github.com/hafio/vpn-mesh-utility/internal/validate"
 )
 
 // Sign-in (spec S8.4): password, then the authenticator code -- or, at the
@@ -13,6 +15,8 @@ import (
 
 type loginData struct {
 	Username string
+	// Setup links the setup page while the control plane has no admin.
+	Setup bool
 }
 
 func (u *ui) loginPage(w http.ResponseWriter, r *http.Request) {
@@ -20,7 +24,7 @@ func (u *ui) loginPage(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
-	u.show(w, r, auth.Session{}, http.StatusOK, "login", "", "Sign in", page{Data: loginData{}})
+	u.show(w, r, auth.Session{}, http.StatusOK, "login", "", "Sign in", page{Data: loginData{Setup: u.setupOpen(r)}})
 }
 
 func (u *ui) login(w http.ResponseWriter, r *http.Request) {
@@ -31,7 +35,7 @@ func (u *ui) login(w http.ResponseWriter, r *http.Request) {
 		if status >= http.StatusInternalServerError {
 			u.Log.Error("sign-in failed", "err", err)
 		}
-		u.show(w, r, auth.Session{}, status, "login", "", "Sign in", page{Error: msg, Data: loginData{Username: name}})
+		u.show(w, r, auth.Session{}, status, "login", "", "Sign in", page{Error: msg, Data: loginData{Username: name, Setup: u.setupOpen(r)}})
 		return
 	}
 	auth.SetCookie(w, p.Cookie)
@@ -40,6 +44,63 @@ func (u *ui) login(w http.ResponseWriter, r *http.Request) {
 		next = "/login/enroll"
 	}
 	http.Redirect(w, r, next, http.StatusSeeOther)
+}
+
+// The first admin (amendment A52): while the control plane has no admin, the
+// setup page takes the setup code its log shows, a username and a password,
+// then goes on to the authenticator's enrolment like a first sign-in.
+
+type setupData struct {
+	Username string
+}
+
+// setupOpen reports whether the setup page is open; a failed check closes it.
+func (u *ui) setupOpen(r *http.Request) bool {
+	open, err := u.Auth.SetupOpen(r.Context())
+	if err != nil {
+		u.Log.Error("check for an admin", "err", err)
+	}
+	return open
+}
+
+func (u *ui) setupPage(w http.ResponseWriter, r *http.Request) {
+	if !u.setupOpen(r) {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	u.show(w, r, auth.Session{}, http.StatusOK, "setup", "", "Set up the first admin", page{Data: setupData{}})
+}
+
+func (u *ui) setup(w http.ResponseWriter, r *http.Request) {
+	if !u.setupOpen(r) {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	name := strings.TrimSpace(r.PostFormValue("username"))
+	var (
+		p   auth.Pending
+		err error
+	)
+	if pw := r.PostFormValue("password"); pw != r.PostFormValue("password2") {
+		err = &validate.Error{Field: "password", Reason: "the two passwords differ"}
+	} else {
+		p, err = u.Auth.FirstAdmin(r.Context(), u.clientIP(r), r.PostFormValue("code"), name, pw)
+	}
+	if errors.Is(err, auth.ErrSetupDone) {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	if err != nil {
+		status, msg := message(err)
+		if status >= http.StatusInternalServerError {
+			u.Log.Error("first admin failed", "err", err)
+		}
+		u.show(w, r, auth.Session{}, status, "setup", "", "Set up the first admin", page{Error: msg, Data: setupData{Username: name}})
+		return
+	}
+	u.Log.Info("first admin created on the setup page", "user", p.Session.Username, "ip", u.clientIP(r))
+	auth.SetCookie(w, p.Cookie)
+	http.Redirect(w, r, "/login/enroll", http.StatusSeeOther)
 }
 
 func (u *ui) totpPage(w http.ResponseWriter, r *http.Request, s auth.Session) {

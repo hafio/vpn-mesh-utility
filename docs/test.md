@@ -33,6 +33,7 @@ it; `TestModuleBoundaries` forbids production code from importing it.
 | `TestName`, `TestDNSName`, `TestHostnameFoldsCase`, `TestUsername`, `TestEnum` | name grammars; the shared `hostile` payloads (metacharacters, quotes, newlines, NUL, traversal) are refused |
 | `TestIPv4`, `TestPrefix4`, `TestPortAndRange`, `TestEndpoint`, `TestKey32` | address, prefix (host bits rejected with a suggestion), port, endpoint and key shapes |
 | `TestTokenMasksTheValue`, `TestLocalTokenMasksTheValue` | a malformed join or local UI token never appears in the error; the error is a `*validate.Error` |
+| `TestSetupCode` | amendment A52: the setup code in groups or not, any case, spaces around; the canonical form back; a short, long, non-base32 or spaced code refused, never echoed |
 | `TestZone` | the DNS zone setting: 1-4 lowercase labels, no leading or trailing dot, not `local` or `localhost`; the hostile payloads refused. `TestDNSName` takes a record name without the zone, which is no longer trimmed |
 | `TestDomains` | the extra DNS domains (amendment A39): lower case, trailing dot dropped, sorted; at most 8, none twice or inside another, not the zone, inside it or around it, no .arpa but home.arpa, not local; every hostile payload refused |
 | `TestPipePath` | the Windows local API pipe: `\\.\pipe\` and a plain name only; remote pipes, file paths, nested names and the hostile payloads refused |
@@ -160,6 +161,7 @@ the Windows run do it and the race run checks the parameters alone).
 | | `TestAccountManagementValidates`, `TestCookieAndCSRF` | usernames and policy; the `__Host-` cookie's attributes; CSRF by header or form field only |
 | | `TestEnrolmentReusesItsSecretAndPeekDoesNotSlide`, `TestChangePassword` | a reloaded enrolment shows the same secret; background requests do not extend a session; a password change checks the current one and ends every session |
 | | `TestAdminsAndGrants` | amendment A49: a session carries its user's role and grants, read afresh (a demoted admin granted one mesh manages it alone at the next request); a second user is no admin unless asked; the last admin is neither demoted nor disabled; grants of no mesh, no user or a bad name refused; a second revoke changes nothing; grants audited in their mesh, roles as the control plane's; on an empty control plane the first user is an admin, and one asked for a mesh is refused and not added; a later user added for a mesh manages it alone, one for no such mesh is not added; an admin for one mesh and a bad mesh name refused |
+| `setup_test.go` | `TestFirstAdmin`, `TestFirstAdminAfterTheCLI` | amendment A52: a code only while no admin exists, a new one per call; an earlier code, a malformed one, a bad username or password store no one; 5 wrong codes lock that address (the right code included), not another; the right code makes an admin audited by `setup` and a session waiting for enrolment; then the code is gone and none is made; an admin made by `meshctl user add` meanwhile turns the logged code away |
 | `clientip_test.go` | `TestRateLimiter`, `TestClientIP` | the join limiter; X-Forwarded-For believed only from trusted proxies (right-most untrusted hop) |
 
 ## `internal/server/ui`
@@ -171,6 +173,7 @@ in through the UI itself (password, then TOTP enrolment).
 | --- | --- |
 | `TestEveryResponseCarriesTheSecurityHeaders` | CSP, `X-Frame-Options`, `nosniff` on pages, static files and 404s |
 | `TestSignInFlow`, `TestBadSignInsAreRefusedAndThrottled`, `TestEnrolmentQRCodeIsAPNG`, `TestWrongEnrolmentCodeKeepsTheSecret` | enrolment at the first sign-in, the code step afterwards (wrong code, missing CSRF, right code), no second enrolment or QR for an enrolled account, lockout after five failures, the QR as a same-origin PNG, a wrong enrolment code showing the same secret |
+| `TestFirstAdminFromTheWeb` | amendment A52: the sign-in page links `/setup` while there is no admin; another origin, differing passwords, a wrong or malformed code are refused and store no one; the logged code leads to the enrolment page and the log says so; afterwards `/setup` redirects to the sign-in and the link is gone |
 | `TestPagesNeedAFullSession` | redirects and 401s without a session; htmx refreshes get `HX-Redirect`; a pending session reaches no page |
 | `TestChangesNeedOriginAndCSRF` | missing or wrong CSRF token, another origin, no Origin: refused, and nothing written |
 | `TestTokenForARunningNode` | amendment A50: a token for a node seen within five minutes asks first and changes nothing; confirmed, it cuts the node off and says so |
@@ -283,7 +286,8 @@ and counts transactions, so a refusal can be shown to happen before any database
 `server_test.go`: `TestRunServesAndShutsDown` (health, the UI on the same listener, `secret.key`
 created, a 0600 admin socket, a second server on the same data dir refused, clean shutdown; Linux
 only), `TestRunGivesTheMeshIPv6` (M8: the first start gives the mesh a unique local /64; given up,
-it stays IPv4 only across a restart), `TestRunRefusesBadConfig`,
+it stays IPv4 only across a restart), `TestRunLogsTheSetupCode` (A52: a start without an admin logs a
+setup code the setup page takes; a start with an admin logs none), `TestRunRefusesBadConfig`,
 `TestListenAdminRefusesALongPath`. `zone_test.go`: `TestServerZone` (the zone the schedules default
 to: TZ's name, else where `/etc/localtime` links, else UTC for no link, a link outside a zone
 database or to an unknown zone). `import_test.go` (Linux only, flock): `TestImportRestoresAnExport`,

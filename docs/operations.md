@@ -504,13 +504,18 @@ wg0 itself deleted are put back and logged as `drift check: put back what change
 
 ## 8. The web UI
 
-The UI is served at the server's URL (`https://mesh.example.com/`), beside the agent API. Create
-the first user on the server host, then sign in; at the first sign-in the UI shows a QR code for
-an authenticator app (any TOTP app) and asks for one code to confirm it.
+The UI is served at the server's URL (`https://mesh.example.com/`), beside the agent API. Make
+the first admin right after the first start, in the browser or on the host (amendment A52):
 
-```
-docker exec -it <container> /app/meshctl user add admin
-```
+- **In the browser.** While there is no admin, the control plane logs a setup code at every start
+  (Dokploy: the app's logs; or `docker logs <container>`):
+  `no admin yet: open the setup page and enter this setup code ... setup_page=https://mesh.example.com/setup setup_code=abcd-efgh-...`.
+  Open that page (the sign-in page links it too), enter the latest code, a username and a password:
+  the code works once, and only until an admin exists.
+- **On the host:** `docker exec -it <container> /app/meshctl user add admin`.
+
+Either way the first sign-in then shows a QR code for an authenticator app (any TOTP app) and asks
+for one code to confirm it.
 
 Each mesh's pages are under `/m/<mesh>/` (amendment A49): the bar names the mesh, and with more
 than one a row below it switches between them; `/` opens the first mesh.

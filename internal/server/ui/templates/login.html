@@ -4,4 +4,7 @@
 <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
 <button type="submit">Sign in</button>
 </form>
+{{- if .Data.Setup}}
+<p class="hint">No admin yet: <a href="/setup">set up the first admin</a> with the setup code in the control plane's log.</p>
+{{- end}}
 {{end}}

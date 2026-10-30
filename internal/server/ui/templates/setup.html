@@ -1,0 +1,11 @@
+{{define "content"}}
+<p>This control plane has no admin yet. While that is so, its log shows a setup code at every start (in Dokploy, the app's logs; else <code>docker logs</code> on its container): enter the latest one with the first admin's name and password. Your authenticator app comes next.</p>
+<form method="post" action="/setup" class="narrow">
+<label>Setup code <input name="code" autocomplete="off" spellcheck="false" required autofocus></label>
+<label>Username <input name="username" value="{{.Data.Username}}" autocomplete="username" required></label>
+<label>Password <input name="password" type="password" minlength="12" required autocomplete="new-password"></label>
+<label>Repeat <input name="password2" type="password" minlength="12" required autocomplete="new-password"></label>
+<button type="submit">Create the admin</button>
+</form>
+<p class="hint">Or, on the control plane's host: <code>docker exec -it &lt;container&gt; /app/meshctl user add &lt;name&gt;</code>.</p>
+{{end}}

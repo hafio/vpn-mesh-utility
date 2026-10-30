@@ -160,10 +160,12 @@ func message(err error) (int, string) {
 		return http.StatusBadRequest, ve.Error()
 	case errors.Is(err, auth.ErrBadLogin), errors.Is(err, auth.ErrNoSession):
 		return http.StatusUnauthorized, err.Error()
+	case errors.Is(err, auth.ErrSetupCode):
+		return http.StatusForbidden, err.Error()
 	case errors.Is(err, auth.ErrBadCode), errors.Is(err, store.ErrTOTPReplay), errors.Is(err, auth.ErrWrongPassword),
 		errors.Is(err, auth.ErrNoEnrollment), errors.Is(err, auth.ErrHasTOTP):
 		return http.StatusBadRequest, err.Error()
-	case errors.Is(err, auth.ErrUserExists), errors.Is(err, auth.ErrLastAdmin):
+	case errors.Is(err, auth.ErrUserExists), errors.Is(err, auth.ErrLastAdmin), errors.Is(err, auth.ErrSetupDone):
 		return http.StatusConflict, err.Error()
 	case errors.Is(err, auth.ErrNoUser), errors.Is(err, auth.ErrNoMesh):
 		return http.StatusNotFound, err.Error()

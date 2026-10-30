@@ -210,6 +210,20 @@ func TestLocalTokenMasksTheValue(t *testing.T) {
 	}
 }
 
+func TestSetupCode(t *testing.T) {
+	want := "abcdefghijklmnopqrstuvwxyz234567"
+	for _, s := range []string{want, "abcd-efgh-ijkl-mnop-qrst-uvwx-yz23-4567", " ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567\n"} {
+		if got, err := SetupCode("setup_code", s); err != nil || got != want {
+			t.Errorf("SetupCode(%q) = %q, %v", s, got, err)
+		}
+	}
+	for _, s := range append([]string{"", want[:31], want + "a", "abcdefghijklmnopqrstuvwxyz234561", "abcd efgh ijkl mnop qrst uvwx yz23 4567"}, hostile...) {
+		if _, err := SetupCode("setup_code", s); err == nil || (len(s) > 8 && strings.Contains(err.Error(), s)) {
+			t.Errorf("SetupCode(%q) = %v", s, err)
+		}
+	}
+}
+
 func TestZone(t *testing.T) {
 	for _, s := range []string{"mesh", "home.arpa", "corp.internal", "a.b.c.d"} {
 		if got, err := Zone("dns_zone", s); err != nil || got != s {

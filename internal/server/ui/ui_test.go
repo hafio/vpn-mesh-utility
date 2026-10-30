@@ -74,6 +74,16 @@ func (f faultyDB) Tx(ctx context.Context, fn func(*store.Tx) error) error {
 
 func newRig(t *testing.T) *rig {
 	t.Helper()
+	r := newEmptyRig(t)
+	if _, err := r.svc.AddUser(context.Background(), "cli", "admin", password, auth.Access{Admin: true}); err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// newEmptyRig is a control plane without any user.
+func newEmptyRig(t *testing.T) *rig {
+	t.Helper()
 	clock := testfix.NewClock(testfix.Epoch)
 	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "mesh.db"), store.Options{Now: clock.Now})
 	if err != nil {
@@ -85,9 +95,6 @@ func newRig(t *testing.T) *rig {
 		t.Fatal(err)
 	}
 	svc := auth.New(auth.Config{DB: st, Sealer: sealer, Now: clock.Now, Params: auth.Params{Time: 1, MemoryKiB: 64, Threads: 1}})
-	if _, err := svc.AddUser(context.Background(), "cli", "admin", password, auth.Access{Admin: true}); err != nil {
-		t.Fatal(err)
-	}
 	r := &rig{t: t, st: st, svc: svc, clock: clock}
 	db := faultyDB{st: st, broken: &r.broken, pass: &r.pass}
 	hub := api.NewHub()
@@ -247,6 +254,73 @@ func TestSignInFlow(t *testing.T) {
 	}
 	if w := r.do(http.MethodGet, "/m/default/", pending, nil); w.Code != http.StatusOK {
 		t.Fatalf("the dashboard after the code = %d", w.Code)
+	}
+}
+
+// The first admin from the web UI (amendment A52): the sign-in page links
+// the setup page while there is no admin; the setup page wants the logged
+// code, and refuses another origin, mismatched passwords and a wrong code
+// without storing anyone; then it goes on to the authenticator's enrolment
+// and closes.
+func TestFirstAdminFromTheWeb(t *testing.T) {
+	r := newEmptyRig(t)
+	ctx := context.Background()
+	if w := r.do(http.MethodGet, "/login", "", nil); !strings.Contains(w.Body.String(), `href="/setup"`) {
+		t.Fatalf("the sign-in page without an admin:\n%s", w.Body)
+	}
+	if w := r.do(http.MethodGet, "/setup", "", nil); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `name="code"`) {
+		t.Fatalf("GET /setup = %d", w.Code)
+	}
+	code, err := r.svc.SetupCode(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	form := func(c, again string) url.Values {
+		return url.Values{"code": {c}, "username": {"boss"}, "password": {password}, "password2": {again}}
+	}
+	req := httptest.NewRequest(http.MethodPost, "/setup", strings.NewReader(form(code, password).Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "https://evil.example")
+	w := httptest.NewRecorder()
+	r.h.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("POST /setup from another origin = %d", w.Code)
+	}
+	for _, c := range []struct {
+		code, again string
+		status      int
+		text        string
+	}{
+		{code, "another password", http.StatusBadRequest, "the two passwords differ"},
+		{"aaaa-bbbb-cccc-dddd-eeee-ffff-gggg-hhhh", password, http.StatusForbidden, "the setup code is wrong"},
+		{"nope", password, http.StatusBadRequest, "the setup code from the control plane"},
+	} {
+		w := r.do(http.MethodPost, "/setup", "", form(c.code, c.again))
+		if w.Code != c.status || !strings.Contains(w.Body.String(), c.text) || !strings.Contains(w.Body.String(), `value="boss"`) {
+			t.Errorf("POST /setup with %q, %q = %d:\n%s", c.code, c.again, w.Code, w.Body)
+		}
+	}
+	if open, err := r.svc.SetupOpen(ctx); err != nil || !open {
+		t.Fatalf("a refused setup stored an admin: %v, %v", open, err)
+	}
+
+	w = r.do(http.MethodPost, "/setup", "", form(code, password))
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/login/enroll" {
+		t.Fatalf("POST /setup = %d %v", w.Code, w.Header())
+	}
+	if w := r.do(http.MethodGet, "/login/enroll", cookieOf(t, w), nil); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "boss") {
+		t.Fatalf("the enrolment after setup = %d", w.Code)
+	}
+	if !strings.Contains(r.logs.String(), "first admin created on the setup page") {
+		t.Errorf("log:\n%s", r.logs.String())
+	}
+	for _, w := range []*httptest.ResponseRecorder{r.do(http.MethodGet, "/setup", "", nil), r.do(http.MethodPost, "/setup", "", form(code, password))} {
+		if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/login" {
+			t.Errorf("the setup page with an admin = %d %v", w.Code, w.Header())
+		}
+	}
+	if w := r.do(http.MethodGet, "/login", "", nil); strings.Contains(w.Body.String(), `href="/setup"`) {
+		t.Error("the sign-in page still links the setup page")
 	}
 }
 
@@ -1177,7 +1251,7 @@ func TestEveryPageRenders(t *testing.T) {
 		t.Fatal(err)
 	}
 	data := map[string]any{
-		"login": loginData{}, "totp": nil, "enroll": enrollData{Account: "admin", Secret: "ABCD EFGH"}, "dashboard": dashboardData{},
+		"login": loginData{Setup: true}, "setup": setupData{Username: "boss"}, "totp": nil, "enroll": enrollData{Account: "admin", Secret: "ABCD EFGH"}, "dashboard": dashboardData{},
 		"nodes": nodesData{}, "enrollment": enrollmentData{Node: "vps-1", Token: "t"},
 		"node": nodeData{Node: api.NodeInfo{Rollback: &proto.Rollback{From: 5, To: 4, Reason: "no answer from the server"}}}, "remove": api.NodeInfo{Name: "x"}, "token": tokenData{Node: api.NodeInfo{Name: "x"}, Ago: time.Minute},
 		"versions": versionsData{}, "version": versionData{Current: true}, "audit": auditData{}, "settings": settingsData{},

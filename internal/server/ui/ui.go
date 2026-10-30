@@ -79,6 +79,8 @@ func New(d Deps) (http.Handler, error) {
 	mux.HandleFunc("GET /login/enroll", u.pending(u.enrollPage))
 	mux.HandleFunc("GET /login/enroll.png", u.pending(u.enrollQR))
 	mux.HandleFunc("POST /login/enroll", u.sameOrigin(u.pending(u.enroll)))
+	mux.HandleFunc("GET /setup", u.setupPage)
+	mux.HandleFunc("POST /setup", u.sameOrigin(u.setup))
 
 	// Everything else needs a full session: the control plane's pages...
 	for pattern, h := range map[string]handler{

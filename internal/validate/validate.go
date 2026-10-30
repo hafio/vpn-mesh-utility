@@ -67,6 +67,7 @@ var (
 	reLabel    = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 	reUser     = regexp.MustCompile(`^[a-z][a-z0-9_.-]{0,31}$`)
 	reToken    = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+	reSetup    = regexp.MustCompile(`^[a-z2-7]{32}$`)
 	rePipe     = regexp.MustCompile(`^\\\\\.\\pipe\\[A-Za-z0-9._-]{1,200}$`)
 	reVersion  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$`)
 	reSemVer   = regexp.MustCompile(`^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]{1,32})?$`)
@@ -268,6 +269,19 @@ func LocalToken(field, s string) (string, error) {
 		return "", fail(field, mask(s), "must be the 43-character token of a link `meshctl ui` printed")
 	}
 	return s, nil
+}
+
+// SetupCode validates the one-time code that creates the control plane's
+// first admin from the web UI (amendment A52): 32 base32 characters, as the
+// control plane's log prints them in dash-separated groups of four. Case,
+// the dashes and surrounding spaces do not matter; the canonical form is
+// returned. The value is masked in the error.
+func SetupCode(field, s string) (string, error) {
+	c := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(s), "-", ""))
+	if !reSetup.MatchString(c) {
+		return "", fail(field, mask(s), "must be the setup code from the control plane's log (eight groups of four letters and digits)")
+	}
+	return c, nil
 }
 
 // PipePath validates the Windows named pipe of the agent's local API:

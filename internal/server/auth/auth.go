@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/pquerna/otp"
@@ -52,6 +53,10 @@ type Service struct {
 	// dummy is verified when the username does not exist, so the answer
 	// takes as long as a wrong password.
 	dummy string
+	// setup is the sha256 of the setup code while the setup page is open
+	// (setup.go).
+	setupMu sync.Mutex
+	setup   []byte
 }
 
 // Errors a sign-in can end with. ErrBadLogin is the same for an unknown
@@ -442,13 +447,7 @@ func (s *Service) AddUser(ctx context.Context, actor, username, password string,
 				return err
 			}
 		}
-		if err := tx.InsertUser(&u); err != nil {
-			if errors.Is(err, store.ErrConflict) {
-				return fmt.Errorf("%w: %q", ErrUserExists, name)
-			}
-			return err
-		}
-		if err := tx.Audit(actor, 0, "user.add", name, map[string]any{"admin": u.Admin}); err != nil {
+		if err := insertUser(tx, actor, &u); err != nil {
 			return err
 		}
 		if m.ID == 0 {
@@ -463,6 +462,17 @@ func (s *Service) AddUser(ctx context.Context, actor, username, password string,
 		return store.User{}, err
 	}
 	return u, nil
+}
+
+// insertUser adds u and audits it as actor's.
+func insertUser(tx *store.Tx, actor string, u *store.User) error {
+	if err := tx.InsertUser(u); err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			return fmt.Errorf("%w: %q", ErrUserExists, u.Username)
+		}
+		return err
+	}
+	return tx.Audit(actor, 0, "user.add", u.Username, map[string]any{"admin": u.Admin})
 }
 
 // ErrFirstAdmin refuses a first user who would manage one mesh: the first

@@ -55,7 +55,8 @@ test files included. Change the rules there and here together.
 - **Secrets never reach logs, errors, audit details or exports**: join tokens and session
   cookies are stored as sha256 and masked in errors; passwords are argon2id hashes read from a
   terminal only; TOTP secrets are sealed with `secret.key`; private keys never leave the node
-  (phones are the one documented exception, spec Amendments A6).
+  (phones are the one documented exception, spec Amendments A6). The one secret the control
+  plane logs is the first-admin setup code, and only while no admin exists (A52).
 - **Container artifacts state their posture**: privileged false, `cap_drop: [ALL]`,
   `no-new-privileges=true`, explicit user, read-only root. meshctl generates no node deployment
   (amendment A48); the control plane's compose files and docs/containers.md's samples are the

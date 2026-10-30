@@ -157,12 +157,22 @@ func Run(ctx context.Context, c Config) error {
 			c.Log.Info("the mesh's IPv6 prefix", "mesh", m.Name, "prefix", v.Prefix, "nodes", v.Addressed)
 		}
 	}
+	// The issuer names the mesh in authenticator apps; no ':' (it separates
+	// issuer and account in the otpauth label).
+	users := auth.New(auth.Config{DB: st, Sealer: sealer, Now: c.Now, Issuer: "meshctl " + hostOf(origin)})
+	// No admin yet: the setup page takes the code logged here (amendment
+	// A52), the one secret the control plane logs; it dies with the first
+	// admin and at the next start.
+	switch code, err := users.SetupCode(ctx); {
+	case err != nil:
+		return fmt.Errorf("check for an admin: %w", err)
+	case code != "":
+		c.Log.Warn("no admin yet: open the setup page and enter this setup code, or run `meshctl user add <name>` on this host",
+			"setup_page", origin+"/setup", "setup_code", code)
+	}
 	web, err := ui.New(ui.Deps{
 		DB: st, Nodes: nodes, ServerURL: origin, Version: c.Version,
-		TrustedProxies: c.TrustedProxies, Now: c.Now, Log: c.Log,
-		// The issuer names the mesh in authenticator apps; no ':' (it
-		// separates issuer and account in the otpauth label).
-		Auth: auth.New(auth.Config{DB: st, Sealer: sealer, Now: c.Now, Issuer: "meshctl " + hostOf(origin)}),
+		TrustedProxies: c.TrustedProxies, Now: c.Now, Log: c.Log, Auth: users,
 	})
 	if err != nil {
 		return err
