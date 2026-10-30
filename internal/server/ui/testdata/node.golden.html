@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="/static/app.css">
 <script src="/static/htmx.min.js" defer></script>
 <script src="/static/forms.js" defer></script>
+<script src="/static/copy.js" defer></script>
 </head>
 <body hx-headers='{"X-CSRF-Token": "csrf-token"}'>
 <header>
@@ -41,8 +42,8 @@
 <p><span class="state warn">applying v5</span> last seen 12s ago</p>
 <table class="facts">
 <tr><th>Role</th><td>server</td></tr>
-<tr><th>Mesh IP</th><td>10.77.0.1</td></tr>
-<tr><th>Endpoint</th><td>203.0.113.10:51820</td></tr>
+<tr><th>Mesh IP</th><td><span class="copy">10.77.0.1</span></td></tr>
+<tr><th>Endpoint</th><td><span class="copy">203.0.113.10:51820</span></td></tr>
 <tr><th>Host</th><td>vps-1.example.com (linux/amd64)</td></tr>
 <tr><th>Agent</th><td>v1.0.0, kernel WireGuard</td></tr>
 <tr><th>Config version</th><td>applied v4, current v5</td></tr>

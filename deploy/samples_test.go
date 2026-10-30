@@ -35,8 +35,13 @@ var (
 )
 
 // machineID is the host's machine id, which every node's sample mounts
-// read-only: it pins the node to its machine (amendment A50).
-const machineID = "/etc/machine-id:/etc/machine-id:ro"
+// read-only: it pins the node to its machine (amendment A50). On Docker
+// Desktop for Windows it is a file beside the compose file holding the PC's
+// (machineIDBeside).
+const (
+	machineID       = "/etc/machine-id:/etc/machine-id:ro"
+	machineIDBeside = "./machine-id:/etc/machine-id:ro"
+)
 
 // tokenDir is where the global Swarm service reads each host's token.
 const tokenDir = "/etc/meshctl:/run/meshctl:ro"
@@ -106,13 +111,13 @@ func TestContainerSamples(t *testing.T) {
 					run++
 				}
 			}
-		case "":
+		case "", "powershell":
 		default:
-			t.Errorf("block %d is %q: the doc's samples are yaml or sh", i, b.lang)
+			t.Errorf("block %d is %q: the doc's samples are yaml, sh or powershell", i, b.lang)
 		}
 	}
-	if compose != 3 || stack != 3 || kube != 2 || run != 3 {
-		t.Errorf("checked %d compose services, %d Swarm services, %d Kubernetes containers, %d podman runs; want 3, 3, 2, 3",
+	if compose != 4 || stack != 3 || kube != 2 || run != 3 {
+		t.Errorf("checked %d compose services, %d Swarm services, %d Kubernetes containers, %d podman runs; want 4, 3, 2, 3",
 			compose, stack, kube, run)
 	}
 }
@@ -167,7 +172,7 @@ func checkComposeSample(t *testing.T, doc map[string]any) int {
 				t.Errorf("%s: volume %s", name, v)
 			}
 		}
-		if !control && !slices.Contains(list(svc["volumes"]), machineID) {
+		if vols := list(svc["volumes"]); !control && !slices.Contains(vols, machineID) && !slices.Contains(vols, machineIDBeside) {
 			t.Errorf("%s: no %s volume; a node needs the host's machine id", name, machineID)
 		}
 		for _, p := range list(svc["ports"]) {
@@ -271,7 +276,7 @@ func checkStackSample(t *testing.T, doc map[string]any) int {
 func sampleVolume(v string, node bool) bool {
 	src, dst, _ := strings.Cut(v, ":")
 	switch {
-	case node && v == machineID:
+	case node && (v == machineID || v == machineIDBeside):
 		return true
 	case dst == "/data":
 		// The samples run on Linux hosts: their paths are POSIX on every OS

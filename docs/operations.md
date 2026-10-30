@@ -138,9 +138,10 @@ docker exec <container> /app/meshctl node add laptop --role spoke --hub vps-1
 
 then, on the laptop as root, the install command it prints. The page the web UI shows after
 adding a node (or giving it a new token) also lists the ways to run it in a container -- a compose
-file, a Swarm service and, for its containers, the network commands -- filled with the node's
-values and token (amendment A53); a server node on its host's network runs from `install.sh` only. The laptop gets an address from
-10.77.2.0/24; `--hub` names the server that relays for it (default: the mesh's default hub, else
+file, a Swarm service and, for its containers, the network commands; a container-mode node also
+Docker Desktop on Windows, in PowerShell -- filled with the node's values and token (amendment
+A53); a server node on its host's network runs from `install.sh` only, and the page says why.
+The laptop gets an address from 10.77.2.0/24; `--hub` names the server that relays for it (default: the mesh's default hub, else
 the first server). A host without the WireGuard kernel module runs WireGuard inside the agent
 instead (wireguard-go on `/dev/net/tun`): the agent picks that itself (`agent run --wg-backend
 auto`), and `meshctl status` names the backend in use.
@@ -566,6 +567,10 @@ Forms are in sections and show only the fields that apply to what is chosen: a s
 and port for a server, the hub and keepalive for a spoke or phone, the containers' options for a
 node that can have them, the IPv6 fields for a family that has IPv6. A hidden field is not sent.
 Without JavaScript every field shows, and the control plane checks the form as always.
+
+Commands, compose files, join tokens, profiles, authenticator keys and a node's addresses and
+network values have a **Copy** button. Where the browser keeps the clipboard from the page (plain
+http other than localhost), the button selects the text instead, for Ctrl+C.
 
 Changes made in the UI go through the same path as `meshctl node`: versioned, audited under
 your user, pushed to the agents at once. The dashboard's 10 s refresh does not keep a session

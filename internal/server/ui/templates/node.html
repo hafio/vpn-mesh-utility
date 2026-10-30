@@ -3,9 +3,9 @@
 <p><span class="state {{.Class}}">{{.State}}</span> last seen {{.Seen}}</p>
 <table class="facts">
 <tr><th>Role</th><td>{{.Node.Role}}</td></tr>
-<tr><th>Mesh IP</th><td>{{if .Node.MeshIP}}{{.Node.MeshIP}}{{else}}none (IPv6 only){{end}}</td></tr>
+<tr><th>Mesh IP</th><td>{{if .Node.MeshIP}}<span class="copy">{{.Node.MeshIP}}</span>{{else}}none (IPv6 only){{end}}</td></tr>
 {{- if .Node.MeshIP6}}
-<tr><th>Mesh IPv6</th><td>{{.Node.MeshIP6}}</td></tr>
+<tr><th>Mesh IPv6</th><td><span class="copy">{{.Node.MeshIP6}}</span></td></tr>
 {{- end}}
 {{- if and .Node.Family (ne .Node.Family "dual")}}
 <tr><th>Families</th><td>{{.Node.Family}} only</td></tr>
@@ -23,9 +23,9 @@
 <tr><th>Groups</th><td>{{range $i, $g := .Node.Groups}}{{if $i}}, {{end}}{{$g}}{{end}} (<a href="{{$.Base}}/firewall/objects">firewall</a>)</td></tr>
 {{- end}}
 {{- if .IsServer}}
-<tr><th>Endpoint</th><td>{{if .Node.Endpoint}}{{.Node.Endpoint}}{{else}}not known yet{{end}}</td></tr>
+<tr><th>Endpoint</th><td>{{if .Node.Endpoint}}<span class="copy">{{.Node.Endpoint}}</span>{{else}}not known yet{{end}}</td></tr>
 {{- if .Node.Endpoint6}}
-<tr><th>Endpoint (IPv6)</th><td>{{.Node.Endpoint6}}</td></tr>
+<tr><th>Endpoint (IPv6)</th><td><span class="copy">{{.Node.Endpoint6}}</span></td></tr>
 {{- end}}
 {{- end}}
 {{- if .IsPhone}}
@@ -154,12 +154,12 @@
 <h2>Containers on the mesh</h2>
 <p>{{if eq .Mode "container"}}This node is in container mode: its agent runs in its own network namespace as the gateway of the containers on the {{.Name}} network, and only they are on the mesh. Start the agent with <code>MESHCTL_URL</code>, <code>MESHCTL_NAME</code> and the node's join token in <code>MESHCTL_TOKEN</code>; it joins on its first start.{{else}}This node's containers on the {{.Name}} network are on the mesh beside the host; its agent owns the bridge {{.BridgeName}}.{{end}} Create the network with these values: docs/containers.md has the samples (compose, podman run, Kubernetes).</p>
 <table class="facts">
-<tr><th>Network</th><td>{{.Name}}{{if ne .Mode "container"}}, on the bridge {{.BridgeName}}{{end}}</td></tr>
-<tr><th>Subnet</th><td>{{.Network}}{{with .Network6}}, {{.}}{{end}} (the whole mesh, on the link)</td></tr>
-<tr><th>IP range</th><td>{{.Range}}{{with .Range6}}, {{.}}{{end}}</td></tr>
-<tr><th>Gateway</th><td>{{.Bridge}}{{with .Bridge6}}, {{.}}{{end}}</td></tr>
+<tr><th>Network</th><td><span class="copy">{{.Name}}</span>{{if ne .Mode "container"}}, on the bridge {{.BridgeName}}{{end}}</td></tr>
+<tr><th>Subnet</th><td><span class="copy">{{.Network}}</span>{{with .Network6}}, <span class="copy">{{.}}</span>{{end}} (the whole mesh, on the link)</td></tr>
+<tr><th>IP range</th><td><span class="copy">{{.Range}}</span>{{with .Range6}}, <span class="copy">{{.}}</span>{{end}}</td></tr>
+<tr><th>Gateway</th><td><span class="copy">{{.Bridge}}</span>{{with .Bridge6}}, <span class="copy">{{.}}</span>{{end}}</td></tr>
 {{- if eq .Mode "container"}}
-<tr><th>Agent address</th><td>{{.Gateway}}{{with .Gateway6}}, {{.}}{{end}}</td></tr>
+<tr><th>Agent address</th><td><span class="copy">{{.Gateway}}</span>{{with .Gateway6}}, <span class="copy">{{.}}</span>{{end}}</td></tr>
 {{- end}}
 <tr><th>Services' DNS</th><td>{{.Gateway}}, search {{.Zone}}, ndots:1{{with .Resolvers}}; a Swarm service: {{range $i, $r := .}}{{if $i}}, {{end}}{{$r}}{{end}}{{end}}</td></tr>
 {{- if .ListenPort}}

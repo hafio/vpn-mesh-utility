@@ -20,6 +20,7 @@ it does not expect; [security.md](security.md) explains each one.
   - [1. The mesh network, once per host](#1-the-mesh-network-once-per-host)
   - [2. The agent](#2-the-agent)
   - [3. A service on the mesh](#3-a-service-on-the-mesh)
+  - [4. Docker Desktop on Windows](#4-docker-desktop-on-windows)
 - [A host-mode node's containers](#a-host-mode-nodes-containers)
 - [Every Swarm node a client node](#every-swarm-node-a-client-node)
 - [Container names](#container-names)
@@ -79,6 +80,7 @@ node's page in the web UI list them under "containers on the mesh". The samples 
 | any node above | this mesh | `install.sh`, or compose -- never a Swarm service |
 | every node of a Swarm, as clients | not this mesh | the global Swarm service below |
 | a laptop | -- | `install.sh`, or `install.ps1` on Windows |
+| a Windows PC's containers, in Docker Desktop | -- | container mode, from PowerShell (below) |
 | a phone | -- | the WireGuard app, by QR code |
 
 **Swarm over this mesh.** A Swarm whose nodes advertise their mesh addresses cannot run the agents
@@ -611,6 +613,68 @@ iptables -I DOCKER-USER -i meshctl0 -j ACCEPT
 iptables -I DOCKER-USER -o meshctl0 -j ACCEPT
 firewall-cmd --permanent --zone=trusted --add-interface=meshctl0 && firewall-cmd --reload
 ```
+
+### 4. Docker Desktop on Windows
+
+Docker Desktop runs Linux containers in its own Linux VM (WSL 2), so container mode works there as
+on Linux: the agent and the containers on its mesh network are on the mesh, Windows itself is not
+(`install.ps1` puts Windows on it). Windows containers cannot run the agent: WireGuard needs a
+driver on the host. In PowerShell, create the mesh network:
+
+<!-- sample: network-windows box -->
+```powershell
+docker network create --internal --subnet 10.77.0.0/16 --ip-range 10.77.128.128/25 `
+  --gateway 10.77.128.1 -o com.docker.network.bridge.name=meshctl0 meshctl-mesh
+```
+
+The agent's compose file mounts the PC's machine id from a file beside it, since Windows keeps the
+id in the registry, where no container reads it:
+
+<!-- sample: compose-windows box -->
+```yaml
+services:
+  meshctl:
+    image: ghcr.io/hafio/vpn-mesh-utility:1.0.0
+    environment:
+      MESHCTL_URL: https://mesh.example.com
+      MESHCTL_NAME: box
+      MESHCTL_TOKEN: ${MESHCTL_TOKEN:-}
+    user: "0:0"
+    privileged: false
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN, NET_BIND_SERVICE]
+    security_opt: ["no-new-privileges=true"]
+    read_only: true
+    tmpfs: ["/tmp:size=16m,mode=1777"]
+    devices: ["/dev/net/tun:/dev/net/tun"]
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.proxy_arp: "1"
+    volumes:
+      - meshctl-data:/data
+      - ./machine-id:/etc/machine-id:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [egress, meshctl-mesh]
+    restart: unless-stopped
+    mem_limit: 256m
+    pids_limit: 256
+networks:
+  egress: {}
+  meshctl-mesh:
+    external: true
+volumes:
+  meshctl-data: {}
+```
+
+In that folder, write the id and start the agent:
+
+```powershell
+(Get-ItemProperty HKLM:\SOFTWARE\Microsoft\Cryptography).MachineGuid | Set-Content -NoNewline -Encoding ascii machine-id
+$env:MESHCTL_TOKEN = '<token>'; docker compose up -d
+```
+
+The file holds the id the Windows agent reads too, so the control plane sees one machine (and warns
+about two nodes of one mesh on it). Services attach to the mesh network as in step 3.
 
 ## A host-mode node's containers
 

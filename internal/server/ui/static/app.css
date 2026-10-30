@@ -176,6 +176,14 @@ pre { color: var(--bright); background: var(--dark); border: 1px solid var(--lin
 pre code { color: inherit; background: none; padding: 0; }
 code.secret { font-size: 1.05em; user-select: all; outline: 1px dashed var(--green); }
 pre.secret { user-select: all; border-color: var(--green); }
+/* Copy buttons (static/copy.js): in a block's top right corner, after an
+   inline value. */
+.copyable { position: relative; }
+div.copyable > pre { padding-right: 5.5rem; }
+div.copyable > button.copy-button { position: absolute; top: 0.5rem; right: 0.5rem; }
+span.copyable > button.copy-button { margin-left: 0.4rem; vertical-align: middle; }
+button.copy-button { font-size: 0.78rem; font-weight: 600; padding: 0.15rem 0.6rem; color: var(--text); background: var(--surface); border: 1px solid var(--line-strong); box-shadow: none; }
+button.copy-button:hover { color: var(--text); background: var(--surface-2); border-color: var(--green); box-shadow: none; }
 svg.qr { display: block; width: 20rem; height: 20rem; max-width: 100%; padding: 1rem; background: #fff; border: 1px solid var(--line-strong); border-radius: 12px; }
 svg.qr path { fill: #000; }
 main img { background: #fff; padding: 0.75rem; border: 1px solid var(--line-strong); border-radius: 12px; }

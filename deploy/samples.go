@@ -36,7 +36,14 @@ const (
 	NetworkDocker    = "network-docker"
 	NetworkPodman    = "network-podman"
 	NetworkSwarm     = "network-swarm"
+	// Docker Desktop on Windows, with Linux containers: PowerShell, and the
+	// machine id from a file beside the compose file.
+	NetworkWindows = "network-windows"
+	ComposeWindows = "compose-windows"
 )
+
+// sampleFile is the template of a kind that shares another's.
+var sampleFile = map[string]string{NetworkWindows: NetworkDocker, ComposeWindows: ComposeContainer}
 
 // SampleParams are the values a node's samples are filled with: the node,
 // and for its containers the values `meshctl node show` lists.
@@ -65,7 +72,7 @@ type SampleParams struct {
 type Sample struct {
 	Kind  string
 	Title string
-	// Lang is the text's language: yaml or sh.
+	// Lang is the text's language: yaml, sh or powershell.
 	Lang string
 	Text string
 	// Run starts it; <token> stands for the join token. Empty for commands.
@@ -75,9 +82,14 @@ type Sample struct {
 }
 
 // view is what the templates read: the params with the derived values.
+// Windows is a Docker Desktop sample: Cont continues a command's line
+// (PowerShell's backtick) and the machine id is a file beside the compose
+// file.
 type view struct {
 	SampleParams
 	Image, Data, Label string
+	Windows            bool
+	Cont               string
 }
 
 // check holds every value to its grammar before any reaches a template.
@@ -100,7 +112,7 @@ func (p SampleParams) check(kind string) error {
 	if p.DataDir != "" {
 		keep(validate.POSIXPath("data_dir", p.DataDir))
 	}
-	if strings.HasPrefix(kind, "network-") || kind == ComposeContainer || kind == StackContainer {
+	if strings.HasPrefix(kind, "network-") || kind == ComposeContainer || kind == StackContainer || kind == ComposeWindows {
 		keep(validate.Name("network_name", p.NetworkName))
 		keep(validate.Name("bridge_name", p.BridgeName))
 		keep(validate.Prefix4("network", p.Network))
@@ -128,7 +140,10 @@ func RenderSample(kind string, p SampleParams) (Sample, error) {
 	if err := p.check(kind); err != nil {
 		return Sample{}, fmt.Errorf("render sample %s: %w", kind, err)
 	}
-	v := view{SampleParams: p, Image: Image + ":<release>", Data: "meshctl-data", Label: "meshctl." + p.Mesh}
+	v := view{SampleParams: p, Image: Image + ":<release>", Data: "meshctl-data", Label: "meshctl." + p.Mesh, Cont: `\`}
+	if kind == NetworkWindows || kind == ComposeWindows {
+		v.Windows, v.Cont = true, "`"
+	}
 	if _, err := validate.SemVer("version", p.Version); err == nil {
 		v.Image = Image + ":" + strings.TrimPrefix(p.Version, "v")
 	}
@@ -139,7 +154,11 @@ func RenderSample(kind string, p SampleParams) (Sample, error) {
 		v.Label += "." + p.Name
 	}
 	var b bytes.Buffer
-	if err := sampleTemplates.ExecuteTemplate(&b, kind+".tmpl", v); err != nil {
+	file := kind
+	if f, ok := sampleFile[kind]; ok {
+		file = f
+	}
+	if err := sampleTemplates.ExecuteTemplate(&b, file+".tmpl", v); err != nil {
 		return Sample{}, fmt.Errorf("render sample %s: %w", kind, err)
 	}
 	s.Kind, s.Text = kind, b.String()
@@ -159,12 +178,12 @@ func stackSuffix(name string) string {
 // network runs from install.sh (it needs firewalld on the host), so it gets
 // only its containers' network; a client node on the host network gets a
 // compose file and a Swarm service; a container-mode node its network, a
-// compose file and a Swarm service.
+// compose file and a Swarm service, then both for Docker Desktop on Windows.
 func NodeSamples(p SampleParams) ([]Sample, error) {
 	var kinds []string
 	switch {
 	case p.Container:
-		kinds = []string{NetworkDocker, NetworkPodman, NetworkSwarm, ComposeContainer, StackContainer}
+		kinds = []string{NetworkDocker, NetworkPodman, NetworkSwarm, ComposeContainer, StackContainer, NetworkWindows, ComposeWindows}
 	case !p.Server:
 		kinds = []string{ComposeHost, StackHost}
 		fallthrough
@@ -205,7 +224,15 @@ var sampleInfo = map[string]Sample{
 	StackGlobal: {Title: "Every labelled Swarm node a client node", Lang: "yaml",
 		Run:  "docker node update --label-add <label>=true <swarm node>   # each, with its token in /etc/meshctl/<mesh>.token\ndocker stack deploy -c <stack>.yml <stack>",
 		Note: swarmNote + " Each node joins with the token in its own /etc/meshctl/<mesh>.token (mode 0600), which can go once it joined."},
-	NetworkDocker: {Title: "The mesh network, with Docker (once per host)", Lang: "sh"},
-	NetworkPodman: {Title: "The mesh network, with Podman (once per host)", Lang: "sh"},
-	NetworkSwarm:  {Title: "The mesh network, for Swarm services (the first command on each node, the second once on a manager)", Lang: "sh"},
+	ComposeWindows: {Title: "Docker Desktop on Windows, in its own network namespace", Lang: "yaml",
+		Run: "(Get-ItemProperty HKLM:\\SOFTWARE\\Microsoft\\Cryptography).MachineGuid | Set-Content -NoNewline -Encoding ascii machine-id\n" +
+			"$env:MESHCTL_TOKEN = '<token>'; docker compose up -d",
+		Note: "Docker Desktop with Linux containers (WSL 2): only the containers on the mesh network are on the mesh, " +
+			"not Windows itself (install.ps1 puts Windows on it). Create the mesh network first, then run this in " +
+			"PowerShell in the compose file's folder: the first line writes this PC's machine id beside it, which pins " +
+			"the node to this PC."},
+	NetworkDocker:  {Title: "The mesh network, with Docker (once per host)", Lang: "sh"},
+	NetworkPodman:  {Title: "The mesh network, with Podman (once per host)", Lang: "sh"},
+	NetworkSwarm:   {Title: "The mesh network, for Swarm services (the first command on each node, the second once on a manager)", Lang: "sh"},
+	NetworkWindows: {Title: "The mesh network, with Docker Desktop on Windows (PowerShell, once per PC)", Lang: "powershell"},
 }

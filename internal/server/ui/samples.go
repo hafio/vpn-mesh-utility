@@ -12,8 +12,10 @@ import (
 
 // hostServerNote says why a server node on its host's network has no
 // container samples (amendment A53).
-const hostServerNote = "A server node on its host's network runs from install.sh: it needs firewalld on the host for its " +
-	"public port, the relay and the exit, which the image does not carry. To run it in Docker, add it in container mode."
+const hostServerNote = "A server node on its host's network runs from install.sh (above): it needs firewalld on the host " +
+	"for its public port, the relay and the exit, which the image does not carry, so it has no compose file. To run it in " +
+	"Docker, remove it and add it again in container mode (a node's mode is chosen when it is added): only its containers " +
+	"are then on the mesh, and this page shows its compose files."
 
 // nodeSamples are the compose, Swarm and network samples that fit node n,
 // filled with its values and token (amendment A53), and a note when a kind

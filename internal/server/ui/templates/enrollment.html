@@ -9,11 +9,13 @@
 {{- end}}
 <h2>Or, where meshctl is already installed</h2>
 <pre>{{.Data.Join}}</pre>
+{{- if or .Data.Samples .Data.Note}}
+<h2>Or in a container</h2>
 {{- with .Data.Note}}
 <p class="hint">{{.}}</p>
 {{- end}}
+{{- end}}
 {{- if .Data.Samples}}
-<h2>Or in a container</h2>
 <p class="hint">Starting points filled with this node's values; docs/containers.md explains each and when Swarm fits.</p>
 {{- range .Data.Samples}}
 <details class="sample">

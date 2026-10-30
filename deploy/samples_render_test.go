@@ -128,6 +128,7 @@ func TestNodeSamples(t *testing.T) {
 	hostServer := docSamples["vps"]
 	hostServer.NetworkName = ""
 	hostServer.Network = ""
+	container := []string{NetworkDocker, NetworkPodman, NetworkSwarm, ComposeContainer, StackContainer, NetworkWindows, ComposeWindows}
 	for _, c := range []struct {
 		name  string
 		p     SampleParams
@@ -139,12 +140,10 @@ func TestNodeSamples(t *testing.T) {
 			[]string{"inhibit_ipv4=true", "mode=unmanaged", "--config-from meshctl-mesh1-config meshctl-mesh1"}},
 		{"host server", hostServer, nil, nil},
 		{"host server with containers", docSamples["vps"], []string{NetworkDocker, NetworkPodman, NetworkSwarm}, []string{"nat-unprotected"}},
-		{"container spoke", base, []string{NetworkDocker, NetworkPodman, NetworkSwarm, ComposeContainer, StackContainer},
-			[]string{"--internal", "node.labels.meshctl.default.box"}},
-		{"container server", server, []string{NetworkDocker, NetworkPodman, NetworkSwarm, ComposeContainer, StackContainer},
+		{"container spoke", base, container, []string{"--internal", "node.labels.meshctl.default.box", "./machine-id:/etc/machine-id:ro"}},
+		{"container server", server, container,
 			[]string{`ports: ["51830:51821/udp"]`, "target: 51821", "published: 51830", "mode: host"}},
-		{"container dual stack", dual, []string{NetworkDocker, NetworkPodman, NetworkSwarm, ComposeContainer, StackContainer},
-			[]string{"--ipv6 --subnet fd10:77::/64", "net.ipv6.conf.all.proxy_ndp"}},
+		{"container dual stack", dual, container, []string{"--ipv6 --subnet fd10:77::/64", "net.ipv6.conf.all.proxy_ndp"}},
 	} {
 		got, err := NodeSamples(c.p)
 		if err != nil {
@@ -179,6 +178,34 @@ func TestNodeSamples(t *testing.T) {
 	}
 }
 
+// Docker Desktop on Windows gets PowerShell: the network command continues
+// its lines with a backtick, and the compose file mounts the PC's machine
+// id from a file beside it, which the first command writes.
+func TestWindowsSamples(t *testing.T) {
+	for kind, cont := range map[string]string{NetworkDocker: " \\", NetworkWindows: " `"} {
+		s, err := RenderSample(kind, docSamples["box"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(strings.TrimSuffix(s.Text, "\n"), "\n")
+		for i, l := range lines {
+			if (i < len(lines)-1) != strings.HasSuffix(l, cont) || strings.HasSuffix(l, " \\") && cont != " \\" {
+				t.Errorf("%s line %d: %q (lines but the last end in %q)", kind, i+1, l, cont)
+			}
+		}
+	}
+	s, err := RenderSample(ComposeWindows, docSamples["box"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	parseSample(t, s)
+	if !strings.Contains(s.Text, "- ./machine-id:/etc/machine-id:ro\n") || strings.Contains(s.Text, "- /etc/machine-id:") ||
+		!strings.Contains(s.Run, "MachineGuid | Set-Content -NoNewline -Encoding ascii machine-id\n") ||
+		!strings.HasSuffix(s.Run, "$env:MESHCTL_TOKEN = '<token>'; docker compose up -d") {
+		t.Errorf("compose-windows:\n%s\n%s", s.Text, s.Run)
+	}
+}
+
 // The image is the control plane's release; a build that is none says so.
 func TestSampleImage(t *testing.T) {
 	for version, want := range map[string]string{"v1.0.0-rc.6": Image + ":1.0.0-rc.6", "1.2.3": Image + ":1.2.3", "dev": Image + ":<release>"} {
@@ -210,6 +237,8 @@ func TestSamplesRefuseHostileValues(t *testing.T) {
 		{"data_dir", ComposeHost, func(p *SampleParams) { p.DataDir = `/data", "/:/host` }},
 		{"network", ComposeContainer, func(p *SampleParams) { p.Network = "10.77.0.0/16 --privileged" }},
 		{"bridge_name", NetworkDocker, func(p *SampleParams) { p.BridgeName = "meshctl0; reboot" }},
+		{"network_name", NetworkWindows, func(p *SampleParams) { p.NetworkName = "meshctl-mesh`; rm" }},
+		{"range", ComposeWindows, func(p *SampleParams) { p.Range = "$(whoami)" }},
 		{"gateway6", NetworkPodman, func(p *SampleParams) {
 			p.Network6, p.Range6, p.Gateway6 = "fd10:77::/64", "fd10:77::8000:8000/113", "x"
 		}},

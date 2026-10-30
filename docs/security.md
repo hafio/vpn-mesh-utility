@@ -59,7 +59,7 @@ The web UI (internal/server/ui) and the `meshctl user` commands share these acco
 
 | Concern | Protection |
 | --- | --- |
-| Script injection | `html/template` escapes every value by context. A strict CSP (`default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`) allows no inline script or style; `TestTemplatesHaveNoInlineScriptOrStyle` keeps the templates that way. htmx runs with `allowEval` and `allowScriptTags` off. The only other script is `static/forms.js`, from the same origin: it shows and hides a form's fields by their `data-show` conditions and disables the hidden ones; it makes no request and evaluates no text. |
+| Script injection | `html/template` escapes every value by context. A strict CSP (`default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`) allows no inline script or style; `TestTemplatesHaveNoInlineScriptOrStyle` keeps the templates that way. htmx runs with `allowEval` and `allowScriptTags` off. The only other scripts are `static/forms.js` and `static/copy.js`, from the same origin: the first shows and hides a form's fields by their `data-show` conditions and disables the hidden ones, the second puts an element's text on the clipboard when its Copy button is pressed (it only writes the clipboard, never reads it); neither makes a request or evaluates text. |
 | Third-party code | one file, htmx 2.0.11, vendored (checked against the npm registry's sha512 when vendored) and pinned by `HTMXSHA256` / `TestHTMXIsPinned`. No CDN, no fonts, no other assets. |
 | Cross-site requests | every request that changes something must carry `Origin: <--url>` and the session's CSRF token; the session cookie is SameSite=Strict as well. Sign-in POSTs need the same origin. |
 | Framing, sniffing, referrers | `X-Frame-Options: DENY`, `frame-ancestors 'none'`, `nosniff`, `Referrer-Policy: same-origin` (no referrer to other sites; `no-referrer` would make browsers send `Origin: null` on the UI's own posts, failing the origin check), `Cache-Control: no-store` on pages. |
@@ -200,7 +200,7 @@ the sample to this list and forbids every other widening token, including the ho
 | ports | one UDP port, on a server node only | the node's endpoint; nothing else is published |
 | root file system | read-only; `/tmp` is a 16 MiB tmpfs | |
 | storage | a named volume, or a host directory, at `/data` | keys and the cached config |
-| machine id | the host's `/etc/machine-id`, read-only | pins the node to its machine (amendment A50) |
+| machine id | the host's `/etc/machine-id`, read-only; on Docker Desktop for Windows a file beside the compose file holding the PC's `MachineGuid` | pins the node to its machine (amendment A50) |
 | runtime socket | the host's Docker (or Podman) API socket at `/var/run/docker.sock`, `:ro`; left out with `MESHCTL_RUNTIME_SOCKET=off` | the containers' names (amendment A38, below) |
 | limits | 256 MiB memory, 256 pids | |
 

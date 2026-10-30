@@ -1,7 +1,7 @@
 {{define "content"}}
 <p>Your account needs an authenticator app (any TOTP app). Scan the code, then enter the six digits it shows.</p>
 <img src="/login/enroll.png" alt="QR code for your authenticator app" width="256" height="256">
-<p>Or type the key by hand for <strong>{{.Data.Account}}</strong>: <code>{{.Data.Secret}}</code></p>
+<p>Or type the key by hand for <strong>{{.Data.Account}}</strong>: <code class="copy">{{.Data.Secret}}</code></p>
 <form method="post" action="/login/enroll" class="narrow">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
 <label>Code <input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required autofocus></label>

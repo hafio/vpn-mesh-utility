@@ -188,7 +188,7 @@ func (r *rig) signInAs(name string) (string, string) {
 func TestEveryResponseCarriesTheSecurityHeaders(t *testing.T) {
 	r := newRig(t)
 	cookie, _ := r.signIn()
-	for _, p := range []string{"/login", "/", "/m/default/nodes", "/m/default/versions", "/m/default/audit", "/m/default/settings", "/users", "/account", "/static/app.css", "/static/forms.js", "/nope"} {
+	for _, p := range []string{"/login", "/", "/m/default/nodes", "/m/default/versions", "/m/default/audit", "/m/default/settings", "/users", "/account", "/static/app.css", "/static/forms.js", "/static/copy.js", "/nope"} {
 		w := r.do(http.MethodGet, p, cookie, nil)
 		h := w.Header()
 		// same-origin keeps the browser's Origin on the UI's own posts
@@ -474,14 +474,15 @@ func TestEnrollmentShowsSamples(t *testing.T) {
 		notWant []string
 	}{
 		{url.Values{"name": {"vps-1"}, "role": {"server"}, "endpoint": {"203.0.113.10:51820"}},
-			[]string{"runs from install.sh"}, []string{"Or in a container"}},
+			[]string{"Or in a container", "runs from install.sh", "add it again in container mode"}, []string{"<details", "docker compose"}},
 		{url.Values{"name": {"nas"}, "role": {"spoke"}},
 			[]string{"Or in a container", "network_mode: host", "image: ghcr.io/hafio/vpn-mesh-utility:1.0.0", "MESHCTL_NAME: nas",
 				"node.labels.meshctl.default.nas == true", "docker stack deploy -c meshctl-default-nas.yml meshctl-default-nas"},
 			[]string{"runs from install.sh", "docker network create"}},
 		{url.Values{"name": {"box"}, "role": {"spoke"}, "mode": {"container"}},
 			[]string{"docker network create --internal --subnet 10.77.0.0/16", "--config-from meshctl-mesh-config meshctl-mesh",
-				"networks: [egress, meshctl-mesh]", "meshctl-default-box"}, []string{"network_mode: host"}},
+				"networks: [egress, meshctl-mesh]", "meshctl-default-box", "Docker Desktop on Windows", "- ./machine-id:/etc/machine-id:ro"},
+			[]string{"network_mode: host"}},
 		{url.Values{"name": {"phone"}, "role": {"phone"}}, nil, []string{"Or in a container", "runs from install.sh"}},
 	} {
 		body := post("/m/default/nodes", c.form)
@@ -621,7 +622,8 @@ func TestContainerModePages(t *testing.T) {
 	}
 	body := r.do(http.MethodGet, "/m/default/nodes/box", cookie, nil).Body.String()
 	for _, want := range []string{"container: only its containers are on the mesh", testfix.ContainerSubnet, "Containers on the mesh",
-		"<td>meshctl-mesh</td>", "<td>10.77.128.128/25</td>", "<tr><th>Agent address</th><td>10.77.128.2</td></tr>", "MESHCTL_TOKEN", "docs/containers.md"} {
+		`<td><span class="copy">meshctl-mesh</span></td>`, `<td><span class="copy">10.77.128.128/25</span></td>`,
+		`<tr><th>Agent address</th><td><span class="copy">10.77.128.2</span></td></tr>`, "MESHCTL_TOKEN", "docs/containers.md"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the container-mode page lacks %q", want)
 		}
@@ -663,7 +665,7 @@ func TestContainerModePages(t *testing.T) {
 	// A host-mode node with containers shows its network's values: the
 	// agent's bridge, no agent address of its own, the servers for Swarm.
 	body = r.do(http.MethodGet, "/m/default/nodes/pc", cookie, nil).Body.String()
-	for _, want := range []string{"Containers on the mesh", "on the bridge meshctl0", "<td>10.77.129.128/25</td>", "<td>10.77.129.1, search mesh, ndots:1",
+	for _, want := range []string{"Containers on the mesh", "on the bridge meshctl0", `<td><span class="copy">10.77.129.128/25</span></td>`, "<td>10.77.129.1, search mesh, ndots:1",
 		"a Swarm service: 10.77.0.1, 10.77.0.2"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the host-mode page lacks %q", want)
@@ -770,7 +772,7 @@ func TestDualStackPages(t *testing.T) {
 		t.Fatalf("the nodes page with IPv6:\n%s", body)
 	}
 	body = r.do(http.MethodGet, "/m/default/nodes/pad", cookie, nil).Body.String()
-	for _, want := range []string{"none (IPv6 only)", "<th>Mesh IPv6</th><td>fd10:77::2:1</td>", "ipv6 only", `name="ipv6_form"`, `<option value="ipv6" selected>`} {
+	for _, want := range []string{"none (IPv6 only)", `<th>Mesh IPv6</th><td><span class="copy">fd10:77::2:1</span></td>`, "ipv6 only", `name="ipv6_form"`, `<option value="ipv6" selected>`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("pad's page lacks %q", want)
 		}
@@ -801,7 +803,7 @@ func TestDualStackPages(t *testing.T) {
 	}
 	server := url.Values{"ipv6_form": {"1"}, "ip_family": {"dual"}, "endpoint": {testfix.VPS1.Endpoint}, "endpoint6": {"[2001:db8::10]:51820"},
 		"listen_port": {"51820"}, "mtu": {"1420"}}
-	if w := post("/m/default/nodes/vps-1", server); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "<th>Endpoint (IPv6)</th><td>[2001:db8::10]:51820</td>") {
+	if w := post("/m/default/nodes/vps-1", server); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `<th>Endpoint (IPv6)</th><td><span class="copy">[2001:db8::10]:51820</span></td>`) {
 		t.Fatalf("vps-1's IPv6 endpoint = %d\n%s", w.Code, w.Body)
 	}
 	server.Set("endpoint6", "203.0.113.10:51820")
@@ -1187,6 +1189,33 @@ func TestHTMXIsPinned(t *testing.T) {
 	for _, p := range []string{"/static/", "/static/ui.go", "/static/../ui.go"} {
 		if w := r.do(http.MethodGet, p, "", nil); w.Code == http.StatusOK {
 			t.Errorf("%s was served", p)
+		}
+	}
+}
+
+// Copy buttons (static/copy.js) go on every <pre>, a join token and each
+// element of class "copy": the authenticator's key and a node's addresses
+// and network values.
+func TestCopyButtonsHaveTargets(t *testing.T) {
+	js, err := fs.ReadFile(staticFS, "static/copy.js")
+	if err != nil || !bytes.Contains(js, []byte(`const targets = "pre, code.secret, .copy";`)) {
+		t.Fatalf("copy.js picks other elements (%v)", err)
+	}
+	for f, want := range map[string][]string{
+		"enrollment.html": {`<code class="secret">{{.Data.Token}}</code>`, `<pre>{{.Data.Install}}</pre>`, `<pre>{{.Text}}</pre>`},
+		"enroll.html":     {`<code class="copy">{{.Data.Secret}}</code>`},
+		"phone.html":      {`<pre class="secret">{{.Profile}}</pre>`},
+		"node.html": {`<span class="copy">{{.Node.MeshIP}}</span>`, `<span class="copy">{{.Node.Endpoint}}</span>`,
+			`<span class="copy">{{.Network}}</span>`, `<span class="copy">{{.Gateway}}</span>`},
+	} {
+		b, err := fs.ReadFile(templateFS, "templates/"+f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, w := range want {
+			if !bytes.Contains(b, []byte(w)) {
+				t.Errorf("%s has no %s", f, w)
+			}
 		}
 	}
 }
