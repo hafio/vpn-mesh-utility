@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -284,11 +285,17 @@ func TestInstallChecksTheDataDir(t *testing.T) {
 		{"/var/lib/meshctl", "cannot be under"},
 		{"/var/lib/meshctl/default", "cannot be under"},
 	} {
-		out, err := run(nil, "--data", c.data)
-		if err == nil || !strings.Contains(out, "--data") || !strings.Contains(out, c.want) || strings.Contains(out, "must run as root") {
-			t.Errorf("--data %q = %v\n%s", c.data, err, out)
+		// On Windows the MSYS sh parses its own command line again (quotes,
+		// line breaks), so the value reaches the script as given only
+		// through the environment there.
+		if runtime.GOOS != "windows" {
+			out, err := run(nil, "--data", c.data)
+			if err == nil || !strings.Contains(out, "--data") || !strings.Contains(out, c.want) || strings.Contains(out, "must run as root") {
+				t.Errorf("--data %q = %v\n%s", c.data, err, out)
+			}
 		}
-		if out, err := run([]string{"MESHCTL_DATA=" + c.data}); err == nil || !strings.Contains(out, c.want) {
+		if out, err := run([]string{"MESHCTL_DATA=" + c.data}); err == nil || !strings.Contains(out, "--data") || !strings.Contains(out, c.want) ||
+			strings.Contains(out, "must run as root") {
 			t.Errorf("MESHCTL_DATA=%q = %v\n%s", c.data, err, out)
 		}
 	}

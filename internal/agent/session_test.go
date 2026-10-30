@@ -44,13 +44,17 @@ func TestHelloAndBye(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := start(t, dir, "")
-	eventually(t, "the config applied after the hello", func() bool { return r.peers() == len(cfg.Peers) })
+	// host.json is written once the hello is answered, which may be after
+	// the config the session let through is applied.
+	eventually(t, "the config applied and host.json written after the hello", func() bool {
+		h, ok, _ := dir.Host()
+		return r.peers() == len(cfg.Peers) && ok && h.Machine == hostid.Local(testMachine)
+	})
 	if hellos, _, _ := f.sessions(); hellos != 1 {
 		t.Fatalf("%d hellos", hellos)
 	}
-	s, ok, err := dir.Session()
-	if h, hok, _ := dir.Host(); !ok || err != nil || s.Session != testfix.Session(testfix.VPS1.ID) || !hok || h.Machine != hostid.Local(testMachine) {
-		t.Fatalf("session.json %+v, %v, %v; host.json %+v", s, ok, err, h)
+	if s, ok, err := dir.Session(); !ok || err != nil || s.Session != testfix.Session(testfix.VPS1.ID) {
+		t.Fatalf("session.json %+v, %v, %v", s, ok, err)
 	}
 	r.stop(t)
 	if _, byes, _ := f.sessions(); byes != 1 {
