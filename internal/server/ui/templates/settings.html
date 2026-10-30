@@ -2,22 +2,26 @@
 <form method="post" action="{{$.Base}}/settings" class="grid">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
 {{- with .Data}}
+<fieldset class="section"><legend>Network</legend>
 <label>Mesh CIDR <input name="mesh_cidr" value="{{.MeshCIDR}}"{{if .CIDRLocked}} readonly{{end}}></label>
-{{- if .CIDRLocked}}
-<p class="hint">The mesh CIDR is fixed once the mesh has nodes.</p>
-{{- end}}
-<label>Default MTU <input name="default_mtu" value="{{.DefaultMTU}}"></label>
-<label>Upstream DNS <input name="upstream_dns" value="{{.UpstreamDNS}}"></label>
-<label>DNS zone <input name="dns_zone" value="{{.DNSZone}}"></label>
-<p class="hint">The zone every node answers, such as mesh or home.arpa. Changing it renames every node's name at once: <code>nas.{{.DNSZone}}</code> becomes <code>nas.</code> and the new zone.</p>
-<label>Extra DNS domains <input name="dns_extra_domains" value="{{.ExtraDomains}}" placeholder="none"></label>
-<p class="hint">Domains the mesh takes over, comma separated, such as example.lan: every node answers the containers' names in them (<code>hostname</code> plus <code>domainname</code>, aliases) and sends every other name in them to the upstream resolvers, and the hosts send the whole domain to the mesh -- not to their own resolver any more. At most 8; not the zone, inside it or around it, not the domain of the server's address, no .arpa but home.arpa.</p>
+<label>Default MTU <input name="default_mtu" value="{{.DefaultMTU}}" inputmode="numeric" pattern="[0-9]{1,4}" title="1280 to 1500"></label>
 <label>Default hub <select name="default_hub">
 <option value="">lowest-id server</option>
 {{- range .Servers}}
 <option value="{{.}}"{{if eq . $.Data.DefaultHub}} selected{{end}}>{{.}}</option>
 {{- end}}
 </select></label>
+{{- if .CIDRLocked}}
+<p class="hint">The mesh CIDR is fixed once the mesh has nodes.</p>
+{{- end}}
+</fieldset>
+<fieldset class="section"><legend>DNS</legend>
+<label>DNS zone <input name="dns_zone" value="{{.DNSZone}}"></label>
+<label>Upstream DNS <input name="upstream_dns" value="{{.UpstreamDNS}}" placeholder="1.1.1.1, 9.9.9.9"></label>
+<p class="hint">The zone every node answers, such as mesh or home.arpa. Changing it renames every node's name at once: <code>nas.{{.DNSZone}}</code> becomes <code>nas.</code> and the new zone.</p>
+<label>Extra DNS domains <input name="dns_extra_domains" value="{{.ExtraDomains}}" placeholder="none"></label>
+<p class="hint">Domains the mesh takes over, comma separated, such as example.lan: every node answers the containers' names in them (<code>hostname</code> plus <code>domainname</code>, aliases) and sends every other name in them to the upstream resolvers, and the hosts send the whole domain to the mesh -- not to their own resolver any more. At most 8; not the zone, inside it or around it, not the domain of the server's address, no .arpa but home.arpa.</p>
+</fieldset>
 {{- end}}
 <button type="submit">Save</button>
 </form>

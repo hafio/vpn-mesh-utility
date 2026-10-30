@@ -20,7 +20,7 @@ import (
 //go:embed templates/*.html
 var templateFS embed.FS
 
-//go:embed static/app.css static/htmx.min.js
+//go:embed static/app.css static/htmx.min.js static/forms.js
 var staticFS embed.FS
 
 // HTMXSHA256 pins the vendored htmx 2.0.11 (npm htmx.org, dist/htmx.min.js,

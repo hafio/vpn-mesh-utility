@@ -69,48 +69,66 @@
 <h2>Edit</h2>
 <form method="post" action="{{$.Base}}/nodes/{{.Node.Name}}" class="grid">
 <input type="hidden" name="csrf" value="{{$.CSRF}}">
-<label>Mesh IP <input name="mesh_ip" value="{{.Node.MeshIP}}"></label>
 {{- if .IPv6}}
 <input type="hidden" name="ipv6_form" value="1">
-<label>Mesh IPv6 <input name="mesh_ip6" value="{{.Node.MeshIP6}}" placeholder="none"></label>
+{{- end}}
+<fieldset class="section"><legend>Addresses</legend>
+{{- if .IPv6}}
 <label>Families <select name="ip_family">
 <option value="dual"{{if or (eq .Node.Family "dual") (eq .Node.Family "")}} selected{{end}}>IPv4 and IPv6</option>
 <option value="ipv4"{{if eq .Node.Family "ipv4"}} selected{{end}}>IPv4 only</option>
 <option value="ipv6"{{if eq .Node.Family "ipv6"}} selected{{end}}>IPv6 only</option>
 </select></label>
 {{- end}}
+<label data-show="ip_family!=ipv6">Mesh IP <input name="mesh_ip" value="{{.Node.MeshIP}}" placeholder="next free"></label>
+{{- if .IPv6}}
+<label data-show="ip_family!=ipv4">Mesh IPv6 <input name="mesh_ip6" value="{{.Node.MeshIP6}}" placeholder="next free"></label>
+{{- end}}
+<label>MTU <input name="mtu" value="{{.Node.MTU}}" required inputmode="numeric" pattern="[0-9]{1,4}" title="1280 to 1500"></label>
+</fieldset>
 {{- if .IsServer}}
-<label>Endpoint <input name="endpoint" value="{{.Node.Endpoint}}" placeholder="IPv4:port"></label>
-<label>Endpoint (IPv6) <input name="endpoint6" value="{{.Node.Endpoint6}}" placeholder="[IPv6]:port"></label>
-<label>Listen port <input name="listen_port" value="{{.Node.ListenPort}}"></label>
+<fieldset class="section"><legend>Server</legend>
+<label data-show="ip_family!=ipv6">Endpoint <input name="endpoint" value="{{.Node.Endpoint}}" placeholder="203.0.113.10:51820"></label>
+<label data-show="ip_family!=ipv4">Endpoint (IPv6) <input name="endpoint6" value="{{.Node.Endpoint6}}" placeholder="optional: [2001:db8::10]:51820"></label>
+<label>Listen port <input name="listen_port" value="{{.Node.ListenPort}}" required inputmode="numeric" pattern="[0-9]{1,5}" title="a port number, 1 to 65535"></label>
 {{- if not .InContainer}}
 <label><input type="checkbox" name="can_exit"{{if .Node.CanExit}} checked{{end}}> Can be an internet exit</label>
 {{- end}}
+</fieldset>
 {{- else}}
+<fieldset class="section"><legend>Connection</legend>
 <label>Hub <select name="hub">
-<option value="">default</option>
+<option value="">the mesh's default hub</option>
 {{- range .Servers}}
 <option value="{{.}}"{{if eq . $.Data.Node.Hub}} selected{{end}}>{{.}}</option>
 {{- end}}
 </select></label>
 {{- if not (or .IsPhone .InContainer)}}
-<label>Exit <select name="exit">
-<option value="">off</option>
+<label>Internet exit <select name="exit">
+<option value="">off: straight from the node</option>
 {{- range .Exits}}
-<option value="{{.}}"{{if eq . $.Data.Node.Exit}} selected{{end}}>{{.}}</option>
+<option value="{{.}}"{{if eq . $.Data.Node.Exit}} selected{{end}}>through {{.}}</option>
 {{- end}}
 </select></label>
 {{- end}}
-<label>Keepalive <input name="keepalive" value="{{.Node.Keepalive}}"></label>
+<label>Keepalive (seconds) <input name="keepalive" value="{{.Node.Keepalive}}" inputmode="numeric" pattern="[0-9]{1,5}" title="seconds, 0 to 3600; 0 sends none"></label>
+</fieldset>
 {{- end}}
-<label>MTU <input name="mtu" value="{{.Node.MTU}}"></label>
-{{- if not (or .IsPhone .InContainer)}}
-<label><input type="checkbox" name="containers"{{if .Node.ContainerSubnet}} checked{{end}}> Its containers on the mesh too</label>
+{{- if not .IsPhone}}
+<fieldset class="section"><legend>Containers</legend>
+{{- if .InContainer}}
+<p class="hint">In a container, its containers are always on the mesh.</p>
+{{- else}}
+<label data-show="ip_family!=ipv6"><input type="checkbox" name="containers"{{if .Node.ContainerSubnet}} checked{{end}}> Its containers on the mesh too</label>
 {{- end}}
-{{- if and .IPv6 (not .IsPhone)}}
-<label><input type="checkbox" name="containers6"{{if .Node.ContainerSubnet6}} checked{{end}}> Its containers' IPv6 too</label>
+{{- if .IPv6}}
+<label data-show="ip_family=dual{{if not .InContainer}};containers=on{{end}}"><input type="checkbox" name="containers6"{{if .Node.ContainerSubnet6}} checked{{end}}> Its containers' IPv6 too</label>
 {{- end}}
-<label>Groups (firewall) <input name="groups" value="{{range $i, $g := .Node.Groups}}{{if $i}}, {{end}}{{$g}}{{end}}" placeholder="none"></label>
+</fieldset>
+{{- end}}
+<fieldset class="section"><legend>Firewall</legend>
+<label>Groups <input name="groups" value="{{range $i, $g := .Node.Groups}}{{if $i}}, {{end}}{{$g}}{{end}}" placeholder="none, or laptops, office"></label>
+</fieldset>
 <button type="submit">Save</button>
 </form>
 {{- if .IsPhone}}

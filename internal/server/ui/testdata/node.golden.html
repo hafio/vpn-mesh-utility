@@ -7,6 +7,7 @@
 <title>vps-1 - meshctl</title>
 <link rel="stylesheet" href="/static/app.css">
 <script src="/static/htmx.min.js" defer></script>
+<script src="/static/forms.js" defer></script>
 </head>
 <body hx-headers='{"X-CSRF-Token": "csrf-token"}'>
 <header>
@@ -59,14 +60,22 @@
 <h2>Edit</h2>
 <form method="post" action="/m/default/nodes/vps-1" class="grid">
 <input type="hidden" name="csrf" value="csrf-token">
-<label>Mesh IP <input name="mesh_ip" value="10.77.0.1"></label>
-<label>Endpoint <input name="endpoint" value="203.0.113.10:51820" placeholder="IPv4:port"></label>
-<label>Endpoint (IPv6) <input name="endpoint6" value="" placeholder="[IPv6]:port"></label>
-<label>Listen port <input name="listen_port" value="51820"></label>
+<fieldset class="section"><legend>Addresses</legend>
+<label data-show="ip_family!=ipv6">Mesh IP <input name="mesh_ip" value="10.77.0.1" placeholder="next free"></label>
+<label>MTU <input name="mtu" value="1420" required inputmode="numeric" pattern="[0-9]{1,4}" title="1280 to 1500"></label>
+</fieldset>
+<fieldset class="section"><legend>Server</legend>
+<label data-show="ip_family!=ipv6">Endpoint <input name="endpoint" value="203.0.113.10:51820" placeholder="203.0.113.10:51820"></label>
+<label data-show="ip_family!=ipv4">Endpoint (IPv6) <input name="endpoint6" value="" placeholder="optional: [2001:db8::10]:51820"></label>
+<label>Listen port <input name="listen_port" value="51820" required inputmode="numeric" pattern="[0-9]{1,5}" title="a port number, 1 to 65535"></label>
 <label><input type="checkbox" name="can_exit"> Can be an internet exit</label>
-<label>MTU <input name="mtu" value="1420"></label>
-<label><input type="checkbox" name="containers"> Its containers on the mesh too</label>
-<label>Groups (firewall) <input name="groups" value="" placeholder="none"></label>
+</fieldset>
+<fieldset class="section"><legend>Containers</legend>
+<label data-show="ip_family!=ipv6"><input type="checkbox" name="containers"> Its containers on the mesh too</label>
+</fieldset>
+<fieldset class="section"><legend>Firewall</legend>
+<label>Groups <input name="groups" value="" placeholder="none, or laptops, office"></label>
+</fieldset>
 <button type="submit">Save</button>
 </form>
 

@@ -7,6 +7,7 @@
 <title>{{.Title}} - meshctl</title>
 <link rel="stylesheet" href="/static/app.css">
 <script src="/static/htmx.min.js" defer></script>
+<script src="/static/forms.js" defer></script>
 </head>
 <body{{if .CSRF}} hx-headers='{"X-CSRF-Token": "{{.CSRF}}"}'{{end}}>
 <header>

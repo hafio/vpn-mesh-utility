@@ -40,8 +40,8 @@
 <label>Username <input name="username" required autocomplete="off"></label>
 <label>Password <input name="password" type="password" minlength="12" required autocomplete="new-password"></label>
 <label>Repeat <input name="password2" type="password" minlength="12" required autocomplete="new-password"></label>
-<label>Manages <select name="mesh"><option value="">no mesh yet</option>{{range .Data.Meshes}}<option>{{.}}</option>{{end}}</select></label>
 <label><input type="checkbox" name="admin"> Admin (every mesh, the meshes and the users)</label>
+<label data-show="admin!=on">Manages <select name="mesh"><option value="">no mesh yet</option>{{range .Data.Meshes}}<option>{{.}}</option>{{end}}</select></label>
 <button type="submit">Add user</button>
 </form>
 {{end}}

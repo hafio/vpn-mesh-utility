@@ -7,6 +7,7 @@
 <title>Firewall - meshctl</title>
 <link rel="stylesheet" href="/static/app.css">
 <script src="/static/htmx.min.js" defer></script>
+<script src="/static/forms.js" defer></script>
 </head>
 <body hx-headers='{"X-CSRF-Token": "csrf-token"}'>
 <header>
@@ -55,6 +56,7 @@
 <h2>Add a policy</h2>
 <form method="post" action="/m/default/firewall/policies" class="grid">
 <input type="hidden" name="csrf" value="csrf-token">
+<fieldset class="section"><legend>Rule</legend>
 <label>Name <input name="name" value="" required maxlength="32"></label>
 <label>Action <select name="action">
 <option value="allow" selected>allow</option>
@@ -66,6 +68,8 @@
 <label>Position <input name="position" value="2" placeholder="last"></label>
 <label>Description <input name="description" value="" maxlength="200"></label>
 <label><input type="checkbox" name="disabled"> Disabled (kept, not enforced)</label>
+</fieldset>
+<fieldset class="section"><legend>When</legend>
 <fieldset class="days"><legend>Days (none: every day)</legend>
 <label><input type="checkbox" name="days" value="mon"> Mon</label>
 <label><input type="checkbox" name="days" value="tue"> Tue</label>
@@ -78,6 +82,7 @@
 <label>Starts <input type="time" name="start" value=""></label>
 <label>Ends <input type="time" name="end" value=""></label>
 <p class="hint">No days and no times: always. Days alone are whole days; an end before the start ends the next day. Times are in Asia/Singapore.</p>
+</fieldset>
 
 <button type="submit">Add policy</button>
 </form>

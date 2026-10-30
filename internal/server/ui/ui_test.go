@@ -187,7 +187,7 @@ func (r *rig) signInAs(name string) (string, string) {
 func TestEveryResponseCarriesTheSecurityHeaders(t *testing.T) {
 	r := newRig(t)
 	cookie, _ := r.signIn()
-	for _, p := range []string{"/login", "/", "/m/default/nodes", "/m/default/versions", "/m/default/audit", "/m/default/settings", "/users", "/account", "/static/app.css", "/nope"} {
+	for _, p := range []string{"/login", "/", "/m/default/nodes", "/m/default/versions", "/m/default/audit", "/m/default/settings", "/users", "/account", "/static/app.css", "/static/forms.js", "/nope"} {
 		w := r.do(http.MethodGet, p, cookie, nil)
 		h := w.Header()
 		// same-origin keeps the browser's Origin on the UI's own posts
@@ -1242,6 +1242,71 @@ func TestPageGoldens(t *testing.T) {
 			}
 			golden(t, name, got)
 		})
+	}
+}
+
+// Fields show and hide by their data-show conditions (static/forms.js):
+// every condition names a field of its own form and values that field can
+// take, so a typo cannot hide a field for good.
+func TestFormsShowWhatApplies(t *testing.T) {
+	pages, err := newRenderer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var (
+		reForm  = regexp.MustCompile(`(?s)<form .*?</form>`)
+		reName  = regexp.MustCompile(` name="([^"]+)"`)
+		reValue = regexp.MustCompile(` value="([^"]*)"`)
+		reShow  = regexp.MustCompile(` data-show="([^"]+)"`)
+	)
+	conditions := 0
+	for _, c := range []struct {
+		page string
+		data any
+	}{
+		{"nodes", nodesData{IPv6: true, Servers: []string{"vps-1"}}},
+		{"node", nodeData{IPv6: true, IsServer: true, Node: api.NodeInfo{Name: "vps-1", Role: "server"}}},
+		{"node", nodeData{IPv6: true, IsSpoke: true, Servers: []string{"vps-1"}, Exits: []string{"vps-2"}, Node: api.NodeInfo{Name: "nas", Role: "spoke"}}},
+		{"node", nodeData{IPv6: true, IsSpoke: true, InContainer: true, Node: api.NodeInfo{Name: "box", Role: "spoke"}}},
+		{"users", usersData{Meshes: []string{"default"}}},
+		{"dns", dnsData{View: api.DNSView{IPv6: true, Nodes: []string{"nas"}}}},
+	} {
+		body, err := pages.render(c.page, page{CSRF: "c", Data: c.data})
+		if err != nil {
+			t.Fatalf("render %s: %v", c.page, err)
+		}
+		for _, form := range reForm.FindAllString(string(body), -1) {
+			names, values := map[string]bool{}, map[string]bool{"": true, "on": true}
+			for _, m := range reName.FindAllStringSubmatch(form, -1) {
+				names[m[1]] = true
+			}
+			for _, m := range reValue.FindAllStringSubmatch(form, -1) {
+				values[m[1]] = true
+			}
+			for _, m := range reShow.FindAllStringSubmatch(form, -1) {
+				for _, alt := range strings.Split(m[1], "|") {
+					for _, cond := range strings.Split(alt, ";") {
+						conditions++
+						name, vals, ok := strings.Cut(cond, "!=")
+						if !ok {
+							name, vals, ok = strings.Cut(cond, "=")
+						}
+						if !ok || !names[name] {
+							t.Errorf("%s: data-show %q names no field of its form", c.page, m[1])
+							continue
+						}
+						for _, v := range strings.Split(vals, ",") {
+							if !values[v] {
+								t.Errorf("%s: data-show %q wants %s=%q, which no field of its form offers", c.page, m[1], name, v)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	if conditions < 20 {
+		t.Fatalf("only %d data-show conditions found; the forms lost theirs", conditions)
 	}
 }
 

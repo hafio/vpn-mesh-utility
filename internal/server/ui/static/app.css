@@ -209,8 +209,25 @@ form.narrow, form.grid {
 form.narrow { max-width: 30rem; }
 form.grid { grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr)); align-items: end; }
 form.inline { margin: 0; }
-label { display: grid; gap: 0.3rem; color: var(--muted); font-size: 0.88rem; font-weight: 600; }
+/* min-width 0: a grid item never grows past its cell to fit a long select option. */
+label { display: grid; gap: 0.3rem; min-width: 0; color: var(--muted); font-size: 0.88rem; font-weight: 600; }
 label:has(input[type=checkbox]) { display: flex; gap: 0.5rem; align-items: center; color: var(--text); font-weight: 400; }
+/* A form's sections span its grid and lay their own fields out the same
+   way; static/forms.js hides the ones that do not apply. */
+fieldset.section {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  align-items: end;
+  gap: 0.9rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0.6rem 1rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+fieldset.section > p, fieldset.section > fieldset { grid-column: 1 / -1; margin: 0; }
+[hidden] { display: none !important; }
 fieldset.days { display: flex; flex-wrap: wrap; gap: 0.3rem 0.9rem; margin: 0; padding: 0.6rem 0.8rem; border: 1px solid var(--line-strong); border-radius: 8px; }
 legend { color: var(--muted); font-size: 0.88rem; font-weight: 600; padding: 0 0.3rem; }
 input, select, textarea {
@@ -222,6 +239,8 @@ input, select, textarea {
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   padding: 0.5rem 0.7rem;
+  min-width: 0;
+  max-width: 100%;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--green); box-shadow: 0 0 0 3px rgba(0, 200, 149, 0.3); }

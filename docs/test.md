@@ -174,6 +174,7 @@ in through the UI itself (password, then TOTP enrolment).
 | `TestEveryResponseCarriesTheSecurityHeaders` | CSP, `X-Frame-Options`, `nosniff` on pages, static files and 404s |
 | `TestSignInFlow`, `TestBadSignInsAreRefusedAndThrottled`, `TestEnrolmentQRCodeIsAPNG`, `TestWrongEnrolmentCodeKeepsTheSecret` | enrolment at the first sign-in, the code step afterwards (wrong code, missing CSRF, right code), no second enrolment or QR for an enrolled account, lockout after five failures, the QR as a same-origin PNG, a wrong enrolment code showing the same secret |
 | `TestFirstAdminFromTheWeb` | amendment A52: the sign-in page links `/setup` while there is no admin; another origin, differing passwords, a wrong or malformed code are refused and store no one; the logged code leads to the enrolment page and the log says so; afterwards `/setup` redirects to the sign-in and the link is gone |
+| `TestFormsShowWhatApplies` | every `data-show` condition (static/forms.js) names a field of its own form and values that field offers, on the add-node, node (server, spoke, container), users and DNS forms |
 | `TestPagesNeedAFullSession` | redirects and 401s without a session; htmx refreshes get `HX-Redirect`; a pending session reaches no page |
 | `TestChangesNeedOriginAndCSRF` | missing or wrong CSRF token, another origin, no Origin: refused, and nothing written |
 | `TestTokenForARunningNode` | amendment A50: a token for a node seen within five minutes asks first and changes nothing; confirmed, it cuts the node off and says so |

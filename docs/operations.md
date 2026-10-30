@@ -533,6 +533,11 @@ than one a row below it switches between them; `/` opens the first mesh.
 | Users | (admins) add users, an admin or not; grant and revoke their meshes; make or stop making them admins; disable them, reset their authenticator |
 | Account | change your password (signs you out everywhere) |
 
+Forms are in sections and show only the fields that apply to what is chosen: a server's endpoint
+and port for a server, the hub and keepalive for a spoke or phone, the containers' options for a
+node that can have them, the IPv6 fields for a family that has IPv6. A hidden field is not sent.
+Without JavaScript every field shows, and the control plane checks the form as always.
+
 Changes made in the UI go through the same path as `meshctl node`: versioned, audited under
 your user, pushed to the agents at once. The dashboard's 10 s refresh does not keep a session
 alive; 12 hours without using the UI signs you out, and 7 days always do.

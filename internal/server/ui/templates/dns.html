@@ -36,14 +36,14 @@
 {{- with .Data.Form}}
 <label>Name <input name="name" value="{{.Name}}" required placeholder="files or files.office"></label>
 <label>Follows a node <select name="node">
-<option value="">- (a fixed IP)</option>
+<option value="">none: a fixed address</option>
 {{- range $.Data.View.Nodes}}
 <option value="{{.}}"{{if eq . $.Data.Form.Node}} selected{{end}}>{{.}}</option>
 {{- end}}
 </select></label>
-<label>or a fixed mesh IP <input name="ip" value="{{.IP}}" placeholder="10.77.1.200"></label>
+<label data-show="node=">Fixed mesh IP <input name="ip" value="{{.IP}}" placeholder="10.77.1.200"></label>
 {{- if $.Data.View.IPv6}}
-<label>and/or a fixed mesh IPv6 <input name="ip6" value="{{.IP6}}" placeholder="optional"></label>
+<label data-show="node=">Fixed mesh IPv6 <input name="ip6" value="{{.IP6}}" placeholder="optional, with or without the IPv4 one"></label>
 {{- end}}
 {{- end}}
 <button type="submit">Add record</button>

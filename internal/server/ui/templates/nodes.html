@@ -14,42 +14,59 @@
 <form method="post" action="{{$.Base}}/nodes" class="grid">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
 {{- with .Data.Form}}
-<label>Name <input name="name" value="{{.Name}}" required pattern="[a-z0-9-]{1,32}"></label>
+<fieldset class="section"><legend>Node</legend>
+<label>Name <input name="name" value="{{.Name}}" required pattern="[a-z0-9-]{1,32}" title="1 to 32 of a-z, 0-9 and -" maxlength="32" placeholder="vps-1, nas, laptop" autocomplete="off"></label>
 <label>Role <select name="role">
-<option value="server"{{if eq .Role "server"}} selected{{end}}>server (VPS)</option>
-<option value="spoke"{{if eq .Role "spoke"}} selected{{end}}>spoke (NAS, laptop)</option>
+<option value="server"{{if eq .Role "server"}} selected{{end}}>server (VPS with a public address)</option>
+<option value="spoke"{{if eq .Role "spoke"}} selected{{end}}>spoke (NAS, laptop: dials the servers)</option>
 <option value="phone"{{if eq .Role "phone"}} selected{{end}}>phone (WireGuard app, by QR code)</option>
 </select></label>
-<label>Mesh IP <input name="ip" value="{{.IP}}" placeholder="next free"></label>
-<label>Endpoint (servers) <input name="endpoint" value="{{.Endpoint}}" placeholder="detected at join"></label>
-<label>Endpoint IPv6 (servers) <input name="endpoint6" value="{{.Endpoint6}}" placeholder="[IPv6]:port, optional"></label>
-<label>Listen port (servers) <input name="listen_port" value="{{.ListenPort}}" placeholder="51820"></label>
-<label>Keepalive (spokes, phones) <input name="keepalive" value="{{.Keepalive}}" placeholder="25"></label>
-<label>MTU <input name="mtu" value="{{.MTU}}" placeholder="mesh default"></label>
-<label><input type="checkbox" name="can_exit"{{if .CanExit}} checked{{end}}> Can be an internet exit (servers)</label>
-<label><input type="checkbox" name="always_on"{{if .AlwaysOn}} checked{{end}}> Always-on spoke (NAS)</label>
-<label>Mode (servers, spokes) <select name="mode">
-<option value="host"{{if ne .Mode "container"}} selected{{end}}>host: the whole machine is on the mesh</option>
-<option value="container"{{if eq .Mode "container"}} selected{{end}}>container: only its containers are on the mesh</option>
+<label data-show="role=server,spoke">Runs <select name="mode">
+<option value="host"{{if ne .Mode "container"}} selected{{end}}>on the host: the whole machine is on the mesh</option>
+<option value="container"{{if eq .Mode "container"}} selected{{end}}>in a container: only its containers are on the mesh</option>
 </select></label>
-<label><input type="checkbox" name="containers"{{if .Containers}} checked{{end}}> Its containers on the mesh too (host mode)</label>
-<label>Groups (firewall) <input name="groups" value="{{.Groups}}" placeholder="laptops, office"></label>
+<label>Firewall groups <input name="groups" value="{{.Groups}}" placeholder="none, or laptops, office"></label>
+</fieldset>
+<fieldset class="section" data-show="role=server"><legend>Server</legend>
+<p class="hint">Spokes and phones dial a server at its endpoint: its public address and WireGuard port.</p>
+<label data-show="ip_family!=ipv6">Endpoint <input name="endpoint" value="{{.Endpoint}}" placeholder="detected at join, or 203.0.113.10:51820"></label>
+<label data-show="ip_family!=ipv4">Endpoint (IPv6) <input name="endpoint6" value="{{.Endpoint6}}" placeholder="optional: [2001:db8::10]:51820"></label>
+<label>Listen port <input name="listen_port" value="{{.ListenPort}}" inputmode="numeric" pattern="[0-9]{1,5}" title="a port number, 1 to 65535" placeholder="the mesh's default"></label>
+<label data-show="mode=host"><input type="checkbox" name="can_exit"{{if .CanExit}} checked{{end}}> Can be an internet exit</label>
+<p class="hint" data-show="mode=container">In a container the agent cannot see the host's public address: give the endpoint, with the UDP port the host publishes.</p>
+</fieldset>
+<fieldset class="section" data-show="role=spoke,phone"><legend>Connection</legend>
+<label>Hub <select name="hub">
+<option value="">the mesh's default hub</option>
+{{- range $.Data.Servers}}
+<option value="{{.}}"{{if eq . $.Data.Form.Hub}} selected{{end}}>{{.}}</option>
+{{- end}}
+</select></label>
+<label>Keepalive (seconds) <input name="keepalive" value="{{.Keepalive}}" inputmode="numeric" pattern="[0-9]{1,5}" title="seconds, 1 to 3600; empty for 25" placeholder="25"></label>
+<label data-show="role=spoke"><input type="checkbox" name="always_on"{{if .AlwaysOn}} checked{{end}}> Always on (a NAS: an address from the always-on range)</label>
+</fieldset>
+<fieldset class="section"><legend>Addresses</legend>
 {{- if $.Data.IPv6}}
 <label>Families <select name="ip_family">
 <option value="dual"{{if or (eq .Family "dual") (eq .Family "")}} selected{{end}}>IPv4 and IPv6</option>
 <option value="ipv4"{{if eq .Family "ipv4"}} selected{{end}}>IPv4 only</option>
 <option value="ipv6"{{if eq .Family "ipv6"}} selected{{end}}>IPv6 only</option>
 </select></label>
-<label>Mesh IPv6 <input name="ip6" value="{{.IP6}}" placeholder="next free"></label>
-<label><input type="checkbox" name="containers6"{{if .Containers6}} checked{{end}}> Its containers' IPv6 too</label>
 {{- end}}
+<label data-show="ip_family!=ipv6">Mesh IP <input name="ip" value="{{.IP}}" placeholder="next free"></label>
+{{- if $.Data.IPv6}}
+<label data-show="ip_family!=ipv4">Mesh IPv6 <input name="ip6" value="{{.IP6}}" placeholder="next free"></label>
 {{- end}}
-<label>Hub (spokes, phones) <select name="hub">
-<option value="">default</option>
-{{- range .Data.Servers}}
-<option value="{{.}}"{{if eq . $.Data.Form.Hub}} selected{{end}}>{{.}}</option>
+<label>MTU <input name="mtu" value="{{.MTU}}" inputmode="numeric" pattern="[0-9]{1,4}" title="1280 to 1500; empty for the mesh's default" placeholder="the mesh's default (1280-1500)"></label>
+</fieldset>
+<fieldset class="section" data-show="role=server,spoke;ip_family!=ipv6"><legend>Containers</legend>
+<label data-show="mode=host"><input type="checkbox" name="containers"{{if .Containers}} checked{{end}}> Its containers on the mesh too</label>
+<p class="hint" data-show="mode=container">In a container, its containers are always on the mesh; the node's page then shows the network to create.</p>
+{{- if $.Data.IPv6}}
+<label data-show="ip_family=dual;containers=on|ip_family=dual;mode=container"><input type="checkbox" name="containers6"{{if .Containers6}} checked{{end}}> Its containers' IPv6 too</label>
 {{- end}}
-</select></label>
+</fieldset>
+{{- end}}
 <button type="submit">Add node</button>
 </form>
 {{end}}

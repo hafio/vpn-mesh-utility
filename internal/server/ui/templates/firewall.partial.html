@@ -9,6 +9,7 @@
 <p class="hint">From, To and members take references -- <code>zone:NAME</code> (policies only), <code>node:NAME</code>, <code>containers:NAME</code> (a node's container network), <code>group:NAME</code>, <code>role:server</code>, <code>role:spoke</code>, <code>role:phone</code>, <code>addr:NAME</code> -- and addresses: <code>10.77.1.5</code>, <code>10.77.1.0/24</code>, <code>10.77.1.5-10.77.1.20</code>. Services take <code>svc:NAME</code>, <code>tcp/22</code>, <code>udp/1000-2000</code>, <code>tcp</code> (every port) and <code>icmp</code> (ping). Separate entries with commas; empty is any.</p>
 {{end}}
 {{define "fwpolicyfields"}}
+<fieldset class="section"><legend>Rule</legend>
 <label>Name <input name="name" value="{{.Name}}" required maxlength="32"></label>
 <label>Action <select name="action">
 <option value="allow"{{if eq .Action "allow"}} selected{{end}}>allow</option>
@@ -20,6 +21,8 @@
 <label>Position <input name="position" value="{{.Position}}" placeholder="last"></label>
 <label>Description <input name="description" value="{{.Description}}" maxlength="200"></label>
 <label><input type="checkbox" name="disabled"{{if .Disabled}} checked{{end}}> Disabled (kept, not enforced)</label>
+</fieldset>
+<fieldset class="section"><legend>When</legend>
 <fieldset class="days"><legend>Days (none: every day)</legend>
 {{- range .DayBoxes}}
 <label><input type="checkbox" name="days" value="{{.Value}}"{{if .Checked}} checked{{end}}> {{.Label}}</label>
@@ -28,6 +31,7 @@
 <label>Starts <input type="time" name="start" value="{{.Start}}"></label>
 <label>Ends <input type="time" name="end" value="{{.End}}"></label>
 <p class="hint">No days and no times: always. Days alone are whole days; an end before the start ends the next day.{{if .Zone}} Times are in {{.Zone}}.{{end}}</p>
+</fieldset>
 {{end}}
 
 {{define "fwzonefields"}}
