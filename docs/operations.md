@@ -119,7 +119,7 @@ stays `/run/meshctl/<mesh>.sock`, and local commands find the data dir the way e
 `--data` or `MESHCTL_DATA` that holds another mesh's node than `--mesh` is refused, so a variable
 left set for one mesh never acts on another. The directory must be:
 
-- an absolute path of letters, digits, `.`, `_`, `-` and `/`;
+- an absolute path of letters, digits, `.`, `_`, `@`, `-` and `/` (`@` for Synology's `@`-folders);
 - new, empty, or an earlier meshctl data dir;
 - used by one mesh only;
 - outside `/home`, `/root`, `/run`, `/tmp`, `/var/tmp` and `/var/lib/meshctl`.

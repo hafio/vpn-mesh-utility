@@ -72,6 +72,7 @@ var (
 	reVersion  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$`)
 	reSemVer   = regexp.MustCompile(`^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]{1,32})?$`)
 	rePosix    = regexp.MustCompile(`^/[A-Za-z0-9._/-]*$`)
+	reDataDir  = regexp.MustCompile(`^/[A-Za-z0-9._@/-]+$`)
 	reArgChars = regexp.MustCompile(`^[A-Za-z0-9 ._/:=,"-]+$`)
 )
 
@@ -366,6 +367,22 @@ func POSIXPath(field, s string) (string, error) {
 	}
 	if c := path.Clean(s); c != s && c+"/" != s {
 		return "", fail(field, s, "must be a clean path; did you mean "+c+"?")
+	}
+	return s, nil
+}
+
+// DataDir validates a host directory install.sh took for --data (amendments
+// A54, A56), as meshctl reads it back from the mesh's record: the grammar
+// the script's own check holds --data to, which a systemd unit file takes
+// unquoted -- an absolute path of A-Z, a-z, 0-9, '.', '_', '@', '-' and '/'
+// (Synology keeps package data in @-folders), with no "." or ".." segment,
+// "//" or trailing '/'.
+func DataDir(field, s string) (string, error) {
+	if len(s) > 1024 || !reDataDir.MatchString(s) {
+		return "", fail(field, s, "must be an absolute path of A-Z, a-z, 0-9, '.', '_', '@', '-' and '/'")
+	}
+	if c := path.Clean(s); c != s || s == "/" {
+		return "", fail(field, s, "must not hold '.' or '..' parts, '//' or a trailing '/'")
 	}
 	return s, nil
 }

@@ -375,7 +375,8 @@ func installedDir(e *env, mesh string) (string, error) {
 
 // recorded is the data dir e.records/<mesh>.env records for mesh's agent;
 // "" when there is no record, or no records on this platform. A record that
-// cannot be read, or that records no plain absolute path, is the error.
+// cannot be read, or that records no path install.sh's --data takes
+// (validate.DataDir), is the error.
 func recorded(e *env, mesh string) (string, error) {
 	if e.records == "" {
 		return "", nil
@@ -392,7 +393,7 @@ func recorded(e *env, mesh string) (string, error) {
 	}
 	for _, line := range strings.Split(string(b), "\n") {
 		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "MESHCTL_DATA="); ok {
-			if _, err := validate.POSIXPath(file, v); err != nil {
+			if _, err := validate.DataDir(file, v); err != nil {
 				return "", fmt.Errorf("%w: correct or remove that file", err)
 			}
 			return v, nil

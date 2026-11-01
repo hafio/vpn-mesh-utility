@@ -366,7 +366,7 @@ func TestInstallChecksTheDataDir(t *testing.T) {
 		if os.Geteuid() == 0 {
 			continue // past the checks a root run would download from the test origin, or uninstall
 		}
-		for _, data := range []string{"/volume1/meshctl/default", "/srv/meshctl-lab_1.0", "/var/lib/meshctl-nas"} {
+		for _, data := range []string{"/volume1/meshctl/default", "/srv/meshctl-lab_1.0", "/var/lib/meshctl-nas", "/v2/@apps/meshctl"} {
 			if out, err := runScript(t, s.name, nil, append(base[s.name], "--data", data)...); err == nil || !strings.Contains(out, "must run as root") {
 				t.Errorf("%s --data %q stopped before the root check: %v\n%s", s.name, data, err, out)
 			}
@@ -572,8 +572,10 @@ func hereDoc(t *testing.T, name string) []string {
 
 // The drop-in the scripts write for --data (amendments A54-A56) waits for
 // the data dir's file system, drops the instance's own state directory under
-// /var/lib/meshctl, lets it write in the data dir and runs the unit's command
-// on it, with the socket meshctl's local commands use for an installed mesh
+// /var/lib/meshctl, lets it write in the data dir only -- the unit's
+// ReadWritePaths=/var/lib/meshctl is reset, since a --data host may have no
+// /var/lib/meshctl and systemd will not start a unit whose path is missing --
+// and runs the unit's command on it, with the socket meshctl's local commands use for an installed mesh
 // (/run/meshctl/<mesh>.sock, agent.MeshSocket): nothing else, and no path but
 // the checked one.
 func TestInstallDataDropIn(t *testing.T) {
@@ -586,7 +588,8 @@ func TestInstallDataDropIn(t *testing.T) {
 		}
 		got = append(got, section+" "+line)
 	}
-	want := []string{"[Unit] RequiresMountsFor=$1", "[Service] StateDirectory=", "[Service] ReadWritePaths=$1", "[Service] ExecStart=",
+	want := []string{"[Unit] RequiresMountsFor=$1", "[Service] StateDirectory=", "[Service] ReadWritePaths=", "[Service] ReadWritePaths=$1",
+		"[Service] ExecStart=",
 		"[Service] ExecStart=" + wantService["ExecStart"] + " --data $1 --socket /run/meshctl/%i.sock"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("drop-in %q, want exactly %q", got, want)

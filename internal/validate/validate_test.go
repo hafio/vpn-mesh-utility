@@ -354,6 +354,20 @@ func TestPOSIXPath(t *testing.T) {
 	}
 }
 
+func TestDataDir(t *testing.T) {
+	for _, s := range []string{"/volume1/meshctl/default", "/v2/@apps/meshctl", "/srv/meshctl-lab_1.0", "/@x"} {
+		if _, err := DataDir("MESHCTL_DATA", s); err != nil {
+			t.Errorf("DataDir(%q): %v", s, err)
+		}
+	}
+	for _, s := range append([]string{"", "/", "data", "/a/../b", "/a/./b", "//a", "/a//b", "/a/", "/a b", "/a%i", "/a\nb",
+		"/" + strings.Repeat("a", 1024)}, hostile...) {
+		if _, err := DataDir("MESHCTL_DATA", s); err == nil {
+			t.Errorf("DataDir(%q) accepted a bad path", s)
+		}
+	}
+}
+
 func TestFilePath(t *testing.T) {
 	for _, s := range []string{"/data", `C:\ProgramData\meshctl`, "rel/dir"} {
 		if _, err := FilePath("data", s); err != nil {

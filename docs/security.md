@@ -138,20 +138,22 @@ install.sh `--data <dir>` (amendment A54) adds one drop-in to the mesh's instanc
 
 - `RequiresMountsFor=<dir>`;
 - `StateDirectory=`, so the instance makes no state directory under `/var/lib/meshctl`;
-- `ReadWritePaths=<dir>`, so the agent can still write only in its data dir;
+- `ReadWritePaths=` then `ReadWritePaths=<dir>`, so the agent can still write only in its data
+  dir: the unit's `/var/lib/meshctl` is dropped, which a `--data` host may not have (systemd
+  does not start a unit whose `ReadWritePaths` is missing);
 - `ExecStart=` and `ExecStart=/usr/local/bin/meshctl agent run --mesh %i --data <dir> --socket
   /run/meshctl/%i.sock`: the unit's own command, run on `<dir>` itself, with the socket local
   commands use for an installed mesh.
 
 Beside it, the record `/etc/meshctl/<mesh>.env` (root's, 0644, amendment A56) holds one line,
 `MESHCTL_DATA=<dir>`, which `TestInstallDataRecord` pins: meshctl's local commands read it to
-find the data dir. meshctl takes only a plain absolute path from it (`validate.POSIXPath`, at most
-4 KiB read) and stops with what to correct otherwise. A data dir given with `--data` or
+find the data dir. meshctl takes only a path of the same grammar from it (`validate.DataDir`, at
+most 4 KiB read) and stops with what to correct otherwise. A data dir given with `--data` or
 `MESHCTL_DATA` whose node joined another mesh than `--mesh` is refused before anything is dialled
 or written, so a variable left set in a shell (or a machine-wide one on Windows, which services
 inherit) never acts on another mesh's agent (`TestDataDirFromTheEnvironment`).
 
-install.sh accepts `<dir>` only as an absolute path of letters, digits, `.`, `_`, `-` and `/`, so
+install.sh accepts `<dir>` only as an absolute path of letters, digits, `.`, `_`, `@`, `-` and `/`, so
 no quote, unit-file specifier or extra line can reach the unit file. It refuses:
 
 - a path under `/home`, `/root`, `/run`, `/tmp`, `/var/tmp`, `/proc`, `/sys`, `/dev` or

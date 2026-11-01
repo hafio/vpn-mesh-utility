@@ -102,17 +102,17 @@ hidden() {
 }
 
 # datadir checks a --data value before it reaches a command, a record or a
-# unit file: an absolute path of letters, digits, '.', '_', '-' and '/',
-# which a unit file takes without quoting, somewhere the agent's unit can
-# write.
+# unit file: an absolute path of letters, digits, '.', '_', '@', '-' and '/'
+# (Synology keeps package data in @-folders), which a unit file takes
+# without quoting, somewhere the agent's unit can write.
 datadir() {
   case "$1" in
     /*) ;;
     *) die "--data must be an absolute path, not '$1'" ;;
   esac
   case "$1" in
-    *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._/-]*)
-      die "--data may hold only letters, digits, '.', '_', '-' and '/', not '$1'" ;;
+    *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._@/-]*)
+      die "--data may hold only letters, digits, '.', '_', '@', '-' and '/', not '$1'" ;;
     */ | *//* | */./* | */../* | */. | */..) die "--data must not hold '.' or '..' parts, '//' or a trailing '/': '$1'" ;;
   esac
   if hidden "$1"; then
@@ -143,8 +143,10 @@ datacheck() {
 
 # dropin prints the unit drop-in for the data dir $1 (checked by datadir):
 # the instance waits for $1's file system, makes no state directory under
-# /var/lib/meshctl, may write in $1 and runs the agent on $1, with the
-# socket meshctl's local commands use for an installed mesh.
+# /var/lib/meshctl, may write in $1 only (the unit's /var/lib/meshctl may not
+# exist here, and systemd will not start a unit whose ReadWritePaths= does
+# not) and runs the agent on $1, with the socket meshctl's local commands
+# use for an installed mesh.
 dropin() {
   cat <<MESHCTL_DROPIN
 # Written by install.sh or reinstall.sh with --data (amendments A54-A56):
@@ -155,6 +157,7 @@ RequiresMountsFor=$1
 
 [Service]
 StateDirectory=
+ReadWritePaths=
 ReadWritePaths=$1
 ExecStart=
 ExecStart=/usr/local/bin/meshctl agent run --mesh %i --data $1 --socket /run/meshctl/%i.sock

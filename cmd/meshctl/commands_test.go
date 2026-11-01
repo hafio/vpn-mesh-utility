@@ -447,7 +447,8 @@ func TestDataDirRecords(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	root, nas, lab := t.TempDir(), t.TempDir(), t.TempDir()
+	root, lab := t.TempDir(), t.TempDir()
+	nas := filepath.Join(t.TempDir(), "@apps", "meshctl") // Synology keeps package data in @-folders
 	enroll(t, nas, "nas")
 	enroll(t, lab, "lab")
 	record("nas", "# Written by install.sh\nMESHCTL_DATA="+nas+"\n")
