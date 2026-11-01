@@ -1,0 +1,301 @@
+# meshctl reinstaller for Windows, served by the meshctl control plane at
+# /reinstall.ps1 (amendment A55). From an elevated PowerShell:
+#
+#   $env:MESHCTL_MESH = '<mesh>'; irm https://<server>/reinstall.ps1 | iex
+#
+# For a mesh installed on this PC it says what is there, then asks what to
+# do, or does what $env:MESHCTL_ACTION says:
+#
+#   reinstall  meshctl and its service again, from this control plane; the
+#              node keeps its keys and stays joined (an upgrade or a repair)
+#   rejoin     join again with a new token, which gives the node new keys;
+#              the data stays where it is
+#   fresh      take the agent off this PC and delete its data, then join
+#              with a new token
+#
+# A token comes from $env:MESHCTL_TOKEN or the console, which does not echo
+# it; it leaves the session's environment once the join has used it.
+# MESHCTL_ACTION holds for this run only: the script clears it, so a later
+# run asks again. A mesh that is not installed here is install.ps1's.
+& {
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+$Self = 'reinstall.ps1'
+
+# The part install.ps1, reinstall.ps1 and uninstall.ps1 share (amendment
+# A55): the control plane writes it into each of them when it serves them,
+# so every script is one file a PC pipes into iex. It runs inside the
+# script's own block, so no function, variable or preference of the script
+# stays in the PowerShell session after it.
+
+$Origin = 'https://mesh.example.com'
+$Version = 'v1.2.3'
+$Sha256 = 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+
+# What a Windows install keeps where (amendment A51): one data dir and one
+# service per mesh, one binary (with wintun.dll beside it) for all of them.
+$Root = Join-Path $env:ProgramData 'meshctl'
+$Dir = Join-Path $env:ProgramFiles 'meshctl'
+$Exe = Join-Path $Dir 'meshctl.exe'
+
+function Fail([string]$message) { throw "${Self}: $message" }
+
+# Assert-Mesh holds MESHCTL_MESH to a mesh name: it names the service and the
+# data dir.
+function Assert-Mesh([string]$mesh) {
+    if ($mesh -cnotmatch '^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$') {
+        Fail "MESHCTL_MESH must be a mesh name (a-z, 0-9 and '-', at most 32), not '$mesh'"
+    }
+}
+
+# Assert-Host stops unless the script runs elevated on 64-bit Windows.
+function Assert-Host {
+    $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        Fail 'run it from an elevated PowerShell (Run as administrator)'
+    }
+    if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') {
+        Fail "unsupported CPU $($env:PROCESSOR_ARCHITECTURE); meshctl ships windows/amd64"
+    }
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+}
+
+# Test-Joined is true when the mesh has a joined node here: its data dir
+# holds an enrollment.
+function Test-Joined([string]$mesh) { Test-Path -LiteralPath (Join-Path (Join-Path $Root $mesh) 'state.json') }
+
+# Get-Meshes lists the meshes with a joined node here.
+function Get-Meshes {
+    Get-ChildItem -Directory -LiteralPath $Root -ErrorAction SilentlyContinue |
+        Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'state.json') } | ForEach-Object { $_.Name }
+}
+
+# Show-Mesh says what of the mesh is on this PC and returns its node's name.
+function Show-Mesh([string]$mesh) {
+    $state = $null
+    try { $state = Get-Content -Raw -LiteralPath (Join-Path (Join-Path $Root $mesh) 'state.json') | ConvertFrom-Json } catch { }
+    $node = "$($state.name)"
+    $ver = "no $Exe"
+    if (Test-Path -LiteralPath $Exe) {
+        try { $ver = "$(& $Exe version | Select-Object -First 1)" } catch { }
+    }
+    $status = 'not registered'
+    $svc = Get-Service -Name "meshctl-agent-$mesh" -ErrorAction SilentlyContinue
+    if ($svc) { $status = "$($svc.Status)" }
+    $shown = $node
+    if (-not $shown) { $shown = '?' }
+    Write-Host "mesh $mesh is installed here: node $shown of $($state.server), data in $(Join-Path $Root $mesh), $ver, meshctl-agent-$mesh $status"
+    $node
+}
+
+# Test-Interactive is true when there is someone to ask: not a service, not
+# powershell -NonInteractive.
+function Test-Interactive {
+    [Environment]::UserInteractive -and -not ([Environment]::GetCommandLineArgs() | Where-Object { $_ -match '^-noni' })
+}
+
+# Read-Token reads a join token at the console, not echoed.
+function Read-Token([string]$mesh) {
+    if (-not (Test-Interactive)) { Fail 'no join token: set $env:MESHCTL_TOKEN first' }
+    $secure = Read-Host -AsSecureString -Prompt "Join token for the node (meshctl node token <name> --mesh $mesh prints one)"
+    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+    try {
+        $token = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+    } finally {
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+    }
+    if (-not $token) { Fail 'no join token given; nothing was changed' }
+    $token
+}
+
+# Get-Download fetches meshctl for Windows from the control plane into a
+# temporary file and checks it against the SHA-256 baked into this script,
+# before anything on the PC changes; it returns the file.
+function Get-Download {
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) ('meshctl-' + [Guid]::NewGuid().ToString('N') + '.exe')
+    try {
+        Invoke-WebRequest -UseBasicParsing -Uri "$Origin/dl/meshctl-windows-amd64.exe" -OutFile $tmp
+    } catch {
+        Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath $tmp
+        Fail "downloading meshctl-windows-amd64.exe from $Origin failed ($($_.Exception.Message)); nothing was changed"
+    }
+    if ((Get-FileHash -Algorithm SHA256 -LiteralPath $tmp).Hash.ToLowerInvariant() -ne $Sha256) {
+        Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath $tmp
+        Fail 'checksum mismatch for meshctl-windows-amd64.exe: the download is corrupt or was altered; nothing was changed'
+    }
+    $tmp
+}
+
+# Install-Binary puts the checked download $tmp in Program Files. Every
+# mesh's service runs that one binary, so the ones that run stop while it is
+# replaced; it returns them, for the caller to start again.
+function Install-Binary([string]$tmp) {
+    if ((Test-Path -LiteralPath $Exe) -and (Get-FileHash -Algorithm SHA256 -LiteralPath $Exe).Hash.ToLowerInvariant() -eq $Sha256) {
+        Write-Host "meshctl $Version is in $Exe already"
+        return
+    }
+    $running = @(Get-Service -Name 'meshctl-agent-*' -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Running' })
+    $running | Stop-Service -Force
+    try {
+        New-Item -ItemType Directory -Force -Path $Dir | Out-Null
+        Copy-Item -Force -LiteralPath $tmp -Destination $Exe
+    } catch {
+        $running | Start-Service -ErrorAction Continue
+        Fail "installing $Exe failed ($($_.Exception.Message)); the services this stopped run again"
+    }
+    Write-Host "installed meshctl $Version to $Exe"
+    $running
+}
+
+# Join-Mesh joins the mesh with the token. The join needs the mesh's data dir
+# to itself, so its service stops first; a failed join starts again what was
+# stopped, here and by Install-Binary ($stopped), and says so with $gone
+# added.
+function Join-Mesh([string]$mesh, [string]$token, [string]$name, $stopped, [string]$gone) {
+    $own = @(Get-Service -Name "meshctl-agent-$mesh" -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Running' })
+    $own | Stop-Service -Force
+    $join = @('agent', 'join', '--server', $Origin, '--mesh', $mesh)
+    if ($name) { $join += @('--name', $name) }
+    # The token reaches meshctl in its environment, never on its command
+    # line, and leaves the session's environment once the join has used it.
+    $env:MESHCTL_TOKEN = $token
+    try {
+        & $Exe @join
+        $code = $LASTEXITCODE
+    } finally {
+        Remove-Item -ErrorAction SilentlyContinue -Path Env:MESHCTL_TOKEN
+    }
+    if ($code -ne 0) {
+        (@($stopped) + $own) | Start-Service -ErrorAction Continue
+        Fail "meshctl agent join failed (exit $code)$gone"
+    }
+}
+
+# Register-Agent creates or updates the mesh's service, which Windows starts
+# at boot and restarts when it fails, also when the agent exits with an
+# error, and (re)starts it.
+function Register-Agent([string]$mesh) {
+    $service = "meshctl-agent-$mesh"
+    $command = '"' + $Exe + '" agent run --mesh ' + $mesh
+    $existing = Get-CimInstance -ClassName Win32_Service -Filter "Name='$service'"
+    if ($existing) {
+        $r = Invoke-CimMethod -InputObject $existing -MethodName Change -Arguments @{ PathName = $command; StartMode = 'Automatic' }
+        if ($r.ReturnValue -ne 0) { Fail "updating the $service service failed (code $($r.ReturnValue))" }
+    } else {
+        New-Service -Name $service -BinaryPathName $command -DisplayName "meshctl agent ($mesh)" `
+            -Description 'Keeps this machine in its meshctl WireGuard mesh.' -StartupType Automatic | Out-Null
+    }
+    & sc.exe failure $service reset= 86400 actions= restart/5000/restart/30000/restart/60000 | Out-Null
+    & sc.exe failureflag $service 1 | Out-Null
+    Restart-Service -Name $service
+    Write-Host "started the $service service"
+}
+
+# Remove-Agent takes the mesh's agent off this PC: it stops the service, has
+# `meshctl agent reset` take off what the agent made, then deletes the
+# service (unless $keep) and the data dir. A data dir that holds other files
+# than meshctl's, or a failed reset, stops it before anything is deleted.
+function Remove-Agent([string]$mesh, [bool]$keep) {
+    $service = "meshctl-agent-$mesh"
+    $data = Join-Path $Root $mesh
+    if (Test-Path -LiteralPath $data -PathType Leaf) { Fail "$data is not a directory: nothing was removed" }
+    $isDir = Test-Path -LiteralPath $data -PathType Container
+    $ours = (Test-Path -LiteralPath (Join-Path $data 'state.json')) -or (Test-Path -LiteralPath (Join-Path $data 'agent.lock'))
+    if ($isDir -and -not $ours -and (Get-ChildItem -Force -LiteralPath $data | Select-Object -First 1)) {
+        Fail "$data holds files but no meshctl data: nothing was removed"
+    }
+    Get-Service -Name $service -ErrorAction SilentlyContinue | Where-Object { $_.Status -ne 'Stopped' } | Stop-Service -Force
+    if (Test-Joined $mesh) {
+        if (-not (Test-Path -LiteralPath $Exe)) {
+            Fail "$Exe is missing, so nothing can take the agent's tunnel, routes and DNS rules off this PC: run reinstall.ps1 with `$env:MESHCTL_ACTION = 'reinstall' first; nothing was deleted"
+        }
+        & $Exe agent reset --mesh $mesh
+        if ($LASTEXITCODE -ne 0) {
+            Fail 'meshctl agent reset could not take everything off this PC (above): fix that and run this again; nothing was deleted'
+        }
+    }
+    if (-not $keep -and (Get-Service -Name $service -ErrorAction SilentlyContinue)) {
+        & sc.exe delete $service | Out-Null
+        if ($LASTEXITCODE -ne 0) { Fail "deleting the $service service failed (sc.exe returned $LASTEXITCODE)" }
+    }
+    if ($isDir) { Remove-Item -Recurse -Force -LiteralPath $data }
+    Write-Host "removed the agent of $mesh and its data ($data)"
+}
+
+# Select-Action asks at the console what to do with the installed mesh.
+function Select-Action([string]$mesh) {
+    if (-not (Test-Interactive)) { Fail 'no console to ask on: set $env:MESHCTL_ACTION to reinstall, rejoin or fresh' }
+    Write-Host "What should reinstall.ps1 do with mesh ${mesh}?"
+    Write-Host "  1) reinstall  meshctl $Version and its service, from $Origin; the node keeps its keys"
+    Write-Host "  2) rejoin     join again with a new token (new keys); the data stays in $(Join-Path $Root $mesh)"
+    Write-Host '  3) fresh      take the agent off this PC, delete its data, then join with a new token'
+    Write-Host '  4) cancel'
+    switch (Read-Host -Prompt 'Choice [1-4, default 4]') {
+        '1' { 'reinstall' }
+        '2' { 'rejoin' }
+        '3' { 'fresh' }
+        default { '' }
+    }
+}
+
+$mesh = $env:MESHCTL_MESH
+if (-not $mesh) { $mesh = 'default' }
+$action = $env:MESHCTL_ACTION
+Remove-Item -ErrorAction SilentlyContinue -Path Env:MESHCTL_ACTION
+$token = $env:MESHCTL_TOKEN
+$name = $env:MESHCTL_NAME
+Assert-Mesh $mesh
+if ($action -and $action -cnotin @('reinstall', 'rejoin', 'fresh')) {
+    Fail "MESHCTL_ACTION must be reinstall, rejoin or fresh, not '$action'"
+}
+Assert-Host
+
+if (-not (Test-Joined $mesh)) {
+    $installed = @(Get-Meshes)
+    if ($installed) { Write-Host "installed here: $($installed -join ' ') (set `$env:MESHCTL_MESH)" }
+    Fail ("mesh $mesh is not installed here (no $(Join-Path (Join-Path $Root $mesh) 'state.json')): install it with " +
+        "`$env:MESHCTL_TOKEN = '<token>'; `$env:MESHCTL_MESH = '$mesh'; irm $Origin/install.ps1 | iex")
+}
+Show-Mesh $mesh | Out-Null
+if (-not $action) { $action = Select-Action $mesh }
+if (-not $action) {
+    Write-Host 'nothing changed'
+    return
+}
+
+$service = "meshctl-agent-$mesh"
+if ($action -ceq 'reinstall') {
+    if ($token -or $name) { Write-Host 'MESHCTL_TOKEN and MESHCTL_NAME are not used: reinstall keeps the node joined as it is' }
+    $tmp = Get-Download
+    try {
+        $stopped = @(Install-Binary $tmp)
+    } finally {
+        Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath $tmp
+    }
+    Register-Agent $mesh
+} elseif ($action -ceq 'rejoin') {
+    if (-not $token) { $token = Read-Token $mesh }
+    $tmp = Get-Download
+    try {
+        $stopped = @(Install-Binary $tmp)
+    } finally {
+        Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath $tmp
+    }
+    Join-Mesh $mesh $token $name $stopped ''
+    Register-Agent $mesh
+} else {
+    if (-not $token) { $token = Read-Token $mesh }
+    $tmp = Get-Download
+    try {
+        # The service stays registered: Register-Agent updates it after the
+        # join.
+        Remove-Agent $mesh $true
+        $stopped = @(Install-Binary $tmp)
+    } finally {
+        Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath $tmp
+    }
+    Join-Mesh $mesh $token $name $stopped '; the earlier data is gone already: with a new token, run install.ps1'
+    Register-Agent $mesh
+}
+$stopped | Where-Object { $_.Name -ne $service } | Start-Service
+}

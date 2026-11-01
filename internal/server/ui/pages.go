@@ -240,8 +240,13 @@ type enrollmentData struct {
 	Install  string
 	Join     string
 	Warnings []string
-	// InstallWindows is the install for Windows (amendment A51).
+	// Rejoin is reinstall.sh's join, for a host where the mesh is installed
+	// already (amendment A55).
+	Rejoin string
+	// InstallWindows is the install for Windows (amendment A51),
+	// RejoinWindows reinstall.ps1's join (amendment A55).
 	InstallWindows string
+	RejoinWindows  string
 	// Samples are the ways to run the node in a container (amendment A53);
 	// Note says why a node has none.
 	Samples []deploy.Sample
@@ -253,6 +258,7 @@ func (u *ui) showEnrollment(w http.ResponseWriter, r *http.Request, s auth.Sessi
 	d := enrollmentData{Node: ch.Node.Name, Warnings: ch.Warnings}
 	if e := ch.Enrollment; e != nil {
 		d.Token, d.Expires, d.Install, d.Join, d.InstallWindows = e.Token, u.stamp(e.ExpiresAt), e.Install, e.Join, e.InstallWindows
+		d.Rejoin, d.RejoinWindows = e.Rejoin, e.RejoinWindows
 		d.Samples, d.Note = u.nodeSamples(r, ch.Node, e.Token)
 	}
 	u.show(w, r, s, http.StatusOK, "enrollment", "nodes", "Join "+ch.Node.Name, page{Flash: flash, Data: d})

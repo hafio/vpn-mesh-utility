@@ -218,12 +218,14 @@ func Run(ctx context.Context, c Config) error {
 	return errors.Join(runErr, pub.Shutdown(sctx), adm.Shutdown(sctx))
 }
 
-// Routes sends the agent API, health check and downloads to agent and every
-// other path to the web UI. A GeoIP allowlist in front of the server may
-// restrict the UI; the agent paths must stay reachable from every node.
+// Routes sends the agent API, health check, scripts and downloads to agent
+// and every other path to the web UI. A GeoIP allowlist in front of the
+// server may restrict the UI; the agent paths must stay reachable from every
+// node.
 func Routes(agent, web http.Handler) http.Handler {
 	mux := http.NewServeMux()
-	for _, p := range []string{proto.AgentPrefix, proto.PathHealth, proto.PathInstall, proto.PathDownload} {
+	for _, p := range []string{proto.AgentPrefix, proto.PathHealth, proto.PathInstall, proto.PathInstallPS1, proto.PathReinstall,
+		proto.PathUninstall, proto.PathReinstallPS1, proto.PathUninstallPS1, proto.PathDownload} {
 		mux.Handle(p, agent)
 	}
 	mux.Handle("/", web)

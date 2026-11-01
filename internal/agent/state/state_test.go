@@ -126,6 +126,27 @@ func TestEnrollmentRoundTrip(t *testing.T) {
 	}
 }
 
+// install.sh, reinstall.sh and uninstall.sh read the node's name and its
+// control plane from state.json a field to a line (deploy/lib.sh.tmpl,
+// field; amendment A55), so the file keeps that layout.
+func TestEnrollmentFileHasAFieldToALine(t *testing.T) {
+	d := open(t)
+	e := Enrollment{Server: "https://mesh.example.com:8443", NodeID: 4, Name: "nas-1", Role: proto.RoleSpoke, MeshIP: "10.77.1.1",
+		JoinedAt: testfix.Epoch.Unix(), ConfigKey: testfix.ConfigKeyB64()}
+	if err := d.SaveEnrollment(e); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(d.Path, EnrollmentFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range []string{"\n  \"server\": \"https://mesh.example.com:8443\",\n", "\n  \"name\": \"nas-1\",\n"} {
+		if !strings.Contains(string(b), line) {
+			t.Errorf("state.json lacks the line %q:\n%s", line, b)
+		}
+	}
+}
+
 // vps1 is what the agent of vps-1 checks its caches with.
 var vps1 = testfix.Pinned(testfix.VPS1.ID)
 

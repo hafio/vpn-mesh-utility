@@ -161,6 +161,11 @@ type Enrollment struct {
 	// an elevated PowerShell (amendment A51).
 	Install        string `json:"install"`
 	InstallWindows string `json:"install_windows"`
+	// Rejoin joins a Linux host where the mesh is installed already
+	// (reinstall.sh, amendment A55); install.sh stops there. RejoinWindows
+	// is the same with reinstall.ps1.
+	Rejoin        string `json:"rejoin"`
+	RejoinWindows string `json:"rejoin_windows"`
 	// Join is the agent command for a host that already has meshctl.
 	Join string `json:"join"`
 }

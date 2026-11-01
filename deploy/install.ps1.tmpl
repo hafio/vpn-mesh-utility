@@ -8,88 +8,48 @@
 # against the SHA-256 baked into this script when the server rendered it,
 # installs it to Program Files\meshctl, runs `meshctl agent join` and
 # installs and starts the mesh's service, meshctl-agent-<mesh> (amendment
-# A51), which Windows starts at boot and restarts when it fails.
-# MESHCTL_NAME, when set, is the node name the token must belong to.
+# A51), which Windows starts at boot and restarts when it fails. The agent
+# keeps its data in %ProgramData%\meshctl\<mesh>. MESHCTL_NAME, when set, is
+# the node name the token must belong to. The token leaves the session's
+# environment once the join has used it.
+#
+# It only installs (amendment A55): where the mesh is installed already it
+# says what is there and stops, before it downloads anything or uses the
+# token. reinstall.ps1 reinstalls, joins again or starts afresh;
+# uninstall.ps1 removes it. Another mesh on the same PC is another
+# MESHCTL_MESH, which runs as its own service.
+& {
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+$Self = 'install.ps1'
 
-$Origin = '@@MESHCTL_ORIGIN@@'
-$Version = '@@MESHCTL_VERSION@@'
-$Sha256 = '@@MESHCTL_SHA256_WINDOWS@@'
+@@MESHCTL_LIB@@
 
-function Install-Meshctl {
-    $token = $env:MESHCTL_TOKEN
-    $mesh = $env:MESHCTL_MESH
-    if (-not $mesh) { $mesh = 'default' }
-    if (-not $token) { throw 'install.ps1: no join token: set $env:MESHCTL_TOKEN first' }
-    # The mesh names the service and the data dir: a mesh name only.
-    if ($mesh -cnotmatch '^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$') {
-        throw "install.ps1: MESHCTL_MESH must be a mesh name (a-z, 0-9 and '-', at most 32)"
-    }
-    $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
-    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        throw 'install.ps1: run it from an elevated PowerShell (Run as administrator)'
-    }
-    if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') {
-        throw "install.ps1: unsupported CPU $($env:PROCESSOR_ARCHITECTURE); meshctl ships windows/amd64"
-    }
-    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+$token = $env:MESHCTL_TOKEN
+$mesh = $env:MESHCTL_MESH
+$named = [bool]$mesh
+if (-not $named) { $mesh = 'default' }
+if (-not $token) { Fail 'no join token: set $env:MESHCTL_TOKEN first' }
+Assert-Mesh $mesh
+Assert-Host
 
-    $dir = Join-Path $env:ProgramFiles 'meshctl'
-    $exe = Join-Path $dir 'meshctl.exe'
-    $service = "meshctl-agent-$mesh"
-    $tmp = Join-Path ([IO.Path]::GetTempPath()) ('meshctl-' + [Guid]::NewGuid().ToString('N') + '.exe')
-    $stopped = @()
-    try {
-        Invoke-WebRequest -UseBasicParsing -Uri "$Origin/dl/meshctl-windows-amd64.exe" -OutFile $tmp
-        if ((Get-FileHash -Algorithm SHA256 -Path $tmp).Hash.ToLowerInvariant() -ne $Sha256) {
-            throw 'install.ps1: checksum mismatch for meshctl-windows-amd64.exe: the download is corrupt or was altered; nothing was installed'
-        }
-        $same = (Test-Path $exe) -and ((Get-FileHash -Algorithm SHA256 -Path $exe).Hash.ToLowerInvariant() -eq $Sha256)
-        if (-not $same) {
-            # Every mesh's service runs this binary: they stop while it is
-            # replaced, and the others start again below.
-            $stopped = @(Get-Service -Name 'meshctl-agent-*' -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Running' })
-            $stopped | Stop-Service -Force
-            New-Item -ItemType Directory -Force -Path $dir | Out-Null
-            Copy-Item -Force -Path $tmp -Destination $exe
-            Write-Host "installed meshctl $Version to $exe"
-        }
-    } catch {
-        $stopped | Start-Service -ErrorAction Continue
-        throw
-    } finally {
-        Remove-Item -Force -ErrorAction SilentlyContinue -Path $tmp
+if (Test-Joined $mesh) {
+    Show-Mesh $mesh | Out-Null
+    if (-not $named) {
+        Write-Host 'To add another mesh to this PC, set $env:MESHCTL_MESH to its name: each mesh runs as its own service, meshctl-agent-<mesh>.'
     }
-
-    # The join needs the mesh's data dir to itself; a failed join starts
-    # again every service this script stopped.
-    $own = @(Get-Service -Name $service -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Running' })
-    $own | Stop-Service -Force
-    $stopped = @($stopped) + $own
-    $join = @('agent', 'join', '--server', $Origin, '--mesh', $mesh)
-    if ($env:MESHCTL_NAME) { $join += @('--name', $env:MESHCTL_NAME) }
-    & $exe @join
-    $code = $LASTEXITCODE
-    if ($code -ne 0) {
-        $stopped | Start-Service -ErrorAction Continue
-        throw "install.ps1: meshctl agent join failed (exit $code)"
-    }
-
-    $command = '"' + $exe + '" agent run --mesh ' + $mesh
-    $existing = Get-CimInstance -ClassName Win32_Service -Filter "Name='$service'"
-    if ($existing) {
-        $r = Invoke-CimMethod -InputObject $existing -MethodName Change -Arguments @{ PathName = $command; StartMode = 'Automatic' }
-        if ($r.ReturnValue -ne 0) { throw "install.ps1: updating the $service service failed (code $($r.ReturnValue))" }
-    } else {
-        New-Service -Name $service -BinaryPathName $command -DisplayName "meshctl agent ($mesh)" `
-            -Description 'Keeps this machine in its meshctl WireGuard mesh.' -StartupType Automatic | Out-Null
-    }
-    # Restarted when it fails, also when the agent exits with an error.
-    & sc.exe failure $service reset= 86400 actions= restart/5000/restart/30000/restart/60000 | Out-Null
-    & sc.exe failureflag $service 1 | Out-Null
-    Start-Service -Name $service
-    $stopped | Where-Object { $_.Name -ne $service } | Start-Service
-    Write-Host "started the $service service"
+    Fail ("mesh $mesh is installed here already, and install.ps1 only installs; nothing was changed and the token is unused. " +
+        "To reinstall meshctl, join again or start afresh: `$env:MESHCTL_MESH = '$mesh'; irm $Origin/reinstall.ps1 | iex. " +
+        "To remove it: `$env:MESHCTL_MESH = '$mesh'; irm $Origin/uninstall.ps1 | iex")
 }
 
-Install-Meshctl
+$tmp = Get-Download
+try {
+    $stopped = @(Install-Binary $tmp)
+} finally {
+    Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath $tmp
+}
+Join-Mesh $mesh $token $env:MESHCTL_NAME $stopped ''
+Register-Agent $mesh
+$stopped | Where-Object { $_.Name -ne "meshctl-agent-$mesh" } | Start-Service
+}

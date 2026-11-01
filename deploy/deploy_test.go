@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -103,8 +104,39 @@ func testParams() InstallParams {
 		SHA256Amd64: strings.Repeat("a", 64), SHA256Arm64: strings.Repeat("b", 64), SHA256Windows: strings.Repeat("c", 64)}
 }
 
+// shellScripts are the Linux scripts (amendment A55): each a template that
+// takes the shared part, lib.sh.tmpl, and its renderer.
+var shellScripts = []struct {
+	name   string
+	tmpl   string
+	render func(InstallParams) ([]byte, error)
+}{
+	{"install.sh", installTemplate, RenderInstall},
+	{"reinstall.sh", reinstallTemplate, RenderReinstall},
+	{"uninstall.sh", uninstallTemplate, RenderUninstall},
+}
+
+// ps1Scripts are the Windows scripts (amendments A51, A55), each taking the
+// shared part lib.ps1.tmpl the same way.
+var ps1Scripts = []struct {
+	name   string
+	tmpl   string
+	render func(InstallParams) ([]byte, error)
+}{
+	{"install.ps1", installPS1Template, RenderInstallPS1},
+	{"reinstall.ps1", reinstallPS1Template, RenderReinstallPS1},
+	{"uninstall.ps1", uninstallPS1Template, RenderUninstallPS1},
+}
+
 func TestInstallGolden(t *testing.T) {
-	for name, render := range map[string]func(InstallParams) ([]byte, error){"install.golden.sh": RenderInstall, "install.golden.ps1": RenderInstallPS1} {
+	renders := map[string]func(InstallParams) ([]byte, error){}
+	for _, s := range shellScripts {
+		renders[strings.TrimSuffix(s.name, ".sh")+".golden.sh"] = s.render
+	}
+	for _, s := range ps1Scripts {
+		renders[strings.TrimSuffix(s.name, ".ps1")+".golden.ps1"] = s.render
+	}
+	for name, render := range renders {
 		got, err := render(testParams())
 		if err != nil {
 			t.Fatal(err)
@@ -125,70 +157,83 @@ func TestInstallGolden(t *testing.T) {
 	}
 }
 
-// The rendered script differs from the template only at the markers, each of
-// which appears exactly once, inside single quotes.
+// A rendered script differs from its template, with the shared part in place
+// of its marker, only at the value markers, each of which appears exactly
+// once in the shared part, inside single quotes.
 func TestInstallChangesOnlyTheMarkers(t *testing.T) {
 	p := testParams()
-	got, err := RenderInstall(p)
-	if err != nil {
-		t.Fatal(err)
-	}
 	for _, m := range []string{markerOrigin, markerVersion, markerSHA256Amd64, markerSHA256Arm64} {
-		if n := strings.Count(installTemplate, "'"+m+"'"); n != 1 || strings.Count(installTemplate, m) != 1 {
-			t.Errorf("marker %s must appear exactly once, quoted", m)
+		if n := strings.Count(libTemplate, "'"+m+"'"); n != 1 || strings.Count(libTemplate, m) != 1 {
+			t.Errorf("marker %s must appear exactly once in lib.sh.tmpl, quoted", m)
 		}
 	}
-	if strings.Count(installTemplate, "\n"+markerUnit+"MESHCTL_UNIT\n") != 1 || strings.Count(installTemplate, markerUnit) != 1 {
+	if strings.Count(libTemplate, "\n"+markerUnit+"MESHCTL_UNIT\n") != 1 || strings.Count(libTemplate, markerUnit) != 1 {
 		t.Error("the unit's marker must be the one line of a here-document ended by MESHCTL_UNIT")
 	}
 	back := strings.NewReplacer("'"+p.Origin+"'", "'"+markerOrigin+"'", "'"+p.Version+"'", "'"+markerVersion+"'",
-		"'"+p.SHA256Amd64+"'", "'"+markerSHA256Amd64+"'", "'"+p.SHA256Arm64+"'", "'"+markerSHA256Arm64+"'", systemdUnit, markerUnit).Replace(string(got))
-	if back != installTemplate {
-		t.Fatal("rendering changed more than the markers")
-	}
-
-	// install.ps1 (amendment A51), the same way.
-	ps1, err := RenderInstallPS1(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, m := range []string{markerOrigin, markerVersion, markerSHA256Windows} {
-		if n := strings.Count(installPS1Template, "'"+m+"'"); n != 1 || strings.Count(installPS1Template, m) != 1 {
-			t.Errorf("install.ps1's marker %s must appear exactly once, quoted", m)
+		"'"+p.SHA256Amd64+"'", "'"+markerSHA256Amd64+"'", "'"+p.SHA256Arm64+"'", "'"+markerSHA256Arm64+"'", systemdUnit, markerUnit)
+	for _, s := range shellScripts {
+		if strings.Count(s.tmpl, "\n"+markerLib) != 1 || strings.Count(s.tmpl, "@@") != 2 || strings.Contains(libTemplate, "@@MESHCTL_LIB@@") {
+			t.Errorf("%s: the shared part's marker must be its only marker, on a line of its own", s.name)
+		}
+		got, err := s.render(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if back.Replace(string(got)) != withLib(s.tmpl, libTemplate) {
+			t.Errorf("rendering %s changed more than the markers", s.name)
 		}
 	}
-	back = strings.NewReplacer("'"+p.Origin+"'", "'"+markerOrigin+"'", "'"+p.Version+"'", "'"+markerVersion+"'",
-		"'"+p.SHA256Windows+"'", "'"+markerSHA256Windows+"'").Replace(string(ps1))
-	if back != installPS1Template {
-		t.Fatal("rendering install.ps1 changed more than the markers")
+
+	// The Windows scripts (amendments A51, A55), the same way.
+	for _, m := range []string{markerOrigin, markerVersion, markerSHA256Windows} {
+		if n := strings.Count(libPS1Template, "'"+m+"'"); n != 1 || strings.Count(libPS1Template, m) != 1 {
+			t.Errorf("marker %s must appear exactly once in lib.ps1.tmpl, quoted", m)
+		}
 	}
-	for _, b := range ps1 {
-		if b > 0x7e || b < 0x20 && b != '\n' && b != '\r' {
-			t.Fatalf("install.ps1 has the byte %#x: Windows PowerShell reads a script without a BOM as ANSI, so it stays ASCII", b)
+	ps1Back := strings.NewReplacer("'"+p.Origin+"'", "'"+markerOrigin+"'", "'"+p.Version+"'", "'"+markerVersion+"'",
+		"'"+p.SHA256Windows+"'", "'"+markerSHA256Windows+"'")
+	for _, s := range ps1Scripts {
+		if strings.Count(s.tmpl, "\n"+markerLib) != 1 || strings.Count(s.tmpl, "@@") != 2 || strings.Contains(libPS1Template, "@@MESHCTL_LIB@@") {
+			t.Errorf("%s: the shared part's marker must be its only marker, on a line of its own", s.name)
+		}
+		got, err := s.render(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ps1Back.Replace(string(got)) != withLib(s.tmpl, libPS1Template) {
+			t.Errorf("rendering %s changed more than the markers", s.name)
+		}
+		for _, b := range got {
+			if b > 0x7e || b < 0x20 && b != '\n' && b != '\r' {
+				t.Fatalf("%s has the byte %#x: Windows PowerShell reads a script without a BOM as ANSI, so it stays ASCII", s.name, b)
+			}
 		}
 	}
 }
 
-// Windows PowerShell parses install.ps1 (on Windows runners).
+// Windows PowerShell parses the Windows scripts (on Windows runners).
 func TestInstallPS1Parses(t *testing.T) {
 	ps, err := exec.LookPath("powershell")
 	if err != nil {
 		t.Skip("no Windows PowerShell on this runner")
 	}
-	got, err := RenderInstallPS1(testParams())
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(t.TempDir(), "install.ps1")
-	if err := os.WriteFile(path, got, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	check := "$e = $null; [void][System.Management.Automation.Language.Parser]::ParseFile($env:SCRIPT, [ref]$null, [ref]$e); " +
-		"if ($e) { $e | ForEach-Object { $_.Message }; exit 1 }"
-	cmd := exec.Command(ps, "-NoProfile", "-NonInteractive", "-Command", check)
-	cmd.Env = append(os.Environ(), "SCRIPT="+path)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("install.ps1 does not parse: %v\n%s", err, out)
+	for _, s := range ps1Scripts {
+		got, err := s.render(testParams())
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(t.TempDir(), s.name)
+		if err := os.WriteFile(path, got, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		check := "$e = $null; [void][System.Management.Automation.Language.Parser]::ParseFile($env:SCRIPT, [ref]$null, [ref]$e); " +
+			"if ($e) { $e | ForEach-Object { $_.Message }; exit 1 }"
+		cmd := exec.Command(ps, "-NoProfile", "-NonInteractive", "-Command", check)
+		cmd.Env = append(os.Environ(), "SCRIPT="+path)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Errorf("%s does not parse: %v\n%s", s.name, err, out)
+		}
 	}
 }
 
@@ -197,14 +242,16 @@ func TestInstallParses(t *testing.T) {
 	if err != nil {
 		t.Skip("no sh on this runner")
 	}
-	got, err := RenderInstall(testParams())
-	if err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command(sh, "-n")
-	cmd.Stdin = bytes.NewReader(got)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("sh -n: %v\n%s", err, out)
+	for _, s := range shellScripts {
+		got, err := s.render(testParams())
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(sh, "-n")
+		cmd.Stdin = bytes.NewReader(got)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Errorf("%s: sh -n: %v\n%s", s.name, err, out)
+		}
 	}
 }
 
@@ -214,7 +261,7 @@ func TestInstallRefusesHostileValues(t *testing.T) {
 	for _, c := range []struct {
 		name    string
 		edit    func(*InstallParams)
-		sh, ps1 bool // refused by install.sh, by install.ps1
+		sh, ps1 bool // refused by the Linux scripts, by the Windows ones
 	}{
 		{"quote in origin", func(p *InstallParams) { p.Origin = "https://mesh.example.com'; id; '" }, true, true},
 		{"origin with a path", func(p *InstallParams) { p.Origin = "https://mesh.example.com/x" }, true, true},
@@ -228,112 +275,310 @@ func TestInstallRefusesHostileValues(t *testing.T) {
 	} {
 		p := testParams()
 		c.edit(&p)
-		if out, err := RenderInstall(p); c.sh != (err != nil) || c.sh && out != nil {
-			t.Errorf("%s: install.sh = %v", c.name, err)
+		for _, s := range shellScripts {
+			if out, err := s.render(p); c.sh != (err != nil) || c.sh && out != nil {
+				t.Errorf("%s: %s = %v", c.name, s.name, err)
+			}
 		}
-		if out, err := RenderInstallPS1(p); c.ps1 != (err != nil) || c.ps1 && out != nil {
-			t.Errorf("%s: install.ps1 = %v", c.name, err)
+		for _, s := range ps1Scripts {
+			if out, err := s.render(p); c.ps1 != (err != nil) || c.ps1 && out != nil {
+				t.Errorf("%s: %s = %v", c.name, s.name, err)
+			}
 		}
 	}
 }
 
-// install.sh --data (amendment A54) checks the directory before anything
-// else happens: a value that is not a plain absolute path, or that lies where
-// the agent's unit cannot keep data, stops the script before its root check,
-// so before it downloads, links or writes anything. A plain path gets as far
-// as the root check.
-func TestInstallChecksTheDataDir(t *testing.T) {
+// runScript runs the Linux script name, rendered, as `sh -s -- args...`, with
+// env in place of the caller's MESHCTL_ variables.
+func runScript(t *testing.T, name string, env []string, args ...string) (string, error) {
+	t.Helper()
 	sh, err := exec.LookPath("sh")
 	if err != nil {
 		t.Skip("no sh on this runner")
 	}
-	script, err := RenderInstall(testParams())
-	if err != nil {
-		t.Fatal(err)
-	}
-	run := func(env []string, args ...string) (string, error) {
-		cmd := exec.Command(sh, append([]string{"-s", "--", "--token", "t0ken"}, args...)...)
-		cmd.Stdin = bytes.NewReader(script)
-		for _, kv := range os.Environ() {
-			if !strings.HasPrefix(kv, "MESHCTL_") {
-				cmd.Env = append(cmd.Env, kv)
+	var script []byte
+	for _, s := range shellScripts {
+		if s.name == name {
+			if script, err = s.render(testParams()); err != nil {
+				t.Fatal(err)
 			}
 		}
-		cmd.Env = append(cmd.Env, env...)
-		out, err := cmd.CombinedOutput()
-		return string(out), err
 	}
-	for _, c := range []struct{ data, want string }{
-		{"relative/dir", "absolute path"},
-		{"-x", "absolute path"},
-		{"/srv/$(id)", "only letters"},
-		{"/srv/a b", "only letters"},
-		{"/srv/x;id", "only letters"},
-		{"/srv/x%i", "only letters"},
-		{"/srv/x'y", "only letters"},
-		{"/srv/x\nid", "only letters"},
-		{"/srv/x\nExecStartPre=/bin/id", "only letters"},
-		{"/srv/../etc", "'..' parts"},
-		{"/srv/./x", "'..' parts"},
-		{"/srv//x", "'..' parts"},
-		{"/srv/x/", "'..' parts"},
-		{"/", "'..' parts"},
-		{"/home/me/meshctl", "cannot be under"},
-		{"/root", "cannot be under"},
-		{"/tmp/meshctl", "cannot be under"},
-		{"/run/meshctl", "cannot be under"},
-		{"/var/lib/meshctl", "cannot be under"},
-		{"/var/lib/meshctl/default", "cannot be under"},
-	} {
-		// On Windows the MSYS sh parses its own command line again (quotes,
-		// line breaks), so the value reaches the script as given only
-		// through the environment there.
-		if runtime.GOOS != "windows" {
-			out, err := run(nil, "--data", c.data)
+	if script == nil {
+		t.Fatalf("no script %s", name)
+	}
+	cmd := exec.Command(sh, append([]string{"-s", "--"}, args...)...)
+	cmd.Stdin = bytes.NewReader(script)
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "MESHCTL_") {
+			cmd.Env = append(cmd.Env, kv)
+		}
+	}
+	cmd.Env = append(cmd.Env, env...)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// --data (amendment A54) is checked before anything else happens, by every
+// Linux script that takes it: a value that is not a plain absolute path, or
+// that lies where the agent's unit cannot keep data, stops the script before
+// its root check, so before it downloads, links, writes or deletes anything.
+// A plain path gets as far as the root check.
+func TestInstallChecksTheDataDir(t *testing.T) {
+	base := map[string][]string{"install.sh": {"--token", "t0ken"}, "reinstall.sh": nil, "uninstall.sh": nil}
+	for _, s := range shellScripts {
+		for _, c := range []struct{ data, want string }{
+			{"relative/dir", "absolute path"},
+			{"-x", "absolute path"},
+			{"/srv/$(id)", "only letters"},
+			{"/srv/a b", "only letters"},
+			{"/srv/x;id", "only letters"},
+			{"/srv/x%i", "only letters"},
+			{"/srv/x'y", "only letters"},
+			{"/srv/x\nid", "only letters"},
+			{"/srv/x\nExecStartPre=/bin/id", "only letters"},
+			{"/srv/../etc", "'..' parts"},
+			{"/srv/./x", "'..' parts"},
+			{"/srv//x", "'..' parts"},
+			{"/srv/x/", "'..' parts"},
+			{"/", "'..' parts"},
+			{"/home/me/meshctl", "cannot be under"},
+			{"/root", "cannot be under"},
+			{"/tmp/meshctl", "cannot be under"},
+			{"/run/meshctl", "cannot be under"},
+			{"/var/lib/meshctl", "cannot be under"},
+			{"/var/lib/meshctl/default", "cannot be under"},
+		} {
+			// On Windows the MSYS sh parses its own command line again (quotes,
+			// line breaks), so the value reaches the script as given only
+			// through the environment there.
+			if runtime.GOOS != "windows" {
+				out, err := runScript(t, s.name, nil, append(base[s.name], "--data", c.data)...)
+				if err == nil || !strings.Contains(out, "--data") || !strings.Contains(out, c.want) || strings.Contains(out, "must run as root") {
+					t.Errorf("%s --data %q = %v\n%s", s.name, c.data, err, out)
+				}
+			}
+			out, err := runScript(t, s.name, []string{"MESHCTL_DATA=" + c.data}, base[s.name]...)
 			if err == nil || !strings.Contains(out, "--data") || !strings.Contains(out, c.want) || strings.Contains(out, "must run as root") {
-				t.Errorf("--data %q = %v\n%s", c.data, err, out)
+				t.Errorf("%s MESHCTL_DATA=%q = %v\n%s", s.name, c.data, err, out)
 			}
 		}
-		if out, err := run([]string{"MESHCTL_DATA=" + c.data}); err == nil || !strings.Contains(out, "--data") || !strings.Contains(out, c.want) ||
-			strings.Contains(out, "must run as root") {
-			t.Errorf("MESHCTL_DATA=%q = %v\n%s", c.data, err, out)
+		if os.Geteuid() == 0 {
+			continue // past the checks a root run would download from the test origin, or uninstall
 		}
-	}
-	if os.Geteuid() == 0 {
-		return // past the checks a root run would download from the test origin
-	}
-	for _, data := range []string{"/volume1/meshctl/default", "/srv/meshctl-lab_1.0", "/var/lib/meshctl-nas"} {
-		if out, err := run(nil, "--data", data); err == nil || !strings.Contains(out, "must run as root") {
-			t.Errorf("--data %q stopped before the root check: %v\n%s", data, err, out)
+		for _, data := range []string{"/volume1/meshctl/default", "/srv/meshctl-lab_1.0", "/var/lib/meshctl-nas"} {
+			if out, err := runScript(t, s.name, nil, append(base[s.name], "--data", data)...); err == nil || !strings.Contains(out, "must run as root") {
+				t.Errorf("%s --data %q stopped before the root check: %v\n%s", s.name, data, err, out)
+			}
 		}
 	}
 }
 
-// The drop-in install.sh --data writes (amendment A54) waits for the data
-// dir's file system, drops the instance's own state directory (the link
-// stands in for it) and lets it write in the data dir: nothing else, and no
-// path but the checked one.
-func TestInstallDataDropIn(t *testing.T) {
-	tmpl := string(mustRead(t, "install.sh.tmpl"))
-	start := strings.Index(tmpl, "cat <<MESHCTL_DROPIN\n")
-	end := strings.Index(tmpl, "\nMESHCTL_DROPIN\n")
-	if start < 0 || end < start {
-		t.Fatal("install.sh.tmpl has no MESHCTL_DROPIN here-document")
+// Each Linux script refuses what it does not take, or a bad mesh, before its
+// root check (amendment A55); what it takes gets as far as the root check.
+func TestScriptsCheckTheirArguments(t *testing.T) {
+	for _, c := range []struct {
+		script string
+		args   []string
+		want   string // "": as far as the root check
+	}{
+		{"install.sh", nil, "no join token"},
+		{"install.sh", []string{"--token"}, "--token needs a value"},
+		{"install.sh", []string{"--token", "t0ken", "--mesh", "Lab"}, "--mesh must be a mesh name"},
+		{"install.sh", []string{"--token", "t0ken", "--mesh", strings.Repeat("a", 33)}, "at most 32"},
+		{"install.sh", []string{"--token", "t0ken", "--action", "rejoin"}, "unknown argument: --action"},
+		{"install.sh", []string{"--token", "t0ken", "--mesh", "lab"}, ""},
+		{"reinstall.sh", []string{"--action", "upgrade"}, "--action must be reinstall, rejoin or fresh"},
+		{"reinstall.sh", []string{"--mesh", "-x"}, "--mesh must be a mesh name"},
+		{"reinstall.sh", []string{"--yes"}, "unknown argument: --yes"},
+		{"reinstall.sh", nil, ""},
+		{"reinstall.sh", []string{"--mesh", "lab", "--action", "fresh", "--token", "t0ken", "--data", "/srv/meshctl"}, ""},
+		{"uninstall.sh", []string{"--mesh", "a_b"}, "--mesh must be a mesh name"},
+		{"uninstall.sh", []string{"--token", "t0ken"}, "unknown argument: --token"},
+		{"uninstall.sh", []string{"--mesh", "lab", "--yes"}, ""},
+	} {
+		if c.want == "" && os.Geteuid() == 0 {
+			continue // a root run would act on this host
+		}
+		out, err := runScript(t, c.script, nil, c.args...)
+		switch {
+		case err == nil:
+			t.Errorf("%s %q succeeded:\n%s", c.script, c.args, out)
+		case c.want == "" && !strings.Contains(out, "must run as root"):
+			t.Errorf("%s %q stopped before the root check:\n%s", c.script, c.args, out)
+		case c.want != "" && (!strings.Contains(out, c.want) || strings.Contains(out, "must run as root")):
+			t.Errorf("%s %q = %q, want %q before the root check", c.script, c.args, out, c.want)
+		}
 	}
-	got, sections := map[string]string{}, []string{}
-	for _, line := range strings.Split(tmpl[start+len("cat <<MESHCTL_DROPIN\n"):end], "\n") {
+}
+
+// The scripts arrive on stdin (curl ... | sh -s), so a question read from
+// stdin would read the script itself: every read takes the terminal.
+func TestScriptsReadTheTerminal(t *testing.T) {
+	for _, s := range shellScripts {
+		for i, line := range strings.Split(withLib(s.tmpl, libTemplate), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "#") {
+				continue
+			}
+			for _, f := range strings.Fields(line) {
+				if f == "read" && !strings.Contains(line, "</dev/tty") {
+					t.Errorf("%s line %d reads stdin: %s", s.name, i+1, line)
+				}
+			}
+		}
+	}
+}
+
+// No message a script prints holds the join token (CLAUDE.md: secrets never
+// reach logs), wherever it came from: --token, MESHCTL_TOKEN or the prompt.
+func TestScriptsNeverPrintTheToken(t *testing.T) {
+	for _, s := range shellScripts {
+		for i, line := range strings.Split(withLib(s.tmpl, libTemplate), "\n") {
+			if !strings.Contains(line, "$token") && !strings.Contains(line, "${token") {
+				continue
+			}
+			for _, cmd := range []string{"die \"", "echo \"", "printf "} {
+				at := strings.Index(line, cmd)
+				if at < 0 {
+					continue
+				}
+				said := line[at+len(cmd):]
+				if cmd != "printf " {
+					said, _, _ = strings.Cut(said, "\"")
+				}
+				if strings.Contains(said, "$token") || strings.Contains(said, "${token") {
+					t.Errorf("%s line %d prints the token: %s", s.name, i+1, line)
+				}
+			}
+		}
+	}
+}
+
+// The Windows scripts print no string that holds the join token either --
+// no double-quoted string in them names $token -- and never put it on
+// meshctl's command line, where other processes could read it: it reaches
+// the join in MESHCTL_TOKEN only.
+func TestPS1ScriptsNeverShowTheToken(t *testing.T) {
+	for _, s := range ps1Scripts {
+		for i, line := range strings.Split(withLib(s.tmpl, libPS1Template), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "#") {
+				continue
+			}
+			if strings.Contains(line, "--token") {
+				t.Errorf("%s line %d puts a token on a command line: %s", s.name, i+1, line)
+			}
+			for j, part := range strings.Split(strings.ToLower(line), "\"") {
+				if j%2 == 1 && (strings.Contains(part, "$token") || strings.Contains(part, "${token")) {
+					t.Errorf("%s line %d shows the token: %s", s.name, i+1, line)
+				}
+			}
+		}
+	}
+}
+
+// The Windows scripts run in the PowerShell session that pipes them into
+// iex: each is one script block, so its functions, variables and preferences
+// ($ErrorActionPreference) end with it, and nothing in it exits, which would
+// close that session.
+func TestPS1ScriptsKeepToTheirBlock(t *testing.T) {
+	for _, s := range ps1Scripts {
+		var code []string
+		for _, line := range strings.Split(withLib(s.tmpl, libPS1Template), "\n") {
+			if l := strings.TrimSpace(line); l != "" && !strings.HasPrefix(l, "#") {
+				code = append(code, line)
+			}
+		}
+		if len(code) < 2 || code[0] != "& {" || code[len(code)-1] != "}" {
+			t.Errorf("%s is not one script block, & { ... }", s.name)
+		}
+		for _, line := range code {
+			l := strings.ToLower(line)
+			if slices.Contains(strings.Fields(l), "exit") || strings.Contains(l, "$global:") || strings.Contains(l, "$script:") {
+				t.Errorf("%s reaches out of its block: %s", s.name, line)
+			}
+		}
+	}
+}
+
+// Each Windows script refuses a bad MESHCTL_MESH, and a value outside the
+// fixed set a variable takes, before its elevation check (amendment A55), so
+// before it downloads, joins or deletes anything. It runs as the docs say,
+// piped into iex.
+func TestPS1ScriptsCheckTheirVariables(t *testing.T) {
+	ps, err := exec.LookPath("powershell")
+	if err != nil {
+		t.Skip("no Windows PowerShell on this runner")
+	}
+	for _, c := range []struct {
+		script string
+		env    []string
+		want   string
+	}{
+		{"install.ps1", nil, "no join token"},
+		{"install.ps1", []string{"MESHCTL_TOKEN=t0ken", "MESHCTL_MESH=Lab"}, "MESHCTL_MESH must be a mesh name"},
+		{"install.ps1", []string{"MESHCTL_TOKEN=t0ken", "MESHCTL_MESH=" + strings.Repeat("a", 33)}, "MESHCTL_MESH must be a mesh name"},
+		{"reinstall.ps1", []string{"MESHCTL_ACTION=upgrade"}, "MESHCTL_ACTION must be reinstall, rejoin or fresh"},
+		{"reinstall.ps1", []string{"MESHCTL_ACTION=Fresh"}, "MESHCTL_ACTION must be reinstall, rejoin or fresh"},
+		{"reinstall.ps1", []string{"MESHCTL_MESH=-x"}, "MESHCTL_MESH must be a mesh name"},
+		{"uninstall.ps1", []string{"MESHCTL_MESH=a_b"}, "MESHCTL_MESH must be a mesh name"},
+		{"uninstall.ps1", []string{"MESHCTL_YES=y"}, "MESHCTL_YES must be 'yes' or unset"},
+	} {
+		var script []byte
+		for _, s := range ps1Scripts {
+			if s.name == c.script {
+				if script, err = s.render(testParams()); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		path := filepath.Join(t.TempDir(), c.script)
+		if err := os.WriteFile(path, script, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		run := "try { [IO.File]::ReadAllText($env:SCRIPT) | Invoke-Expression } catch { [Console]::Out.WriteLine($_.Exception.Message); exit 1 }"
+		cmd := exec.Command(ps, "-NoProfile", "-NonInteractive", "-Command", run)
+		for _, kv := range os.Environ() {
+			if !strings.HasPrefix(strings.ToUpper(kv), "MESHCTL_") {
+				cmd.Env = append(cmd.Env, kv)
+			}
+		}
+		cmd.Env = append(append(cmd.Env, "SCRIPT="+path), c.env...)
+		out, err := cmd.CombinedOutput()
+		if err == nil || !strings.Contains(string(out), c.script+": "+c.want) || strings.Contains(string(out), "elevated") {
+			t.Errorf("%s with %q = %v, want %q before the elevation check\n%s", c.script, c.env, err, c.want, out)
+		}
+	}
+}
+
+// The drop-in the scripts write for --data (amendments A54, A55) waits for
+// the data dir's file system, drops the instance's own state directory (the
+// link stands in for it), lets it write in the data dir and runs the unit's
+// command on it, with the socket local commands find through the link
+// (/run/meshctl/<mesh>.sock, agent.DefaultSocket for /var/lib/meshctl/<mesh>):
+// nothing else, and no path but the checked one.
+func TestInstallDataDropIn(t *testing.T) {
+	start := strings.Index(libTemplate, "cat <<MESHCTL_DROPIN\n")
+	end := strings.Index(libTemplate, "\nMESHCTL_DROPIN\n")
+	if start < 0 || end < start {
+		t.Fatal("lib.sh.tmpl has no MESHCTL_DROPIN here-document")
+	}
+	var got []string
+	section := ""
+	for _, line := range strings.Split(libTemplate[start+len("cat <<MESHCTL_DROPIN\n"):end], "\n") {
 		switch line = strings.TrimSpace(line); {
 		case line == "" || strings.HasPrefix(line, "#"):
 		case strings.HasPrefix(line, "["):
-			sections = append(sections, line)
+			section = line
 		default:
-			k, v, _ := strings.Cut(line, "=")
-			got[k] = v
+			got = append(got, section+" "+line)
 		}
 	}
-	want := map[string]string{"RequiresMountsFor": "$1", "StateDirectory": "", "ReadWritePaths": "$1"}
-	if !reflect.DeepEqual(got, want) || !reflect.DeepEqual(sections, []string{"[Unit]", "[Service]"}) {
-		t.Fatalf("drop-in %v in %v, want exactly %v in [Unit] and [Service]", got, sections, want)
+	run := strings.TrimSuffix(wantService["ExecStart"], " --mesh %i")
+	want := []string{"[Unit] RequiresMountsFor=$1", "[Service] StateDirectory=", "[Service] ReadWritePaths=$1", "[Service] ExecStart=",
+		"[Service] ExecStart=" + run + " --data $1 --socket /run/meshctl/%i.sock"}
+	if !reflect.DeepEqual(got, want) || run == wantService["ExecStart"] {
+		t.Fatalf("drop-in %q, want exactly %q", got, want)
 	}
 }
 

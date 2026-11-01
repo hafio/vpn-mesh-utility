@@ -15,7 +15,8 @@ import (
 
 // Downloads (amendment A14): the image bakes the binaries for every shipped
 // target and their SHA256SUMS into MESHCTL_DIST_DIR; the server serves them
-// by exact name only and renders install.sh with the checksums pinned in it.
+// by exact name only and renders the install scripts with the checksums
+// pinned in them.
 
 var (
 	reDistFile = regexp.MustCompile(`^(meshctl-linux-amd64|meshctl-linux-arm64|meshctl-windows-amd64\.exe|SHA256SUMS)$`)
@@ -70,6 +71,25 @@ func (a *api) install(w http.ResponseWriter, r *http.Request) {
 // installPS1 is the Windows installer (amendment A51).
 func (a *api) installPS1(w http.ResponseWriter, r *http.Request) {
 	a.script(w, r, deploy.RenderInstallPS1, "text/plain; charset=utf-8")
+}
+
+// reinstall and uninstall are the Linux scripts for a mesh a host has
+// installed (amendment A55).
+func (a *api) reinstall(w http.ResponseWriter, r *http.Request) {
+	a.script(w, r, deploy.RenderReinstall, "text/x-shellscript; charset=utf-8")
+}
+
+func (a *api) uninstall(w http.ResponseWriter, r *http.Request) {
+	a.script(w, r, deploy.RenderUninstall, "text/x-shellscript; charset=utf-8")
+}
+
+// reinstallPS1 and uninstallPS1 are the Windows ones (amendment A55).
+func (a *api) reinstallPS1(w http.ResponseWriter, r *http.Request) {
+	a.script(w, r, deploy.RenderReinstallPS1, "text/plain; charset=utf-8")
+}
+
+func (a *api) uninstallPS1(w http.ResponseWriter, r *http.Request) {
+	a.script(w, r, deploy.RenderUninstallPS1, "text/plain; charset=utf-8")
 }
 
 // script answers an install script rendered with this server's origin,

@@ -50,7 +50,10 @@ func TestAdminAddIssuesAToken(t *testing.T) {
 	en := ch.Enrollment
 	if en == nil || len(en.Token) != 43 || !strings.Contains(en.Install, testURL+"/install.sh | sudo sh -s -- --mesh default --token "+en.Token) ||
 		!strings.Contains(en.Join, "--mesh default --token "+en.Token) ||
-		en.InstallWindows != "$env:MESHCTL_TOKEN = '"+en.Token+"'; $env:MESHCTL_MESH = 'default'; irm "+testURL+"/install.ps1 | iex" {
+		en.Rejoin != "curl -fsSL "+testURL+"/reinstall.sh | sudo sh -s -- --mesh default --action rejoin --token "+en.Token ||
+		en.InstallWindows != "$env:MESHCTL_TOKEN = '"+en.Token+"'; $env:MESHCTL_MESH = 'default'; irm "+testURL+"/install.ps1 | iex" ||
+		en.RejoinWindows != "$env:MESHCTL_TOKEN = '"+en.Token+"'; $env:MESHCTL_MESH = 'default'; $env:MESHCTL_ACTION = 'rejoin'; irm "+
+			testURL+"/reinstall.ps1 | iex" {
 		t.Fatalf("enrollment %+v", en)
 	}
 	var audit []store.AuditEntry

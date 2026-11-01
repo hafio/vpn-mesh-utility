@@ -129,6 +129,10 @@ func (a *api) routes() []route {
 		{Route{http.MethodGet, proto.PathHealth, "none"}, a.health},
 		{Route{http.MethodGet, proto.PathInstall, "none"}, a.install},
 		{Route{http.MethodGet, proto.PathInstallPS1, "none"}, a.installPS1},
+		{Route{http.MethodGet, proto.PathReinstall, "none"}, a.reinstall},
+		{Route{http.MethodGet, proto.PathUninstall, "none"}, a.uninstall},
+		{Route{http.MethodGet, proto.PathReinstallPS1, "none"}, a.reinstallPS1},
+		{Route{http.MethodGet, proto.PathUninstallPS1, "none"}, a.uninstallPS1},
 		{Route{http.MethodGet, proto.PathDownload + "{file}", "none"}, a.download},
 	}
 }

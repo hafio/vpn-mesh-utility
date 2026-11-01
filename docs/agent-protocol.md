@@ -40,6 +40,10 @@ Public listener (`--listen`, behind the reverse proxy):
 | `GET /healthz` | none | the container healthcheck: serving, and the database answers |
 | `GET /install.sh` | none | the Linux installer, with the binaries' SHA-256 and the systemd unit baked in |
 | `GET /install.ps1` | none | the Windows installer, with the Windows binary's SHA-256 baked in (amendment A51) |
+| `GET /reinstall.sh` | none | for a mesh a Linux host has installed: reinstalls meshctl, joins again or starts afresh, with what install.sh carries baked in (amendment A55) |
+| `GET /uninstall.sh` | none | takes a mesh's agent and data off a Linux host (amendment A55) |
+| `GET /reinstall.ps1` | none | reinstall.sh for a Windows PC, with what install.ps1 carries baked in (amendment A55) |
+| `GET /uninstall.ps1` | none | takes a mesh's agent and data off a Windows PC (amendment A55) |
 | `GET /dl/{file}` | none | `meshctl-linux-amd64`, `meshctl-linux-arm64`, `meshctl-windows-amd64.exe`, `SHA256SUMS` |
 
 Admin socket (`<data>/admin.sock`, mode 0600, so only the server's own user reaches it). Every

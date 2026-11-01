@@ -1,0 +1,103 @@
+# meshctl reinstaller for Windows, served by the meshctl control plane at
+# /reinstall.ps1 (amendment A55). From an elevated PowerShell:
+#
+#   $env:MESHCTL_MESH = '<mesh>'; irm https://<server>/reinstall.ps1 | iex
+#
+# For a mesh installed on this PC it says what is there, then asks what to
+# do, or does what $env:MESHCTL_ACTION says:
+#
+#   reinstall  meshctl and its service again, from this control plane; the
+#              node keeps its keys and stays joined (an upgrade or a repair)
+#   rejoin     join again with a new token, which gives the node new keys;
+#              the data stays where it is
+#   fresh      take the agent off this PC and delete its data, then join
+#              with a new token
+#
+# A token comes from $env:MESHCTL_TOKEN or the console, which does not echo
+# it; it leaves the session's environment once the join has used it.
+# MESHCTL_ACTION holds for this run only: the script clears it, so a later
+# run asks again. A mesh that is not installed here is install.ps1's.
+& {
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+$Self = 'reinstall.ps1'
+
+@@MESHCTL_LIB@@
+
+# Select-Action asks at the console what to do with the installed mesh.
+function Select-Action([string]$mesh) {
+    if (-not (Test-Interactive)) { Fail 'no console to ask on: set $env:MESHCTL_ACTION to reinstall, rejoin or fresh' }
+    Write-Host "What should reinstall.ps1 do with mesh ${mesh}?"
+    Write-Host "  1) reinstall  meshctl $Version and its service, from $Origin; the node keeps its keys"
+    Write-Host "  2) rejoin     join again with a new token (new keys); the data stays in $(Join-Path $Root $mesh)"
+    Write-Host '  3) fresh      take the agent off this PC, delete its data, then join with a new token'
+    Write-Host '  4) cancel'
+    switch (Read-Host -Prompt 'Choice [1-4, default 4]') {
+        '1' { 'reinstall' }
+        '2' { 'rejoin' }
+        '3' { 'fresh' }
+        default { '' }
+    }
+}
+
+$mesh = $env:MESHCTL_MESH
+if (-not $mesh) { $mesh = 'default' }
+$action = $env:MESHCTL_ACTION
+Remove-Item -ErrorAction SilentlyContinue -Path Env:MESHCTL_ACTION
+$token = $env:MESHCTL_TOKEN
+$name = $env:MESHCTL_NAME
+Assert-Mesh $mesh
+if ($action -and $action -cnotin @('reinstall', 'rejoin', 'fresh')) {
+    Fail "MESHCTL_ACTION must be reinstall, rejoin or fresh, not '$action'"
+}
+Assert-Host
+
+if (-not (Test-Joined $mesh)) {
+    $installed = @(Get-Meshes)
+    if ($installed) { Write-Host "installed here: $($installed -join ' ') (set `$env:MESHCTL_MESH)" }
+    Fail ("mesh $mesh is not installed here (no $(Join-Path (Join-Path $Root $mesh) 'state.json')): install it with " +
+        "`$env:MESHCTL_TOKEN = '<token>'; `$env:MESHCTL_MESH = '$mesh'; irm $Origin/install.ps1 | iex")
+}
+Show-Mesh $mesh | Out-Null
+if (-not $action) { $action = Select-Action $mesh }
+if (-not $action) {
+    Write-Host 'nothing changed'
+    return
+}
+
+$service = "meshctl-agent-$mesh"
+if ($action -ceq 'reinstall') {
+    if ($token -or $name) { Write-Host 'MESHCTL_TOKEN and MESHCTL_NAME are not used: reinstall keeps the node joined as it is' }
+    $tmp = Get-Download
+    try {
+        $stopped = @(Install-Binary $tmp)
+    } finally {
+        Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath $tmp
+    }
+    Register-Agent $mesh
+} elseif ($action -ceq 'rejoin') {
+    if (-not $token) { $token = Read-Token $mesh }
+    $tmp = Get-Download
+    try {
+        $stopped = @(Install-Binary $tmp)
+    } finally {
+        Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath $tmp
+    }
+    Join-Mesh $mesh $token $name $stopped ''
+    Register-Agent $mesh
+} else {
+    if (-not $token) { $token = Read-Token $mesh }
+    $tmp = Get-Download
+    try {
+        # The service stays registered: Register-Agent updates it after the
+        # join.
+        Remove-Agent $mesh $true
+        $stopped = @(Install-Binary $tmp)
+    } finally {
+        Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath $tmp
+    }
+    Join-Mesh $mesh $token $name $stopped '; the earlier data is gone already: with a new token, run install.ps1'
+    Register-Agent $mesh
+}
+$stopped | Where-Object { $_.Name -ne $service } | Start-Service
+}

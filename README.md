@@ -74,6 +74,12 @@ docker exec <container> /app/meshctl node add vps-1 --role server
 curl -fsSL https://mesh.example.com/install.sh | sudo sh -s -- --mesh default --token <token>
 # on a Windows laptop, in an elevated PowerShell: the other command it printed
 $env:MESHCTL_TOKEN = '<token>'; $env:MESHCTL_MESH = 'default'; irm https://mesh.example.com/install.ps1 | iex
+# later, on vps-1: reinstall (upgrade), join again or start afresh; or remove the agent
+curl -fsSL https://mesh.example.com/reinstall.sh | sudo sh -s -- --mesh default
+curl -fsSL https://mesh.example.com/uninstall.sh | sudo sh -s -- --mesh default
+# the same on the Windows laptop
+$env:MESHCTL_MESH = 'default'; irm https://mesh.example.com/reinstall.ps1 | iex
+$env:MESHCTL_MESH = 'default'; irm https://mesh.example.com/uninstall.ps1 | iex
 ```
 
 [docs/operations.md](docs/operations.md) walks through it, including Swarm over the mesh.

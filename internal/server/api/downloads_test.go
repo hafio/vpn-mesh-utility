@@ -44,43 +44,51 @@ func TestDownloadsServeOnlyAllowlistedNames(t *testing.T) {
 	}
 }
 
+// install.sh, reinstall.sh and uninstall.sh (amendment A55) carry this
+// server's origin, version and checksums, and the unit.
 func TestInstallScriptPinsTheChecksums(t *testing.T) {
 	h := distHarness(t, map[string]string{"SHA256SUMS": sums})
-	w, eb := serve(h, httptest.NewRequest(http.MethodGet, proto.PathInstall, nil))
-	if w.Code != 200 {
-		t.Fatalf("%d %s", w.Code, eb.Message)
-	}
-	body := w.Body.String()
-	for _, want := range []string{"ORIGIN='" + testURL + "'", "VERSION='v1.2.3'", "SHA256_AMD64='" + sumAmd64 + "'", "SHA256_ARM64='" + sumArm64 + "'"} {
-		if !strings.Contains(body, want) {
-			t.Errorf("install.sh lacks %s", want)
+	for _, path := range []string{proto.PathInstall, proto.PathReinstall, proto.PathUninstall} {
+		w, eb := serve(h, httptest.NewRequest(http.MethodGet, path, nil))
+		if w.Code != 200 || w.Header().Get("Content-Type") != "text/x-shellscript; charset=utf-8" {
+			t.Fatalf("%s: %d %s", path, w.Code, eb.Message)
 		}
-	}
-	if strings.Contains(body, "@@") || !strings.Contains(body, "ExecStart=/usr/local/bin/meshctl agent run --mesh %i") {
-		t.Error("install.sh still has a marker, or lacks the unit")
+		body := w.Body.String()
+		for _, want := range []string{"SCRIPT=" + strings.TrimPrefix(path, "/"), "ORIGIN='" + testURL + "'", "VERSION='v1.2.3'",
+			"SHA256_AMD64='" + sumAmd64 + "'", "SHA256_ARM64='" + sumArm64 + "'"} {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s lacks %s", path, want)
+			}
+		}
+		if strings.Contains(body, "@@") || !strings.Contains(body, "ExecStart=/usr/local/bin/meshctl agent run --mesh %i") {
+			t.Errorf("%s still has a marker, or lacks the unit", path)
+		}
 	}
 }
 
-// install.ps1 (amendment A51) pins the Windows binary's checksum the same
-// way, and needs it.
+// install.ps1 (amendment A51), reinstall.ps1 and uninstall.ps1 (amendment
+// A55) pin the Windows binary's checksum the same way, and need it.
 func TestInstallPS1PinsTheChecksum(t *testing.T) {
 	h := distHarness(t, map[string]string{"SHA256SUMS": sums})
-	w, eb := serve(h, httptest.NewRequest(http.MethodGet, proto.PathInstallPS1, nil))
-	if w.Code != 200 {
-		t.Fatalf("%d %s", w.Code, eb.Message)
-	}
-	body := w.Body.String()
-	for _, want := range []string{"$Origin = '" + testURL + "'", "$Version = 'v1.2.3'", "$Sha256 = '" + sumWindows + "'"} {
-		if !strings.Contains(body, want) {
-			t.Errorf("install.ps1 lacks %s", want)
-		}
-	}
-	if strings.Contains(body, "@@") {
-		t.Error("install.ps1 still has a marker")
-	}
 	linuxOnly := distHarness(t, map[string]string{"SHA256SUMS": sumAmd64 + "  meshctl-linux-amd64\n" + sumArm64 + "  meshctl-linux-arm64\n"})
-	if w, _ := serve(linuxOnly, httptest.NewRequest(http.MethodGet, proto.PathInstallPS1, nil)); w.Code != 500 {
-		t.Fatalf("no Windows checksum: %d", w.Code)
+	for _, path := range []string{proto.PathInstallPS1, proto.PathReinstallPS1, proto.PathUninstallPS1} {
+		w, eb := serve(h, httptest.NewRequest(http.MethodGet, path, nil))
+		if w.Code != 200 || w.Header().Get("Content-Type") != "text/plain; charset=utf-8" {
+			t.Fatalf("%s: %d %s", path, w.Code, eb.Message)
+		}
+		body := w.Body.String()
+		for _, want := range []string{"$Self = '" + strings.TrimPrefix(path, "/") + "'", "$Origin = '" + testURL + "'", "$Version = 'v1.2.3'",
+			"$Sha256 = '" + sumWindows + "'"} {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s lacks %s", path, want)
+			}
+		}
+		if strings.Contains(body, "@@") {
+			t.Errorf("%s still has a marker", path)
+		}
+		if w, _ := serve(linuxOnly, httptest.NewRequest(http.MethodGet, path, nil)); w.Code != 500 {
+			t.Fatalf("%s without a Windows checksum: %d", path, w.Code)
+		}
 	}
 }
 
@@ -93,7 +101,8 @@ func TestInstallScriptFailsWithoutChecksums(t *testing.T) {
 		t.Fatalf("missing arm64 checksum: %d", w.Code)
 	}
 	h := newHarness(t)
-	for _, p := range []string{proto.PathInstall, proto.PathInstallPS1, proto.PathDownload + "SHA256SUMS"} {
+	for _, p := range []string{proto.PathInstall, proto.PathInstallPS1, proto.PathReinstall, proto.PathUninstall, proto.PathReinstallPS1,
+		proto.PathUninstallPS1, proto.PathDownload + "SHA256SUMS"} {
 		if w, eb := serve(h.pub, httptest.NewRequest(http.MethodGet, p, nil)); w.Code != 404 || !strings.Contains(eb.Message, "MESHCTL_DIST_DIR") {
 			t.Errorf("%s without a dist dir: %d %q", p, w.Code, eb.Message)
 		}

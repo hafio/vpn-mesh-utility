@@ -1,0 +1,71 @@
+# meshctl uninstaller for Windows, served by the meshctl control plane at
+# /uninstall.ps1 (amendment A55). From an elevated PowerShell:
+#
+#   $env:MESHCTL_MESH = '<mesh>'; irm https://<server>/uninstall.ps1 | iex
+#
+# It stops the mesh's service, meshctl-agent-<mesh>, has `meshctl agent
+# reset` take the agent's tunnel, routes and DNS rules off the PC, and
+# deletes the service and the mesh's data dir, %ProgramData%\meshctl\<mesh>;
+# it deletes only a directory that holds meshctl's data. With the last mesh
+# gone it also removes Program Files\meshctl. It asks first unless
+# $env:MESHCTL_YES is 'yes', which holds for this run only: the script
+# clears it. The node stays on the control plane: remove it there with
+# `meshctl node rm <name>`.
+& {
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+$Self = 'uninstall.ps1'
+
+@@MESHCTL_LIB@@
+
+# Confirm-Removal asks at the console before anything is deleted.
+function Confirm-Removal([string]$mesh) {
+    if (-not (Test-Interactive)) { Fail "no console to ask on: set `$env:MESHCTL_YES = 'yes' to remove mesh $mesh from this PC" }
+    $answer = Read-Host -Prompt "Remove mesh $mesh from this PC? Its keys and data are deleted; joining again needs a new token. [y/N]"
+    $answer -in @('y', 'yes')
+}
+
+# Remove-Program removes meshctl itself once no mesh is left on this PC.
+function Remove-Program {
+    $left = @(Get-ChildItem -Force -LiteralPath $Root -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }) +
+        @(Get-Service -Name 'meshctl-agent-*' -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
+    if ($left) {
+        Write-Host "meshctl stays in $Dir for what is left here: $($left -join ' ')"
+        return
+    }
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue -LiteralPath $Root
+    if (Test-Path -LiteralPath $Dir) { Remove-Item -Recurse -Force -LiteralPath $Dir }
+    Write-Host "no mesh is left on this PC: removed $Dir"
+}
+
+$mesh = $env:MESHCTL_MESH
+if (-not $mesh) { $mesh = 'default' }
+$yes = $env:MESHCTL_YES
+Remove-Item -ErrorAction SilentlyContinue -Path Env:MESHCTL_YES
+Assert-Mesh $mesh
+if ($yes -and $yes -cne 'yes') { Fail "MESHCTL_YES must be 'yes' or unset, not '$yes'" }
+Assert-Host
+
+$service = "meshctl-agent-$mesh"
+if (-not (Test-Path -LiteralPath (Join-Path $Root $mesh)) -and -not (Get-Service -Name $service -ErrorAction SilentlyContinue)) {
+    $installed = @(Get-Meshes)
+    $note = ''
+    if ($installed) { $note = " (installed: $($installed -join ' '))" }
+    Write-Host "mesh $mesh is not installed here$note; nothing to remove"
+    return
+}
+$node = ''
+if (Test-Joined $mesh) {
+    $node = Show-Mesh $mesh
+} else {
+    Write-Host "mesh $mesh has no joined node here; removing what is left of it"
+}
+if (-not $yes -and -not (Confirm-Removal $mesh)) {
+    Write-Host 'nothing changed'
+    return
+}
+Remove-Agent $mesh $false
+Remove-Program
+if (-not $node) { $node = '<name>' }
+Write-Host "On the control plane, remove the node too: meshctl node rm $node --mesh $mesh (or on its page in the web UI)"
+}

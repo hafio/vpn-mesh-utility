@@ -42,9 +42,9 @@
     "semantic_hash": ""
   },
   "internal/proto/api.go": {
-    "mtime": 1793000461.7331676,
-    "seen": 1793004872.533571,
-    "ast_hash": "7cfb6b83893bdd1bd492badb4de26a28",
+    "mtime": 1793497309.4179425,
+    "seen": 1793498328.9625645,
+    "ast_hash": "fa6151237042a7507176e74afd093262",
     "semantic_hash": ""
   },
   "internal/proto/api_test.go": {
@@ -234,33 +234,33 @@
     "semantic_hash": ""
   },
   "CLAUDE.md": {
-    "mtime": 1793323562.4591188,
-    "seen": 1793324337.5220027,
-    "ast_hash": "7bf99089b4b2bc7032f24955bb5c8fb5",
+    "mtime": 1793497423.8279967,
+    "seen": 1793498328.9683669,
+    "ast_hash": "b5fe0b495e98ab3fd98f167f84301759",
     "semantic_hash": ""
   },
   "README.md": {
-    "mtime": 1793322507.6162183,
-    "seen": 1793324337.5220048,
-    "ast_hash": "99e9c64603253e5150f50f6f405ea83d",
+    "mtime": 1793497423.8275783,
+    "seen": 1793498328.9683678,
+    "ast_hash": "bb3699065e7fb2d0ac177e9b6ca516d3",
     "semantic_hash": ""
   },
   "docs/developer.md": {
-    "mtime": 1793322495.0852835,
-    "seen": 1793324337.522175,
-    "ast_hash": "0979b24dabb2e334faeb245fe4aa6e66",
+    "mtime": 1793497423.8278055,
+    "seen": 1793498328.9685056,
+    "ast_hash": "0778591757881e0966e689df95e448ff",
     "semantic_hash": ""
   },
   "docs/spec.md": {
-    "mtime": 1793344389.9187412,
-    "seen": 1793344706.9771724,
-    "ast_hash": "fcd90edcdb2254fab9c68d2b7f9a66cf",
+    "mtime": 1793497394.7349157,
+    "seen": 1793498328.9685102,
+    "ast_hash": "65833d9557e545f567016382b3612a23",
     "semantic_hash": ""
   },
   "docs/test.md": {
-    "mtime": 1793344389.9221895,
-    "seen": 1793344706.9771743,
-    "ast_hash": "c3138785fb92c46c3ac91c1d4a61eaaf",
+    "mtime": 1793497423.8286326,
+    "seen": 1793498328.9685116,
+    "ast_hash": "acba7350453f8b54ec7fa66af85f77f1",
     "semantic_hash": ""
   },
   "cmd/meshctl/agent.go": {
@@ -294,9 +294,9 @@
     "semantic_hash": ""
   },
   "cmd/meshctl/node.go": {
-    "mtime": 1793323464.7503796,
-    "seen": 1793324337.505911,
-    "ast_hash": "2e7fdcbe7c3b7545976695e04089de08",
+    "mtime": 1793497309.4203568,
+    "seen": 1793498328.957102,
+    "ast_hash": "a486b21072d897d92a917daab3f8d6fe",
     "semantic_hash": ""
   },
   "cmd/meshctl/server.go": {
@@ -312,15 +312,15 @@
     "semantic_hash": ""
   },
   "deploy/deploy_test.go": {
-    "mtime": 1793344318.0645025,
-    "seen": 1793344706.9628625,
-    "ast_hash": "386aa6ca2ceec985164ab4e0345e7039",
+    "mtime": 1793497283.2966928,
+    "seen": 1793498328.9573681,
+    "ast_hash": "80b198b7d99dc073aac96bf804f56bdf",
     "semantic_hash": ""
   },
   "deploy/embed.go": {
-    "mtime": 1793323104.9226787,
-    "seen": 1793324337.5062482,
-    "ast_hash": "79228a01576916a2a7562dcf4546945b",
+    "mtime": 1793497204.951704,
+    "seen": 1793498328.9573698,
+    "ast_hash": "18ed60e88e009093df7ea614467427c0",
     "semantic_hash": ""
   },
   "internal/agent/agent.go": {
@@ -456,9 +456,9 @@
     "semantic_hash": ""
   },
   "internal/agent/state/state_test.go": {
-    "mtime": 1792945512.2614872,
-    "seen": 1792946342.5712159,
-    "ast_hash": "23ca145bba077cb1fc7ca83dd484e5f7",
+    "mtime": 1793468567.852513,
+    "seen": 1793498328.9613478,
+    "ast_hash": "3da172bbfb97a3d8b1d747f12226ea3d",
     "semantic_hash": ""
   },
   "internal/agent/sysctl/sysctl.go": {
@@ -504,15 +504,15 @@
     "semantic_hash": ""
   },
   "internal/server/api/admin.go": {
-    "mtime": 1793000442.2796602,
-    "seen": 1793004872.5343828,
-    "ast_hash": "26a46ddfc6f76c83330e17e788f50370",
+    "mtime": 1793497309.4194932,
+    "seen": 1793498328.963339,
+    "ast_hash": "38bba1f3251aa15743fb40d8d1f32921",
     "semantic_hash": ""
   },
   "internal/server/api/admin_test.go": {
-    "mtime": 1793000678.4861417,
-    "seen": 1793004872.534384,
-    "ast_hash": "8d5cc239f2df25bf7af119d84a9fd929",
+    "mtime": 1793497350.9767113,
+    "seen": 1793498328.9633408,
+    "ast_hash": "0f7b08d9f63082355e96f5ba036e6767",
     "semantic_hash": ""
   },
   "internal/server/api/adminclient.go": {
@@ -522,9 +522,9 @@
     "semantic_hash": ""
   },
   "internal/server/api/admintypes.go": {
-    "mtime": 1793323464.749447,
-    "seen": 1793324337.5148513,
-    "ast_hash": "783da14e1a442303501499c9ae3b68a1",
+    "mtime": 1793497309.4192383,
+    "seen": 1793498328.963383,
+    "ast_hash": "1ebfbd4e85bdecb0652bc394de316c49",
     "semantic_hash": ""
   },
   "internal/server/api/agent.go": {
@@ -534,9 +534,9 @@
     "semantic_hash": ""
   },
   "internal/server/api/api.go": {
-    "mtime": 1793000442.2801645,
-    "seen": 1793004872.5344322,
-    "ast_hash": "e39579b84f0c7cef338bc198e161df71",
+    "mtime": 1793497309.4185088,
+    "seen": 1793498328.9634242,
+    "ast_hash": "cf5de17285770c4ed6f224cafa4850f3",
     "semantic_hash": ""
   },
   "internal/server/api/api_test.go": {
@@ -552,15 +552,15 @@
     "semantic_hash": ""
   },
   "internal/server/api/downloads.go": {
-    "mtime": 1793000442.28058,
-    "seen": 1793004872.5345163,
-    "ast_hash": "4325c2b18fd291bca8112469edc6104a",
+    "mtime": 1793497309.4186835,
+    "seen": 1793498328.9635038,
+    "ast_hash": "da83e8dfd2f634e242e5228b9e09aaa6",
     "semantic_hash": ""
   },
   "internal/server/api/downloads_test.go": {
-    "mtime": 1793000697.438306,
-    "seen": 1793004872.5345175,
-    "ast_hash": "0d0a1f0121e46204b3b6f8ad03f110c3",
+    "mtime": 1793497350.9773617,
+    "seen": 1793498328.9635055,
+    "ast_hash": "0fbefa31aac113badbcc44251012486e",
     "semantic_hash": ""
   },
   "internal/server/api/guard.go": {
@@ -612,15 +612,15 @@
     "semantic_hash": ""
   },
   "internal/server/server.go": {
-    "mtime": 1793317663.9678807,
-    "seen": 1793318351.8477829,
-    "ast_hash": "b327cca14714e07c16ce1618eae91d98",
+    "mtime": 1793497309.419071,
+    "seen": 1793498328.9658263,
+    "ast_hash": "6a6ae28ee9f069d07ec0f4e7efa7d0fd",
     "semantic_hash": ""
   },
   "internal/server/server_test.go": {
-    "mtime": 1793317877.058251,
-    "seen": 1793318351.8477848,
-    "ast_hash": "cdb5304e27d3024711214bc0fd02c46e",
+    "mtime": 1793468382.7893932,
+    "seen": 1793498328.965828,
+    "ast_hash": "d27c93e0e878571cd0e15545a9c8b800",
     "semantic_hash": ""
   },
   "internal/server/store/status.go": {
@@ -642,27 +642,27 @@
     "semantic_hash": ""
   },
   "docs/agent-protocol.md": {
-    "mtime": 1793322475.1803002,
-    "seen": 1793324337.5221682,
-    "ast_hash": "a6d1c8142e4b50f661c28d4731e17d8a",
+    "mtime": 1793497423.82836,
+    "seen": 1793498328.9684696,
+    "ast_hash": "d4ff8b90173466a2ff39ce202d22a03f",
     "semantic_hash": ""
   },
   "docs/commands.md": {
-    "mtime": 1793344507.3987834,
-    "seen": 1793344706.9770725,
+    "mtime": 1793498021.6123283,
+    "seen": 1793498328.9684708,
     "ast_hash": "d5c909ee54a800f5acabc4399bbae2c7",
     "semantic_hash": ""
   },
   "docs/operations.md": {
-    "mtime": 1793344389.9176989,
-    "seen": 1793344706.9771678,
-    "ast_hash": "85e948e0e8df606f0380aab11fc69f05",
+    "mtime": 1793497386.175146,
+    "seen": 1793498328.9685073,
+    "ast_hash": "48eeb9b5eeea023063b6d03fca29ebbb",
     "semantic_hash": ""
   },
   "docs/security.md": {
-    "mtime": 1793344389.917987,
-    "seen": 1793344706.9771702,
-    "ast_hash": "a37e8db9b4387b51b0082964474fead3",
+    "mtime": 1793497404.1531222,
+    "seen": 1793498328.968509,
+    "ast_hash": "19a354056e269bebee0cb172af0082e4",
     "semantic_hash": ""
   },
   "cmd/meshctl/import.go": {
@@ -822,9 +822,9 @@
     "semantic_hash": ""
   },
   "internal/server/ui/pages.go": {
-    "mtime": 1793323464.7499626,
-    "seen": 1793324337.519981,
-    "ast_hash": "726d05c78dcc3e97b08847a1a1fdecf8",
+    "mtime": 1793497309.4199293,
+    "seen": 1793498328.9669254,
+    "ast_hash": "92a1573910367821889e19c043510c89",
     "semantic_hash": ""
   },
   "internal/server/ui/render.go": {
@@ -846,9 +846,9 @@
     "semantic_hash": ""
   },
   "internal/server/ui/ui_test.go": {
-    "mtime": 1793344322.7167146,
-    "seen": 1793344706.9752157,
-    "ast_hash": "da7aa3c7574fb2e985167f4077ebc863",
+    "mtime": 1793497350.9771237,
+    "seen": 1793498328.967272,
+    "ast_hash": "7301c8c16c01348cedbdd071d2fe700b",
     "semantic_hash": ""
   },
   "internal/server/ui/templates/account.html": {
@@ -882,9 +882,9 @@
     "semantic_hash": ""
   },
   "internal/server/ui/templates/enrollment.html": {
-    "mtime": 1793344248.2242339,
-    "seen": 1793344706.9778075,
-    "ast_hash": "92d0ca247140107c934e756985ca2505",
+    "mtime": 1793497309.4201396,
+    "seen": 1793498328.9689662,
+    "ast_hash": "e50c672a29561f44f6ef17f25c1c1f52",
     "semantic_hash": ""
   },
   "internal/server/ui/templates/error.html": {
@@ -2034,9 +2034,9 @@
     "semantic_hash": ""
   },
   "internal/agent/session_test.go": {
-    "mtime": 1792991721.3892515,
-    "seen": 1792992137.2762127,
-    "ast_hash": "e1edf594e1315c1c974912bba3be2675",
+    "mtime": 1793345653.2486184,
+    "seen": 1793346105.6804094,
+    "ast_hash": "a16502644ff8de277b20858632d95acf",
     "semantic_hash": ""
   },
   "internal/agent/state/meshlock.go": {

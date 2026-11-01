@@ -75,11 +75,22 @@ scripts set up the service, amendment A51), no shell, and every argv element re-
 `[A-Za-z0-9 ._/:=,"-]`. `TestModuleBoundaries`
 fails if any other package imports `os/exec`. firewall-cmd arguments are built only from
 validated zone, protocol, port and prefix values; `TestHostileRulesNeverReachFirewallCmd` proves a
-hostile rule never runs a command. install.sh substitutes four markers, each validated
+hostile rule never runs a command. The Linux scripts, install.sh, reinstall.sh and uninstall.sh
+(amendment A55), share one part that holds four markers, each validated
 (`TestInstallRefusesHostileValues`) and placed inside single quotes, and the static unit as a
-quoted here-document; install.ps1 three, the same way. Both scripts check the mesh name they are
-given against the name grammar before it names a unit, a service or a directory, and neither puts
-the join token on a command line (`MESHCTL_TOKEN`).
+quoted here-document; the Windows scripts, install.ps1, reinstall.ps1 and uninstall.ps1, share
+one part with three, the same way. Every script checks the mesh name it is given against the name
+grammar before it names a unit, a service or a directory, hands the join token to meshctl in
+`MESHCTL_TOKEN` rather than on its command line, and never prints it
+(`TestScriptsNeverPrintTheToken`, `TestPS1ScriptsNeverShowTheToken`); reinstall.sh and
+reinstall.ps1 ask for it without echo (`Read-Host -AsSecureString` on Windows). The Linux
+scripts' questions read the terminal, never stdin, which is the script itself
+(`TestScriptsReadTheTerminal`). A Windows script runs inside the PowerShell session that pipes it
+into iex, so each is one script block (`TestPS1ScriptsKeepToTheirBlock`): none of its functions,
+variables or preferences stay in the session, nothing in it exits that session, it removes the
+token from the session's environment once the join has used it, and it clears `MESHCTL_ACTION`
+and `MESHCTL_YES` as soon as it has read them, so a later run in the same window never deletes a
+mesh's data without asking.
 
 ## Control plane container
 
@@ -123,12 +134,15 @@ pins its `[Service]` section exactly. The agent owns its interface, its routes, 
 | `RestartPreventExitStatus=3` | an agent the control plane refused (exit 3, amendment A50) stays stopped until an operator acts; every other exit is restarted |
 
 install.sh `--data <dir>` (amendment A54) adds one drop-in to the mesh's instance, which
-`TestInstallDataDropIn` pins. It contains exactly three settings:
+`TestInstallDataDropIn` pins; reinstall.sh writes it again (amendment A55). It contains exactly:
 
 - `RequiresMountsFor=<dir>`;
 - `StateDirectory=`, so the instance makes no state directory (`/var/lib/meshctl/<mesh>` is the
   link to `<dir>`);
-- `ReadWritePaths=<dir>`, so the agent can still write only in its data dir.
+- `ReadWritePaths=<dir>`, so the agent can still write only in its data dir;
+- `ExecStart=` and `ExecStart=/usr/local/bin/meshctl agent run --data <dir> --socket
+  /run/meshctl/<mesh>.sock`: the unit's own command, run on `<dir>` itself, with the socket the
+  local commands find through the link.
 
 install.sh accepts `<dir>` only as an absolute path of letters, digits, `.`, `_`, `-` and `/`, so
 no quote, unit-file specifier or extra line can reach the unit file. It refuses:
@@ -139,6 +153,11 @@ no quote, unit-file specifier or extra line can reach the unit file. It refuses:
 - another mesh's directory.
 
 It makes the directory 0700 (`TestInstallChecksTheDataDir`).
+
+uninstall.sh and reinstall.sh's `fresh` delete a mesh's data dir only after `meshctl agent reset`
+has taken off the host what the agent made, and only a directory that holds meshctl's files
+(`state.json` or `agent.lock`) or nothing; a link to a path install.sh would not make stops them
+before anything is deleted, and uninstall.sh's `--data` must be where the link points.
 
 `systemd-analyze security --offline=true deploy/meshctl-agent.service` (the unit before it became
 a template) rated it 4.3, "OK",
@@ -428,9 +447,12 @@ machine other people log in to, run the agent with `--ui-listen off`.
 
 - **The service** `meshctl-agent-<mesh>` (amendment A51), which install.ps1 creates, runs
   `meshctl agent run --mesh <mesh>` (data in `C:\ProgramData\meshctl\<mesh>`) as LocalSystem,
-  started with Windows and restarted on failure. install.ps1 checks the binary against the
-  SHA-256 the control plane baked into it before it copies it to Program Files; installing,
-  changing or removing the service takes an elevated prompt.
+  started with Windows and restarted on failure. install.ps1 and reinstall.ps1 check the binary
+  against the SHA-256 the control plane baked into them before they copy it to Program Files;
+  installing, changing or removing the service takes an elevated prompt. uninstall.ps1 (and
+  reinstall.ps1's `fresh`) delete a mesh's data dir only when it holds meshctl's files
+  (`state.json` or `agent.lock`) or nothing, and nothing when `meshctl agent reset` fails
+  (amendment A55).
 - **The data dir** gets a protected ACL that every file in it inherits: SYSTEM and Administrators
   only (`D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)`), the Windows form of mode 0700, since file modes
   mean nothing there. An unelevated process that opens a data dir (a test) is

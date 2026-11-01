@@ -1243,6 +1243,10 @@ func (s *Nodes) enrollment(tx *store.MeshTx, token string, expires int64) (*Enro
 		Install:   fmt.Sprintf("curl -fsSL %s%s | sudo sh -s -- --mesh %s --token %s", s.serverURL, proto.PathInstall, m.Name, token),
 		InstallWindows: fmt.Sprintf("$env:MESHCTL_TOKEN = '%s'; $env:MESHCTL_MESH = '%s'; irm %s%s | iex", token, m.Name, s.serverURL,
 			proto.PathInstallPS1),
+		Rejoin: fmt.Sprintf("curl -fsSL %s%s | sudo sh -s -- --mesh %s --action rejoin --token %s", s.serverURL, proto.PathReinstall,
+			m.Name, token),
+		RejoinWindows: fmt.Sprintf("$env:MESHCTL_TOKEN = '%s'; $env:MESHCTL_MESH = '%s'; $env:MESHCTL_ACTION = 'rejoin'; irm %s%s | iex",
+			token, m.Name, s.serverURL, proto.PathReinstallPS1),
 		Join: fmt.Sprintf("meshctl agent join --server %s --mesh %s --token %s", s.serverURL, m.Name, token),
 	}, nil
 }

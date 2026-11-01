@@ -34,7 +34,7 @@ that applies) and continue from the output reported back.
   stdlib.**
 - **`internal/testfix` is for tests only** and imports only `internal/proto`, so both sides'
   tests can share it. `internal/agent/agentfake` (in-memory host fakes) is test-only too.
-- `deploy` (unit, install.sh, install.ps1, the control plane's compose files, the node samples) imports only `internal/validate` and yaml.v3; both sides use it.
+- `deploy` (unit, install, reinstall and uninstall scripts for Linux and Windows and each system's shared part, the control plane's compose files, the node samples) imports only `internal/validate` and yaml.v3; both sides use it.
 - `internal/fsutil` (atomic file writes) is stdlib-only; both sides use it.
 - The server never imports data-plane libraries (wgctrl, wireguard-go, netlink, nftables,
   miekg/dns, godbus, x/sys/windows, go-winio); the agent never imports server ones (sqlite,

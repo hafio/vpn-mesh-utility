@@ -1,0 +1,88 @@
+#!/bin/sh
+# meshctl uninstaller, served by the meshctl control plane at /uninstall.sh
+# (amendment A55):
+#
+#   curl -fsSL https://<server>/uninstall.sh | sudo sh -s -- --mesh <mesh>
+#
+# It stops and disables meshctl-agent@<mesh>, has `meshctl agent reset` take
+# the agent's tunnel, routes, rules, firewalld zone and DNS registration off
+# the host, and deletes the mesh's data dir: /var/lib/meshctl/<mesh>, or for
+# an install.sh --data install the directory its link names (--data <dir>
+# names it when the link is gone), with the link and the unit's drop-in. It
+# deletes only a directory that holds meshctl's data. With the last mesh gone
+# it also removes /usr/local/bin/meshctl and the unit template. It asks first
+# unless --yes is given. The node stays on the control plane: remove it there
+# with `meshctl node rm <name>`.
+set -eu
+SCRIPT=uninstall.sh
+
+@@MESHCTL_LIB@@
+
+usage() {
+  echo "usage: uninstall.sh [--mesh <mesh>] [--data <dir>] [--yes]"
+}
+
+# confirm asks at the terminal before anything is deleted.
+confirm() {
+  interactive || die "no terminal to ask on: pass --yes to remove mesh $mesh from this host"
+  printf 'Remove mesh %s from this host? Its keys and data are deleted; joining again needs a new token. [y/N]: ' "$mesh" >/dev/tty
+  read -r answer </dev/tty || answer=""
+  case "$answer" in
+    y | Y | yes | YES) ;;
+    *) echo "nothing changed"; exit 0 ;;
+  esac
+}
+
+# last removes the binary and the unit template once no mesh is left here.
+last() {
+  if [ -n "$(ls -A "$ROOT" 2>/dev/null)" ]; then
+    echo "$ROOT still holds $(ls -A "$ROOT" | tr '\n' ' ')so $BIN and $UNIT stay"
+    return 0
+  fi
+  rm -f "$UNIT" "$BIN"
+  rmdir "$ROOT" 2>/dev/null || true
+  [ "$systemd" = no ] || systemctl daemon-reload
+  echo "no mesh is left on this host: removed $BIN and $UNIT"
+}
+
+main() {
+  mesh="${MESHCTL_MESH:-default}"
+  data="${MESHCTL_DATA:-}"
+  yes=no
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --mesh) [ $# -ge 2 ] || die "--mesh needs a value"; mesh="$2"; shift 2 ;;
+      --data) [ $# -ge 2 ] || die "--data needs a value"; data="$2"; shift 2 ;;
+      --yes) yes=yes; shift ;;
+      -h | --help) usage; exit 0 ;;
+      *) usage >&2; die "unknown argument: $1" ;;
+    esac
+  done
+  checkmesh
+  [ -z "$data" ] || datadir "$data"
+  host "--mesh <mesh>"
+  paths
+  locate "$data"
+
+  enabled=no
+  if [ "$systemd" = yes ] && systemctl is-enabled --quiet "$service" 2>/dev/null; then
+    enabled=yes
+  fi
+  if [ -z "$target" ] && [ ! -e "$dropins" ] && [ "$enabled" = no ]; then
+    installed="$(meshes)"
+    echo "mesh $mesh is not installed here${installed:+ (installed: $installed)}; nothing to remove"
+    exit 0
+  fi
+  node=""
+  if joined "$mesh"; then
+    describe
+  else
+    echo "mesh $mesh has no joined node here; removing what is left of it"
+  fi
+  [ "$yes" = yes ] || confirm
+  remove
+  last
+  echo "On the control plane, remove the node too: meshctl node rm ${node:-<name>} --mesh $mesh (or on its page in the web UI)"
+}
+
+main "$@"

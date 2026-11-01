@@ -1,0 +1,133 @@
+#!/bin/sh
+# meshctl reinstaller, served by the meshctl control plane at /reinstall.sh
+# (amendment A55):
+#
+#   curl -fsSL https://<server>/reinstall.sh | sudo sh -s -- --mesh <mesh>
+#
+# For a mesh installed on this host it says what is there, then asks what to
+# do, or does what --action says:
+#
+#   reinstall  meshctl and its service again, from this control plane; the
+#              node keeps its keys and stays joined (an upgrade or a repair)
+#   rejoin     join again with a new token, which gives the node new keys;
+#              the data stays where it is
+#   fresh      take the agent off this host and delete its data, then join
+#              with a new token, in /var/lib/meshctl/<mesh> or --data <dir>
+#
+# A token comes from --token, MESHCTL_TOKEN or the terminal, which does not
+# echo it. A mesh that is not installed here is install.sh's.
+set -eu
+SCRIPT=reinstall.sh
+
+@@MESHCTL_LIB@@
+
+usage() {
+  echo "usage: reinstall.sh [--mesh <mesh>] [--action reinstall|rejoin|fresh] [--token <token>] [--name <name>] [--endpoint <ipv4:port>] [--endpoint6 <[ipv6]:port>] [--data <dir>]"
+}
+
+# choose asks at the terminal what to do with the installed mesh.
+choose() {
+  interactive || die "no terminal to ask on: pass --action reinstall, rejoin or fresh"
+  {
+    echo "What should reinstall.sh do with mesh $mesh?"
+    echo "  1) reinstall  meshctl $VERSION and its service, from $ORIGIN; the node keeps its keys"
+    echo "  2) rejoin     join again with a new token (new keys); the data stays in $dir"
+    echo "  3) fresh      take the agent off this host, delete its data, then join with a new token"
+    echo "  4) cancel"
+    printf 'Choice [1-4, default 4]: '
+  } >/dev/tty
+  read -r choice </dev/tty || choice=""
+  case "$choice" in
+    1) action=reinstall ;;
+    2) action=rejoin ;;
+    3) action=fresh ;;
+    *) echo "nothing changed"; exit 0 ;;
+  esac
+}
+
+# others names the other meshes' instances that run, which keep the meshctl
+# they started with until they restart.
+others() {
+  [ "$systemd" = yes ] || return 0
+  for m in $(meshes); do
+    if [ "$m" != "$mesh" ] && systemctl is-active --quiet "meshctl-agent@$m"; then
+      echo "meshctl-agent@$m runs the meshctl it started with until: systemctl restart meshctl-agent@$m"
+    fi
+  done
+}
+
+main() {
+  token="${MESHCTL_TOKEN:-}"
+  mesh="${MESHCTL_MESH:-default}"
+  data="${MESHCTL_DATA:-}"
+  action=""
+  name=""
+  endpoint=""
+  endpoint6=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --mesh) [ $# -ge 2 ] || die "--mesh needs a value"; mesh="$2"; shift 2 ;;
+      --action) [ $# -ge 2 ] || die "--action needs a value"; action="$2"; shift 2 ;;
+      --token) [ $# -ge 2 ] || die "--token needs a value"; token="$2"; shift 2 ;;
+      --name) [ $# -ge 2 ] || die "--name needs a value"; name="$2"; shift 2 ;;
+      --endpoint) [ $# -ge 2 ] || die "--endpoint needs a value"; endpoint="$2"; shift 2 ;;
+      --endpoint6) [ $# -ge 2 ] || die "--endpoint6 needs a value"; endpoint6="$2"; shift 2 ;;
+      --data) [ $# -ge 2 ] || die "--data needs a value"; data="$2"; shift 2 ;;
+      -h | --help) usage; exit 0 ;;
+      *) usage >&2; die "unknown argument: $1" ;;
+    esac
+  done
+  checkmesh
+  case "$action" in
+    '' | reinstall | rejoin | fresh) ;;
+    *) die "--action must be reinstall, rejoin or fresh, not '$action'" ;;
+  esac
+  [ -z "$data" ] || datadir "$data"
+  host "--mesh <mesh>"
+  tools
+  paths
+
+  if ! joined "$mesh"; then
+    installed="$(meshes)"
+    [ -z "$installed" ] || echo "installed here: $installed(pass --mesh)" >&2
+    die "mesh $mesh is not installed here (no $link/state.json): install it with curl -fsSL $ORIGIN/install.sh | sudo sh -s -- --mesh $mesh --token <token>"
+  fi
+  describe
+  [ -n "$action" ] || choose
+
+  case "$action" in
+    reinstall)
+      [ -z "$token$name$endpoint$endpoint6" ] ||
+        die "--action reinstall joins nothing: leave out --token, --name and --endpoint, or use --action rejoin"
+      [ -z "$data" ] || die "--action reinstall keeps the data in $dir: to move it, use --action fresh --data <dir>"
+      download
+      place
+      start
+      others
+      ;;
+    rejoin)
+      if [ -n "$data" ] && [ "$(readlink -f "$data" 2>/dev/null || true)" != "$(readlink -f "$dir")" ]; then
+        die "--action rejoin keeps the data in $dir: to move it, use --action fresh --data $data"
+      fi
+      data=""
+      asktoken
+      download
+      place
+      join
+      others
+      ;;
+    fresh)
+      asktoken
+      locate ""
+      [ -z "$data" ] || datacheck
+      download
+      remove
+      place
+      gone="; the earlier data is gone already: with a new token, run install.sh"
+      join
+      others
+      ;;
+  esac
+}
+
+main "$@"

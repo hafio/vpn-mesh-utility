@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -75,6 +76,30 @@ func TestRunServesAndShutsDown(t *testing.T) {
 		}
 	case <-time.After(15 * time.Second):
 		t.Fatal("Run did not shut down")
+	}
+}
+
+// Every path the agent API serves reaches it, not the web UI: the agent API,
+// the health check, the scripts and the downloads.
+func TestRoutesSendTheAPIPathsToTheAPI(t *testing.T) {
+	answer := func(who string) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, who) })
+	}
+	h := Routes(answer("api"), answer("web"))
+	reaches := func(method, path string) string {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(method, path, nil))
+		return w.Body.String()
+	}
+	for _, r := range api.Routes() {
+		if got := reaches(r.Method, strings.Replace(r.Path, "{file}", "SHA256SUMS", 1)); got != "api" {
+			t.Errorf("%s %s reaches the %s", r.Method, r.Path, got)
+		}
+	}
+	for _, path := range []string{"/", "/login", "/m/default/nodes", "/install.sh.bak"} {
+		if got := reaches(http.MethodGet, path); got != "web" {
+			t.Errorf("GET %s reaches the %s", path, got)
+		}
 	}
 }
 

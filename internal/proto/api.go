@@ -28,7 +28,14 @@ const (
 	PathInstall = "/install.sh"
 	// PathInstallPS1 is the Windows installer (amendment A51).
 	PathInstallPS1 = "/install.ps1"
-	PathDownload   = "/dl/"
+	// PathReinstall and PathUninstall are the Linux scripts for a mesh
+	// installed on a host already, PathReinstallPS1 and PathUninstallPS1
+	// the Windows ones (amendment A55).
+	PathReinstall    = "/reinstall.sh"
+	PathUninstall    = "/uninstall.sh"
+	PathReinstallPS1 = "/reinstall.ps1"
+	PathUninstallPS1 = "/uninstall.ps1"
+	PathDownload     = "/dl/"
 )
 
 // ETag is the HTTP entity tag of a config: its quoted Hash. GET config with
