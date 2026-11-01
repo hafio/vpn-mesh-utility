@@ -7,9 +7,10 @@
 # It stops and disables meshctl-agent@<mesh>, has `meshctl agent reset` take
 # the agent's tunnel, routes, rules, firewalld zone and DNS registration off
 # the host, and deletes the mesh's data dir: /var/lib/meshctl/<mesh>, or for
-# an install.sh --data install the directory its link names (--data <dir>
-# names it when the link is gone), with the link and the unit's drop-in. It
-# deletes only a directory that holds meshctl's data. With the last mesh gone
+# an install.sh --data install the directory /etc/meshctl/<mesh>.env records
+# (--data <dir> names it when the record is gone), with the record and the
+# unit's drop-in (amendment A56). It deletes only a directory that holds
+# meshctl's data. With the last mesh gone
 # it also removes /usr/local/bin/meshctl and the unit template. It asks first
 # unless --yes is given. The node stays on the control plane: remove it there
 # with `meshctl node rm <name>`.
@@ -33,10 +34,15 @@ confirm() {
   esac
 }
 
-# last removes the binary and the unit template once no mesh is left here.
+# last removes the binary and the unit template once no mesh is left here:
+# nothing under /var/lib/meshctl, no record in /etc/meshctl.
 last() {
-  if [ -n "$(ls -A "$ROOT" 2>/dev/null)" ]; then
-    echo "$ROOT still holds $(ls -A "$ROOT" | tr '\n' ' ')so $BIN and $UNIT stay"
+  left="$(ls -A "$ROOT" 2>/dev/null | tr '\n' ' ')"
+  for f in "$CONF"/*.env; do
+    [ ! -e "$f" ] || left="$left$(basename "$f" .env) "
+  done
+  if [ -n "$left" ]; then
+    echo "meshes are left here ($left), so $BIN and $UNIT stay"
     return 0
   fi
   rm -f "$UNIT" "$BIN"

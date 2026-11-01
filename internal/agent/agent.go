@@ -1409,7 +1409,12 @@ func DefaultSocket(goos, dataDir string) string {
 		e, _ := (&state.Dir{Path: dataDir}).Enrollment() // read only; the zero value is slot 0
 		return Pipe(e.Slot)
 	case path.Dir(dataDir) == "/var/lib/meshctl":
-		return "/run/meshctl/" + path.Base(dataDir) + ".sock"
+		return MeshSocket(path.Base(dataDir))
 	}
 	return filepath.Join(dataDir, "agent.sock")
 }
+
+// MeshSocket is the local API socket of a mesh's agent installed on a Linux
+// host, in the runtime dir its unit makes (amendments A51, A56), wherever
+// its data dir is.
+func MeshSocket(mesh string) string { return "/run/meshctl/" + mesh + ".sock" }

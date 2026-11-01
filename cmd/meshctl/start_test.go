@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/hafio/vpn-mesh-utility/internal/agent/localapi"
-	"github.com/hafio/vpn-mesh-utility/internal/agent/state"
 	"github.com/hafio/vpn-mesh-utility/internal/proto"
 	"github.com/hafio/vpn-mesh-utility/internal/testfix"
 )
@@ -127,14 +126,7 @@ func TestStartNodeJoin(t *testing.T) {
 // variables reaching `agent run`'s flags.
 func TestStartNodeRuns(t *testing.T) {
 	data := t.TempDir()
-	dir, err := state.Open(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := dir.SaveEnrollment(state.Enrollment{Server: "https://mesh.example.com", NodeID: 4, Name: "nas", Role: proto.RoleSpoke,
-		ConfigKey: testfix.ConfigKeyB64()}); err != nil {
-		t.Fatal(err)
-	}
+	enroll(t, data, "")
 	// MESHCTL_URL is the control plane's flag only: a node that has joined
 	// runs without it.
 	base := map[string]string{"MESHCTL_MODE": modeNode, "MESHCTL_DATA": data, "MESHCTL_URL": "https://mesh.example.com"}

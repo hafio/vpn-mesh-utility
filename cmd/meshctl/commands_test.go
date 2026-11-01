@@ -324,6 +324,49 @@ func TestLocalCommandsCheckTheMesh(t *testing.T) {
 	}
 }
 
+// parseMesh parses args with meshFlags and resolves the data dir.
+func parseMesh(e *env, args ...string) (dir, mesh string, err error) {
+	fs := flag.NewFlagSet("t", flag.ContinueOnError)
+	data := meshFlags(fs, e)
+	if err := fs.Parse(args); err != nil {
+		return "", "", err
+	}
+	return data()
+}
+
+// parseSocket parses args with socketFlags and resolves the socket.
+func parseSocket(e *env, args ...string) (string, error) {
+	fs := flag.NewFlagSet("t", flag.ContinueOnError)
+	_, sock := socketFlags(fs, e)
+	if err := fs.Parse(args); err != nil {
+		return "", err
+	}
+	return sock()
+}
+
+// parseJoin parses args, after a server and a token, with joinFlags.
+func parseJoin(e *env, args ...string) (agent.JoinOptions, error) {
+	fs := flag.NewFlagSet("t", flag.ContinueOnError)
+	opts := joinFlags(fs, e)
+	if err := fs.Parse(append([]string{"--server", "https://mesh.example.com", "--token", testfix.Token}, args...)); err != nil {
+		return agent.JoinOptions{}, err
+	}
+	return opts()
+}
+
+// enroll writes an enrollment of a node of mesh into the data dir dir.
+func enroll(t *testing.T, dir, mesh string) {
+	t.Helper()
+	d, err := state.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SaveEnrollment(state.Enrollment{Server: "https://mesh.example.com", NodeID: 4, Name: "nas", Role: proto.RoleSpoke,
+		Mesh: mesh, ConfigKey: testfix.ConfigKeyB64()}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // Each mesh's agent has its data dir under the agent root (amendment A51):
 // --data wins, then --mesh, then the one mesh that has joined; none, or
 // several, says what to do. join names the mesh's dir, default for none,
@@ -331,26 +374,18 @@ func TestLocalCommandsCheckTheMesh(t *testing.T) {
 func TestMeshFlags(t *testing.T) {
 	e, _, _ := testEnv(nil)
 	root := agentRoot(e)
-	parse := func(args ...string) (string, error) {
-		fs := flag.NewFlagSet("t", flag.ContinueOnError)
-		data := meshFlags(fs, e)
-		if err := fs.Parse(args); err != nil {
-			return "", err
-		}
-		return data()
+	if dir, mesh, err := parseMesh(e, "--mesh", "lab"); err != nil || dir != meshDir(e, root, "lab") || mesh != "lab" {
+		t.Fatalf("--mesh lab = %q of %q, %v", dir, mesh, err)
 	}
-	if dir, err := parse("--mesh", "lab"); err != nil || dir != meshDir(e, root, "lab") {
-		t.Fatalf("--mesh lab = %q, %v", dir, err)
+	if dir, mesh, err := parseMesh(e, "--mesh", "lab", "--data", "/srv/x"); err != nil || dir != "/srv/x" || mesh != "" {
+		t.Fatalf("--data wins: %q of %q, %v", dir, mesh, err)
 	}
-	if dir, err := parse("--mesh", "lab", "--data", "/srv/x"); err != nil || dir != "/srv/x" {
-		t.Fatalf("--data wins: %q, %v", dir, err)
-	}
-	if _, err := parse("--mesh", "Lab;x"); err == nil || !strings.Contains(err.Error(), "--mesh") {
+	if _, _, err := parseMesh(e, "--mesh", "Lab;x"); err == nil || !strings.Contains(err.Error(), "--mesh") {
 		t.Fatalf("a bad mesh name = %v", err)
 	}
 
 	tmp := t.TempDir()
-	if _, err := onlyMesh(e, tmp); err == nil || !strings.Contains(err.Error(), "agent join --mesh") {
+	if _, _, err := onlyMesh(e, tmp); err == nil || !strings.Contains(err.Error(), "agent join --mesh") {
 		t.Fatalf("no mesh = %v", err)
 	}
 	for _, m := range []string{"lab", "default", "empty"} {
@@ -361,24 +396,16 @@ func TestMeshFlags(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(tmp, "lab", state.EnrollmentFile), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if dir, err := onlyMesh(e, tmp); err != nil || dir != meshDir(e, tmp, "lab") {
-		t.Fatalf("the one mesh = %q, %v", dir, err)
+	if dir, mesh, err := onlyMesh(e, tmp); err != nil || dir != meshDir(e, tmp, "lab") || mesh != "lab" {
+		t.Fatalf("the one mesh = %q of %q, %v", dir, mesh, err)
 	}
 	if err := os.WriteFile(filepath.Join(tmp, "default", state.EnrollmentFile), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := onlyMesh(e, tmp); err == nil || !strings.Contains(err.Error(), "default, lab") {
+	if _, _, err := onlyMesh(e, tmp); err == nil || !strings.Contains(err.Error(), "default, lab") {
 		t.Fatalf("several meshes = %v", err)
 	}
 
-	join := func(args ...string) (agent.JoinOptions, error) {
-		fs := flag.NewFlagSet("t", flag.ContinueOnError)
-		opts := joinFlags(fs, e)
-		if err := fs.Parse(append([]string{"--server", "https://mesh.example.com", "--token", testfix.Token}, args...)); err != nil {
-			return agent.JoinOptions{}, err
-		}
-		return opts()
-	}
 	for _, c := range []struct {
 		args       []string
 		dir, mesh  string
@@ -389,7 +416,7 @@ func TestMeshFlags(t *testing.T) {
 		{[]string{"--data", "/srv/x"}, "/srv/x", "", ""},
 		{[]string{"--mesh", "-x"}, "", "", "--mesh"},
 	} {
-		o, err := join(c.args...)
+		o, err := parseJoin(e, c.args...)
 		switch {
 		case c.wantErrMsg != "" && (err == nil || !strings.Contains(err.Error(), c.wantErrMsg)):
 			t.Errorf("join %v = %v", c.args, err)
@@ -402,23 +429,124 @@ func TestMeshFlags(t *testing.T) {
 	}
 }
 
-// A mesh whose data dir lives elsewhere (install.sh --data, amendment A54) is
-// found through its link under the agent root; a link to a directory with no
-// enrollment is no mesh.
-func TestOnlyMeshFollowsALink(t *testing.T) {
+// A mesh installed with install.sh --data has its data dir recorded in
+// /etc/meshctl/<mesh>.env (amendment A56): --mesh finds it there, and so
+// does --data's own socket check; the one mesh on the host may be a recorded
+// one, whose record wins over a dir under the agent root; its socket is the
+// unit's wherever the data is. A record that names no plain absolute path is
+// the error, and says what to do.
+func TestDataDirRecords(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("install.sh --data and its records are Linux's")
+	}
 	e, _, _ := testEnv(nil)
-	root, elsewhere := t.TempDir(), t.TempDir()
-	if err := os.WriteFile(filepath.Join(elsewhere, state.EnrollmentFile), []byte("{}"), 0o600); err != nil {
-		t.Fatal(err)
+	e.goos, e.records = "linux", t.TempDir()
+	record := func(mesh, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(e.records, mesh+".env"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := os.Symlink(elsewhere, filepath.Join(root, "nas")); err != nil {
-		t.Skipf("no symbolic links here: %v", err)
+	root, nas, lab := t.TempDir(), t.TempDir(), t.TempDir()
+	enroll(t, nas, "nas")
+	enroll(t, lab, "lab")
+	record("nas", "# Written by install.sh\nMESHCTL_DATA="+nas+"\n")
+	record("empty", "MESHCTL_DATA="+t.TempDir()+"\n")
+	for _, f := range []string{"Not a mesh.env", "nas.token"} {
+		if err := os.WriteFile(filepath.Join(e.records, f), []byte("MESHCTL_DATA=relative"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := os.Symlink(t.TempDir(), filepath.Join(root, "empty")); err != nil {
-		t.Fatal(err)
+
+	if dir, mesh, err := parseMesh(e, "--mesh", "nas"); err != nil || dir != nas || mesh != "nas" {
+		t.Fatalf("--mesh nas = %q of %q, %v", dir, mesh, err)
 	}
-	if dir, err := onlyMesh(e, root); err != nil || dir != meshDir(e, root, "nas") {
-		t.Fatalf("the linked mesh = %q, %v", dir, err)
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--mesh", "nas"}, agent.MeshSocket("nas")},
+		{[]string{"--data", nas}, agent.MeshSocket("nas")},
+		{[]string{"--mesh", "lab"}, agent.MeshSocket("lab")},
+		{[]string{"--data", lab}, filepath.Join(lab, "agent.sock")},
+		{[]string{"--data", nas, "--socket", "/srv/x.sock"}, "/srv/x.sock"},
+	} {
+		if sock, err := parseSocket(e, c.args...); err != nil || sock != c.want {
+			t.Errorf("socket for %q = %q, %v; want %q", c.args, sock, err, c.want)
+		}
+	}
+	if o, err := parseJoin(e, "--mesh", "nas"); err != nil || o.DataDir != nas || o.Mesh != "nas" {
+		t.Fatalf("join --mesh nas = %q in %q, %v", o.Mesh, o.DataDir, err)
+	}
+
+	if dir, mesh, err := onlyMesh(e, root); err != nil || dir != nas || mesh != "nas" {
+		t.Fatalf("the one, recorded mesh = %q of %q, %v", dir, mesh, err)
+	}
+	for _, m := range []string{"nas", "lab"} {
+		enroll(t, filepath.Join(root, m), m)
+	}
+	if _, _, err := onlyMesh(e, root); err == nil || !strings.Contains(err.Error(), "(lab, nas)") {
+		t.Fatalf("a record wins over the dir under the root, and lab is another mesh: %v", err)
+	}
+
+	for _, c := range []struct{ body, want string }{
+		{"MESHCTL_DATA=relative/dir\n", "correct or remove that file"},
+		{"MESHCTL_DATA=/srv/a b\n", "correct or remove that file"},
+		{"# nothing\n", "no MESHCTL_DATA=<dir> line"},
+		{strings.Repeat("#", recordMax+1), "over 4096 bytes"},
+	} {
+		record("bad", c.body)
+		if _, mesh, err := parseMesh(e, "--mesh", "bad"); err == nil || mesh != "bad" || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("record %.20q = %q, %v; want %q", c.body, mesh, err, c.want)
+		}
+		if sock, err := parseSocket(e, "--mesh", "bad"); err != nil || sock != agent.MeshSocket("bad") {
+			t.Errorf("the socket of --mesh bad needs no record: %q, %v", sock, err)
+		}
+		if _, _, err := onlyMesh(e, root); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("onlyMesh with record %.20q = %v", c.body, err)
+		}
+	}
+}
+
+// MESHCTL_DATA names the data dir when --data does not (amendment A56). A
+// dir given either way whose node joined another mesh than --mesh is
+// refused, by local commands and by join, before anything is dialled or
+// written; a dir without an enrollment has nothing to check.
+func TestDataDirFromTheEnvironment(t *testing.T) {
+	lab, other := t.TempDir(), t.TempDir()
+	enroll(t, lab, "lab")
+	e, _, _ := testEnv(map[string]string{"MESHCTL_DATA": lab})
+	for _, args := range [][]string{nil, {"--mesh", "lab"}} {
+		if dir, mesh, err := parseMesh(e, args...); err != nil || dir != lab || mesh != "" {
+			t.Errorf("%q with MESHCTL_DATA = %q of %q, %v", args, dir, mesh, err)
+		}
+	}
+	if dir, _, err := parseMesh(e, "--data", other, "--mesh", "nas"); err != nil || dir != other {
+		t.Errorf("--data wins over MESHCTL_DATA: %q, %v", dir, err)
+	}
+	if o, err := parseJoin(e); err != nil || o.DataDir != lab || o.Mesh != "" {
+		t.Errorf("join with MESHCTL_DATA = %q in %q, %v", o.Mesh, o.DataDir, err)
+	}
+	for _, args := range [][]string{{"--mesh", "nas"}, {"--mesh", "nas", "--data", lab}} {
+		from := "MESHCTL_DATA"
+		if len(args) > 2 {
+			from = "--data"
+		}
+		want := from + " " + lab + " is the data dir of the mesh lab, not of nas"
+		if _, _, err := parseMesh(e, args...); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q = %v, want %q", args, err, want)
+		}
+		if _, err := parseJoin(e, args...); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("join %q = %v, want %q", args, err, want)
+		}
+	}
+	code, _, stderr := runWith(e, "status", "--mesh", "nas")
+	if code != exitUsage || !strings.Contains(stderr, "is the data dir of the mesh lab") {
+		t.Fatalf("status --mesh nas with lab's MESHCTL_DATA = %d, %q", code, stderr)
+	}
+	bad, _, _ := testEnv(map[string]string{"MESHCTL_DATA": "/data?x"})
+	if _, _, err := parseMesh(bad); err == nil || !strings.Contains(err.Error(), "MESHCTL_DATA") {
+		t.Fatalf("a bad MESHCTL_DATA = %v", err)
 	}
 }
 

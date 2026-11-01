@@ -322,7 +322,7 @@ func runScript(t *testing.T, name string, env []string, args ...string) (string,
 // --data (amendment A54) is checked before anything else happens, by every
 // Linux script that takes it: a value that is not a plain absolute path, or
 // that lies where the agent's unit cannot keep data, stops the script before
-// its root check, so before it downloads, links, writes or deletes anything.
+// its root check, so before it downloads, records, writes or deletes anything.
 // A plain path gets as far as the root check.
 func TestInstallChecksTheDataDir(t *testing.T) {
 	base := map[string][]string{"install.sh": {"--token", "t0ken"}, "reinstall.sh": nil, "uninstall.sh": nil}
@@ -551,34 +551,57 @@ func TestPS1ScriptsCheckTheirVariables(t *testing.T) {
 	}
 }
 
-// The drop-in the scripts write for --data (amendments A54, A55) waits for
-// the data dir's file system, drops the instance's own state directory (the
-// link stands in for it), lets it write in the data dir and runs the unit's
-// command on it, with the socket local commands find through the link
-// (/run/meshctl/<mesh>.sock, agent.DefaultSocket for /var/lib/meshctl/<mesh>):
-// nothing else, and no path but the checked one.
-func TestInstallDataDropIn(t *testing.T) {
-	start := strings.Index(libTemplate, "cat <<MESHCTL_DROPIN\n")
-	end := strings.Index(libTemplate, "\nMESHCTL_DROPIN\n")
+// hereDoc is the body of the here-document name in the Linux scripts'
+// shared part, without its comment and blank lines.
+func hereDoc(t *testing.T, name string) []string {
+	t.Helper()
+	open := "cat <<" + name + "\n"
+	start := strings.Index(libTemplate, open)
+	end := strings.Index(libTemplate, "\n"+name+"\n")
 	if start < 0 || end < start {
-		t.Fatal("lib.sh.tmpl has no MESHCTL_DROPIN here-document")
+		t.Fatalf("lib.sh.tmpl has no %s here-document", name)
 	}
-	var got []string
-	section := ""
-	for _, line := range strings.Split(libTemplate[start+len("cat <<MESHCTL_DROPIN\n"):end], "\n") {
-		switch line = strings.TrimSpace(line); {
-		case line == "" || strings.HasPrefix(line, "#"):
-		case strings.HasPrefix(line, "["):
-			section = line
-		default:
-			got = append(got, section+" "+line)
+	var lines []string
+	for _, line := range strings.Split(libTemplate[start+len(open):end], "\n") {
+		if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
+			lines = append(lines, line)
 		}
 	}
-	run := strings.TrimSuffix(wantService["ExecStart"], " --mesh %i")
+	return lines
+}
+
+// The drop-in the scripts write for --data (amendments A54-A56) waits for
+// the data dir's file system, drops the instance's own state directory under
+// /var/lib/meshctl, lets it write in the data dir and runs the unit's command
+// on it, with the socket meshctl's local commands use for an installed mesh
+// (/run/meshctl/<mesh>.sock, agent.MeshSocket): nothing else, and no path but
+// the checked one.
+func TestInstallDataDropIn(t *testing.T) {
+	var got []string
+	section := ""
+	for _, line := range hereDoc(t, "MESHCTL_DROPIN") {
+		if strings.HasPrefix(line, "[") {
+			section = line
+			continue
+		}
+		got = append(got, section+" "+line)
+	}
 	want := []string{"[Unit] RequiresMountsFor=$1", "[Service] StateDirectory=", "[Service] ReadWritePaths=$1", "[Service] ExecStart=",
-		"[Service] ExecStart=" + run + " --data $1 --socket /run/meshctl/%i.sock"}
-	if !reflect.DeepEqual(got, want) || run == wantService["ExecStart"] {
+		"[Service] ExecStart=" + wantService["ExecStart"] + " --data $1 --socket /run/meshctl/%i.sock"}
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("drop-in %q, want exactly %q", got, want)
+	}
+}
+
+// The record a --data install keeps in /etc/meshctl/<mesh>.env (amendment
+// A56) holds the checked data dir and nothing else: one MESHCTL_DATA line,
+// which meshctl's local commands read (cmd/meshctl recorded).
+func TestInstallDataRecord(t *testing.T) {
+	if got := hereDoc(t, "MESHCTL_RECORD"); !reflect.DeepEqual(got, []string{"MESHCTL_DATA=$1"}) {
+		t.Fatalf("record %q, want exactly MESHCTL_DATA=$1", got)
+	}
+	if !strings.Contains(libTemplate, "\nCONF=/etc/meshctl\n") {
+		t.Fatal("lib.sh.tmpl must keep the records in /etc/meshctl, where meshctl reads them")
 	}
 }
 

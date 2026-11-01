@@ -7,9 +7,10 @@
 # It stops and disables meshctl-agent@<mesh>, has `meshctl agent reset` take
 # the agent's tunnel, routes, rules, firewalld zone and DNS registration off
 # the host, and deletes the mesh's data dir: /var/lib/meshctl/<mesh>, or for
-# an install.sh --data install the directory its link names (--data <dir>
-# names it when the link is gone), with the link and the unit's drop-in. It
-# deletes only a directory that holds meshctl's data. With the last mesh gone
+# an install.sh --data install the directory /etc/meshctl/<mesh>.env records
+# (--data <dir> names it when the record is gone), with the record and the
+# unit's drop-in (amendment A56). It deletes only a directory that holds
+# meshctl's data. With the last mesh gone
 # it also removes /usr/local/bin/meshctl and the unit template. It asks first
 # unless --yes is given. The node stays on the control plane: remove it there
 # with `meshctl node rm <name>`.
@@ -25,10 +26,12 @@ VERSION='v1.2.3'
 SHA256_AMD64='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 SHA256_ARM64='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
 
-# What a host install keeps where (amendment A51): one data dir (with
-# --data, a link to one) and one unit instance per mesh, one binary and one
-# unit template for all of them.
+# What a host install keeps where (amendment A51): one data dir and one
+# unit instance per mesh, one binary and one unit template for all of them.
+# A mesh installed with --data has its data dir recorded in CONF/<mesh>.env
+# (amendment A56).
 ROOT=/var/lib/meshctl
+CONF=/etc/meshctl
 BIN=/usr/local/bin/meshctl
 UNIT=/etc/systemd/system/meshctl-agent@.service
 
@@ -55,17 +58,37 @@ checkmesh() {
   [ "${#mesh}" -le 32 ] || die "--mesh must be at most 32 characters"
 }
 
-# paths names what belongs to the mesh (checked by checkmesh).
+# paths names what belongs to the mesh (checked by checkmesh); dir is its
+# data dir: the recorded one, else home.
 paths() {
-  link="$ROOT/$mesh"
+  home="$ROOT/$mesh"
+  record="$CONF/$mesh.env"
   service="meshctl-agent@$mesh.service"
   dropins="/etc/systemd/system/$service.d"
+  dirof "$mesh"
+  dir="$got"
+}
+
+# recorded sets got to the data dir CONF/$1.env records for the mesh $1,
+# checked as --data is; "" when there is no record.
+recorded() {
+  got=""
+  [ -e "$CONF/$1.env" ] || return 0
+  got="$(sed -n 's|^MESHCTL_DATA=||p' "$CONF/$1.env" | head -n 1)"
+  (datadir "$got") 2>/dev/null || die "$CONF/$1.env records '$got' as the data dir of $1, which install.sh never writes: correct or remove that file"
+}
+
+# dirof sets got to the data dir of the mesh $1: the recorded one, else
+# /var/lib/meshctl/$1.
+dirof() {
+  recorded "$1"
+  [ -n "$got" ] || got="$ROOT/$1"
 }
 
 # hidden fails when the agent's unit cannot keep data in $1: ProtectHome
 # hides /home, /root and /run/user, PrivateTmp and boot empty /tmp,
 # /var/tmp and /run, /proc, /sys and /dev are the kernel's, and
-# /var/lib/meshctl holds the link to the data.
+# /var/lib/meshctl is the unit's own, for the meshes installed there.
 hidden() {
   case "$1/" in
     /home/* | /root/* | /run/* | /tmp/* | /var/tmp/* | /proc/* | /sys/* | /dev/* | /var/lib/meshctl/*) return 0 ;;
@@ -73,9 +96,10 @@ hidden() {
   return 1
 }
 
-# datadir checks a --data value before it reaches a command, a link or a unit
-# file: an absolute path of letters, digits, '.', '_', '-' and '/', which a
-# unit file takes without quoting, somewhere the agent's unit can write.
+# datadir checks a --data value before it reaches a command, a record or a
+# unit file: an absolute path of letters, digits, '.', '_', '-' and '/',
+# which a unit file takes without quoting, somewhere the agent's unit can
+# write.
 datadir() {
   case "$1" in
     /*) ;;
@@ -87,7 +111,7 @@ datadir() {
     */ | *//* | */./* | */../* | */. | */..) die "--data must not hold '.' or '..' parts, '//' or a trailing '/': '$1'" ;;
   esac
   if hidden "$1"; then
-    die "--data cannot be under /home, /root, /run, /tmp, /var/tmp, /proc, /sys, /dev or /var/lib/meshctl, which the agent's unit hides, empties or links from: '$1'"
+    die "--data cannot be under /home, /root, /run, /tmp, /var/tmp, /proc, /sys, /dev or /var/lib/meshctl, which the agent's unit hides, empties or keeps for itself: '$1'"
   fi
 }
 
@@ -96,29 +120,31 @@ datadir() {
 datacheck() {
   real="$(readlink -f "$data" 2>/dev/null || true)"
   if [ -n "$real" ] && hidden "$real"; then
-    die "--data $data is $real, which the agent's unit hides, empties or links from"
+    die "--data $data is $real, which the agent's unit hides, empties or keeps for itself"
   fi
   [ -e "$data" ] || return 0
   [ -d "$data" ] || die "--data $data is not a directory"
   if [ -n "$(ls -A "$data")" ] && [ ! -e "$data/agent.lock" ]; then
     die "--data $data holds files but no meshctl data: pick a new or empty directory"
   fi
-  for other in "$ROOT"/*; do
-    if [ -L "$other" ] && [ "$other" != "$link" ] && [ "$(readlink -f "$other")" = "$real" ]; then
-      die "--data $data is the data dir of the mesh ${other##*/} already: each mesh's agent needs its own"
+  for other in "$CONF"/*.env; do
+    [ -e "$other" ] && [ "$other" != "$record" ] || continue
+    recorded "$(basename "$other" .env)"
+    if [ -n "$real" ] && [ "$(readlink -f "$got" 2>/dev/null || true)" = "$real" ]; then
+      die "--data $data is the data dir of the mesh $(basename "$other" .env) already: each mesh's agent needs its own"
     fi
   done
 }
 
 # dropin prints the unit drop-in for the data dir $1 (checked by datadir):
-# the instance waits for $1's file system, makes no state directory of its
-# own (/var/lib/meshctl/<mesh> is the link), may write in $1 and runs the
-# agent on $1, with the socket local commands find through the link.
+# the instance waits for $1's file system, makes no state directory under
+# /var/lib/meshctl, may write in $1 and runs the agent on $1, with the
+# socket meshctl's local commands use for an installed mesh.
 dropin() {
   cat <<MESHCTL_DROPIN
-# Written by install.sh or reinstall.sh with --data (amendments A54, A55):
+# Written by install.sh or reinstall.sh with --data (amendments A54-A56):
 # the agent of the mesh $mesh keeps its data in $1, which
-# /var/lib/meshctl/$mesh links to. uninstall.sh removes this file.
+# $CONF/$mesh.env records. uninstall.sh removes both files.
 [Unit]
 RequiresMountsFor=$1
 
@@ -126,8 +152,18 @@ RequiresMountsFor=$1
 StateDirectory=
 ReadWritePaths=$1
 ExecStart=
-ExecStart=/usr/local/bin/meshctl agent run --data $1 --socket /run/meshctl/%i.sock
+ExecStart=/usr/local/bin/meshctl agent run --mesh %i --data $1 --socket /run/meshctl/%i.sock
 MESHCTL_DROPIN
+}
+
+# recordfile prints the record of the data dir $1 (checked by datadir).
+recordfile() {
+  cat <<MESHCTL_RECORD
+# Written by install.sh or reinstall.sh with --data (amendment A56): the
+# agent of the mesh $mesh keeps its data in $1. meshctl's local commands
+# read this file; uninstall.sh removes it.
+MESHCTL_DATA=$1
+MESHCTL_RECORD
 }
 
 # unit writes the agent's systemd unit, unchanged, to $1.
@@ -136,10 +172,11 @@ unit() {
 # meshctl agent, one instance per mesh (amendment A51): meshctl-agent@<mesh>
 # runs the agent of the mesh <mesh> on /var/lib/meshctl/<mesh>. install.sh
 # installs this file unchanged to /etc/systemd/system/meshctl-agent@.service;
-# with --data <dir> it links /var/lib/meshctl/<mesh> to <dir> and adds the
-# drop-in meshctl-agent@<mesh>.service.d/data.conf, which runs the instance
-# on <dir> and lets it write there (amendment A54). reinstall.sh and
-# uninstall.sh keep the link and the drop-in in step (amendment A55).
+# with --data <dir> it adds the drop-in
+# meshctl-agent@<mesh>.service.d/data.conf, which runs the instance on <dir>
+# and lets it write there (amendment A54), and records <dir> in
+# /etc/meshctl/<mesh>.env for meshctl's local commands (amendment A56).
+# reinstall.sh and uninstall.sh keep both in step (amendment A55).
 # The agent runs as root (it owns its interface, routes, sysctls and, on
 # servers, firewalld), but only with the two capabilities that needs, on a
 # read-only system. docs/security.md explains each setting; deploy_test.go
@@ -238,27 +275,35 @@ place() {
   fi
 }
 
-# joined is true when the mesh $1 has a joined node here: its data dir (or
-# the directory its link names) holds an enrollment.
-joined() { [ -e "$ROOT/$1/state.json" ]; }
+# joined is true when the mesh $1 has a joined node here: its data dir
+# holds an enrollment.
+joined() {
+  dirof "$1"
+  [ -e "$got/state.json" ]
+}
 
-# meshes lists the meshes with a joined node here.
+# meshes lists the meshes with a joined node here: those under
+# /var/lib/meshctl without a record, then the recorded ones.
 meshes() {
   for d in "$ROOT"/*; do
-    [ ! -e "$d/state.json" ] || printf '%s ' "${d##*/}"
+    [ ! -e "$d/state.json" ] || [ -e "$CONF/${d##*/}.env" ] || printf '%s ' "${d##*/}"
+  done
+  for f in "$CONF"/*.env; do
+    [ -e "$f" ] || continue
+    m="$(basename "$f" .env)"
+    recorded "$m"
+    [ ! -e "$got/state.json" ] || printf '%s ' "$m"
   done
 }
 
 # field prints one plain value of the mesh's enrollment, state.json, which
 # the agent writes a field to a line; nothing when it is not plain.
 field() {
-  sed -n "s|^  \"$1\": \"\([A-Za-z0-9.:/_-]*\)\",\{0,1\}\$|\1|p" "$link/state.json" 2>/dev/null | head -n 1
+  sed -n "s|^  \"$1\": \"\([A-Za-z0-9.:/_-]*\)\",\{0,1\}\$|\1|p" "$dir/state.json" 2>/dev/null | head -n 1
 }
 
-# describe says what of the mesh is on this host; dir is its data dir after.
+# describe says what of the mesh is on this host.
 describe() {
-  dir="$link"
-  [ ! -L "$link" ] || dir="$(readlink "$link")"
   node="$(field name)"
   ver="$("$BIN" version 2>/dev/null || true)"
   active="(no systemd)"
@@ -285,22 +330,30 @@ asktoken() {
   [ -n "$token" ] || die "no join token given; nothing was changed"
 }
 
-# start writes or removes the instance's drop-in to match the mesh's link,
-# then enables and (re)starts the instance.
+# keep writes the record and the instance's drop-in for the data dir, or
+# removes them when it is /var/lib/meshctl/<mesh>.
+keep() {
+  if [ "$dir" = "$home" ]; then
+    rm -f "$record" "$dropins/data.conf"
+    rmdir "$dropins" 2>/dev/null || true
+    return 0
+  fi
+  datadir "$dir"
+  [ -d "$CONF" ] || install -d -m 0755 "$CONF"
+  recordfile "$dir" >"$record.new"
+  chmod 0644 "$record.new"
+  mv -f "$record.new" "$record"
+  echo "the agent of $mesh keeps its data in $dir ($record records it)"
+  [ "$systemd" = yes ] || return 0
+  mkdir -p "$dropins"
+  dropin "$dir" >"$dropins/data.conf"
+}
+
+# start enables and (re)starts the instance.
 start() {
   if [ "$systemd" = no ]; then
     echo "systemd is not running here: start the agent with: meshctl agent run --mesh $mesh"
     return 0
-  fi
-  if [ -L "$link" ]; then
-    target="$(readlink "$link")"
-    datadir "$target"
-    mkdir -p "$dropins"
-    dropin "$target" >"$dropins/data.conf"
-    echo "the agent of $mesh keeps its data in $target ($link links to it)"
-  elif [ -e "$dropins/data.conf" ]; then
-    rm -f "$dropins/data.conf"
-    rmdir "$dropins" 2>/dev/null || true
   fi
   systemctl daemon-reload
   systemctl enable "$service" >/dev/null
@@ -308,55 +361,48 @@ start() {
   echo "started $service"
 }
 
-# join stops the mesh's agent when it runs, points the mesh's data dir at
-# --data when given, joins with the token and starts the agent. A failed join
-# puts the link back and starts again what it stopped.
+# join stops the mesh's agent when it runs, joins with the token in the
+# mesh's data dir (--data when given), records where that is and starts the
+# agent. A failed join changes no record and starts again what it stopped.
 join() {
   running=no
   if [ "$systemd" = yes ] && systemctl is-active --quiet "$service"; then
     running=yes
     systemctl stop "$service"
   fi
-  previous=""
-  if [ -n "$data" ]; then
-    [ ! -L "$link" ] || previous="$(readlink "$link")"
-    mkdir -p "$data" "$ROOT"
-    chmod 0700 "$data"
-    rm -f "$link"
-    ln -s "$data" "$link"
+  [ -z "$data" ] || dir="$data"
+  if [ "$dir" != "$home" ]; then
+    mkdir -p "$dir"
+    chmod 0700 "$dir"
   fi
-  set -- --server "$ORIGIN" --mesh "$mesh"
+  set -- --server "$ORIGIN" --mesh "$mesh" --data "$dir"
   [ -z "$name" ] || set -- "$@" --name "$name"
   [ -z "$endpoint" ] || set -- "$@" --endpoint "$endpoint"
   [ -z "$endpoint6" ] || set -- "$@" --endpoint6 "$endpoint6"
   if ! MESHCTL_TOKEN="$token" "$BIN" agent join "$@"; then
-    if [ -n "$data" ]; then
-      rm -f "$link"
-      [ -z "$previous" ] || ln -s "$previous" "$link"
-    fi
     if [ "$running" = yes ]; then
       systemctl start "$service" && echo "started $service again on its earlier enrollment" >&2
     fi
     die "meshctl agent join failed (above)${gone:-}"
   fi
+  keep
   start
 }
 
-# locate finds the mesh's data dir, target: where its link points, else
-# /var/lib/meshctl/<mesh>, else $1 (uninstall.sh --data) when the link is
+# locate finds the mesh's data dir to remove, target: the recorded one, else
+# /var/lib/meshctl/<mesh>, else $1 (uninstall.sh --data) when the record is
 # gone; $1, when given, must be that dir. A directory that is not meshctl's
 # stops the script before anything is deleted.
 locate() {
   target=""
-  if [ -L "$link" ]; then
-    target="$(readlink "$link")"
-    (datadir "$target") 2>/dev/null || die "$link links to '$target', which install.sh does not make: remove it by hand"
+  if [ -e "$record" ]; then
+    target="$dir"
     if [ -n "$1" ] && [ "$(readlink -f "$1" 2>/dev/null || true)" != "$(readlink -f "$target" 2>/dev/null || true)" ]; then
-      die "--data $1 is not where $link links to ($target)"
+      die "--data $1 is not the data dir $record records ($target)"
     fi
-  elif [ -d "$link" ]; then
-    [ -z "$1" ] || die "--data $1: the data of $mesh is in $link (it was installed without --data)"
-    target="$link"
+  elif [ -d "$home" ]; then
+    [ -z "$1" ] || die "--data $1: the data of $mesh is in $home (it was installed without --data)"
+    target="$home"
   elif [ -n "$1" ]; then
     target="$1"
   fi
@@ -370,7 +416,7 @@ locate() {
 
 # remove takes the mesh's agent off this host: it stops and disables the
 # instance, has `meshctl agent reset` take off what the agent made, then
-# deletes the drop-in, the link and the data dir (target, from locate).
+# deletes the drop-in, the record and the data dir (target, from locate).
 # Nothing is deleted when the reset fails.
 remove() {
   if [ "$systemd" = yes ]; then
@@ -383,12 +429,11 @@ remove() {
   fi
   if [ -n "$target" ] && [ -e "$target/state.json" ]; then
     [ -x "$BIN" ] || die "$BIN is missing, so nothing can take the agent's tunnel, routes and rules off this host: run reinstall.sh --mesh $mesh --action reinstall first; nothing was deleted"
-    "$BIN" agent reset --data "$target" ||
+    "$BIN" agent reset --mesh "$mesh" --data "$target" ||
       die "meshctl agent reset could not take everything off this host (above): fix that and run this again; nothing was deleted"
   fi
-  rm -f "$dropins/data.conf"
+  rm -f "$dropins/data.conf" "$record"
   rmdir "$dropins" 2>/dev/null || true
-  [ ! -L "$link" ] || rm -f "$link"
   if [ -n "$target" ] && [ -d "$target" ]; then
     find "$target" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
     rmdir "$target" 2>/dev/null || echo "kept the empty directory $target (a mount point?)"
@@ -412,10 +457,15 @@ confirm() {
   esac
 }
 
-# last removes the binary and the unit template once no mesh is left here.
+# last removes the binary and the unit template once no mesh is left here:
+# nothing under /var/lib/meshctl, no record in /etc/meshctl.
 last() {
-  if [ -n "$(ls -A "$ROOT" 2>/dev/null)" ]; then
-    echo "$ROOT still holds $(ls -A "$ROOT" | tr '\n' ' ')so $BIN and $UNIT stay"
+  left="$(ls -A "$ROOT" 2>/dev/null | tr '\n' ' ')"
+  for f in "$CONF"/*.env; do
+    [ ! -e "$f" ] || left="$left$(basename "$f" .env) "
+  done
+  if [ -n "$left" ]; then
+    echo "meshes are left here ($left), so $BIN and $UNIT stay"
     return 0
   fi
   rm -f "$UNIT" "$BIN"

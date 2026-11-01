@@ -90,7 +90,7 @@ main() {
   if ! joined "$mesh"; then
     installed="$(meshes)"
     [ -z "$installed" ] || echo "installed here: $installed(pass --mesh)" >&2
-    die "mesh $mesh is not installed here (no $link/state.json): install it with curl -fsSL $ORIGIN/install.sh | sudo sh -s -- --mesh $mesh --token <token>"
+    die "mesh $mesh is not installed here (no $dir/state.json): install it with curl -fsSL $ORIGIN/install.sh | sudo sh -s -- --mesh $mesh --token <token>"
   fi
   describe
   [ -n "$action" ] || choose
@@ -102,6 +102,7 @@ main() {
       [ -z "$data" ] || die "--action reinstall keeps the data in $dir: to move it, use --action fresh --data <dir>"
       download
       place
+      keep
       start
       others
       ;;
@@ -123,6 +124,7 @@ main() {
       download
       remove
       place
+      dir="$home"
       gone="; the earlier data is gone already: with a new token, run install.sh"
       join
       others

@@ -10,8 +10,9 @@
 # mesh's instance, meshctl-agent@<mesh> (amendment A51). The token may also
 # come from the MESHCTL_TOKEN environment variable, the mesh from
 # MESHCTL_MESH. The agent keeps its data in /var/lib/meshctl/<mesh>; with
-# --data <dir> (or MESHCTL_DATA) it keeps it in <dir> instead, which
-# /var/lib/meshctl/<mesh> then links to (amendment A54).
+# --data <dir> (or MESHCTL_DATA) it keeps it in <dir> instead (amendment
+# A54), which /etc/meshctl/<mesh>.env records for meshctl's local commands
+# and the unit's drop-in names (amendment A56).
 #
 # It only installs (amendment A55): where the mesh is installed already it
 # says what is there and stops, before it downloads anything or uses the
@@ -65,15 +66,15 @@ main() {
     fi
     die "mesh $mesh is installed here already, and install.sh only installs; nothing was changed and the token is unused. To reinstall meshctl, join again or start afresh: curl -fsSL $ORIGIN/reinstall.sh | sudo sh -s -- --mesh $mesh. To remove it: curl -fsSL $ORIGIN/uninstall.sh | sudo sh -s -- --mesh $mesh"
   fi
-  # The mesh's data dir is /var/lib/meshctl/<mesh>, a directory, or with
-  # --data a link to its own directory elsewhere.
+  # The mesh's data dir is /var/lib/meshctl/<mesh>, or with --data its own
+  # directory elsewhere, which /etc/meshctl/<mesh>.env records.
   if [ -n "$data" ]; then
-    if [ -e "$link" ] && [ ! -L "$link" ]; then
-      die "$link is a directory an earlier install without --data left: remove it (uninstall.sh --mesh $mesh), then run this again"
+    if [ -e "$home" ]; then
+      die "$home is a directory an earlier install without --data left: remove it (uninstall.sh --mesh $mesh), then run this again"
     fi
     datacheck
-  elif [ -L "$link" ]; then
-    echo "the agent of $mesh keeps its data in $(readlink "$link") (an earlier install.sh --data)"
+  elif [ "$dir" != "$home" ]; then
+    echo "the agent of $mesh keeps its data in $dir ($record records it, from an earlier install.sh --data)"
   fi
 
   download

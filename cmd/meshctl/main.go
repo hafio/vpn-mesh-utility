@@ -50,6 +50,9 @@ type env struct {
 	now     func() time.Time
 	// password reads a password without echo (a terminal only).
 	password func(prompt string) (string, error)
+	// records is where install.sh --data records each mesh's data dir
+	// (amendment A56): recordsDir on Linux, "" (none) on Windows and in tests.
+	records string
 }
 
 // usageError marks a mistake in how the command was invoked (exit 2).
@@ -65,6 +68,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	e := &env{version: version, stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr,
 		goos: runtime.GOOS, getenv: os.Getenv, now: time.Now, password: ttyPassword(os.Stdin, os.Stderr)}
+	if e.goos != "windows" {
+		e.records = recordsDir
+	}
 	code := run(ctx, e, os.Args[1:])
 	stop()
 	os.Exit(code)

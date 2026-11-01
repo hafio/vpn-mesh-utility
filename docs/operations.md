@@ -106,24 +106,30 @@ the server with `meshctl node set vps-1 --endpoint 203.0.113.10:51820`.
 
 To keep the agent's data somewhere else, such as a NAS's data volume, add `--data <dir>` (or set
 `MESHCTL_DATA`; amendment A54): `sudo sh -s -- --mesh default --token <token> --data
-/volume1/meshctl/default`. install.sh makes the directory (mode 0700) and links
-`/var/lib/meshctl/<mesh>` to it. After the join it adds the drop-in
+/volume1/meshctl/default`. install.sh makes the directory (mode 0700) and joins in it. After the
+join it records the directory in `/etc/meshctl/<mesh>.env` (one line, `MESHCTL_DATA=<dir>`;
+amendment A56) and adds the drop-in
 `/etc/systemd/system/meshctl-agent@<mesh>.service.d/data.conf`, which waits for the directory's
-file system (`RequiresMountsFor`), runs the agent on the directory itself (`meshctl agent run
---data <dir> --socket /run/meshctl/<mesh>.sock`) and lets it write there; `systemctl cat
-meshctl-agent@<mesh>` shows it. The socket and every local command stay as they were: they find
-the mesh through the link. The directory must be:
+file system (`RequiresMountsFor`), runs the agent on it (`meshctl agent run --mesh <mesh> --data
+<dir> --socket /run/meshctl/<mesh>.sock`) and lets it write there; `systemctl cat
+meshctl-agent@<mesh>` shows it. Nothing is made under `/var/lib/meshctl` for that mesh. The socket
+stays `/run/meshctl/<mesh>.sock`, and local commands find the data dir the way every command does:
+`--data`, else `MESHCTL_DATA`, else the record for `--mesh` in `/etc/meshctl/<mesh>.env`, else
+`/var/lib/meshctl/<mesh>`; without `--mesh`, the one mesh on the host, recorded or not. A
+`--data` or `MESHCTL_DATA` that holds another mesh's node than `--mesh` is refused, so a variable
+left set for one mesh never acts on another. The directory must be:
 
 - an absolute path of letters, digits, `.`, `_`, `-` and `/`;
 - new, empty, or an earlier meshctl data dir;
 - used by one mesh only;
 - outside `/home`, `/root`, `/run`, `/tmp`, `/var/tmp` and `/var/lib/meshctl`.
 
-reinstall.sh's `reinstall` and `rejoin` keep the directory and write the drop-in again. To move a
-mesh's data there, or back to `/var/lib/meshctl/<mesh>`, start afresh with a new token:
-`reinstall.sh --mesh <mesh> --action fresh --data <dir>`, or without `--data` to move it back.
-uninstall.sh deletes the directory with the link and the drop-in. `--data` is for Linux only;
-install.ps1 keeps `%ProgramData%\meshctl\<mesh>`.
+reinstall.sh's `reinstall` and `rejoin` keep the directory and write the record and the drop-in
+again. To move a mesh's data there, or back to `/var/lib/meshctl/<mesh>`, start afresh with a new
+token: `reinstall.sh --mesh <mesh> --action fresh --data <dir>`, or without `--data` to move it
+back. uninstall.sh deletes the directory with the record and the drop-in. install.sh's `--data`
+is for Linux only: install.ps1 keeps `%ProgramData%\meshctl\<mesh>` (meshctl itself takes
+`--data` and `MESHCTL_DATA` on Windows too).
 
 Within a minute `meshctl node list` shows the node `in sync` and `wg show` on the other servers
 lists it. WireGuard handshakes on first traffic: `ping 10.77.0.2` from vps-1 starts one.
@@ -561,10 +567,11 @@ $env:MESHCTL_MESH = 'default'; irm https://mesh.example.com/uninstall.ps1 | iex
 uninstall.sh says what is installed, asks, then stops and disables `meshctl-agent@default`, has
 `meshctl agent reset` take its tunnel, routes, rules, firewalld zone and DNS registration off the
 host, and deletes its data dir: `/var/lib/meshctl/default`, or for a `--data` install the
-directory the link names, with the link and the drop-in. It deletes only a directory that holds
-meshctl's data, and nothing when the reset fails. With the last mesh gone it removes
+directory `/etc/meshctl/default.env` records, with the record and the drop-in. It deletes only a
+directory that holds meshctl's data, and nothing when the reset fails. With the last mesh gone
+(nothing under `/var/lib/meshctl`, no record in `/etc/meshctl`) it removes
 `/usr/local/bin/meshctl` and the unit template too. `--yes` skips the question (needed without a
-terminal); `--data <dir>` names a `--data` install's directory once its link is gone. The node
+terminal); `--data <dir>` names a `--data` install's directory once its record is gone. The node
 stays on the control plane: `meshctl node rm <name>` there. uninstall.ps1 does the same on
 Windows: it stops `meshctl-agent-default`, runs `meshctl agent reset` (tunnel, routes, NRPT
 rules), deletes the service and `C:\ProgramData\meshctl\default` (only when it holds meshctl's
@@ -880,7 +887,9 @@ server is back. When it is, agents reconnect within a minute.
 | `mesh <mesh> is installed here already, and install.sh only installs` | use reinstall.sh (reinstall, join again, start afresh) or uninstall.sh, the commands it prints; for a second mesh on the host, pass its `--mesh` |
 | `mesh <mesh> is not installed here` (reinstall.sh) | nothing of that mesh has joined on this host: install.sh, or the `--mesh` the message lists |
 | `no terminal to ask on` | reinstall.sh or uninstall.sh ran without a terminal: pass `--action` or `--yes` |
-| `... holds files but no meshctl data: nothing was removed` | uninstall.sh's `--data`, or the mesh's link, names a directory without meshctl's files: check it, and remove what is meshctl's by hand |
+| `... holds files but no meshctl data: nothing was removed` | uninstall.sh's `--data`, or the mesh's record, names a directory without meshctl's files: check it, and remove what is meshctl's by hand |
+| `... is the data dir of the mesh <a>, not of <b>` | `--data` or `MESHCTL_DATA` names another mesh's data dir than `--mesh`: unset `MESHCTL_DATA` (or pass the mesh's own `--data`) |
+| `/etc/meshctl/<mesh>.env records '...' as the data dir`, `... correct or remove that file` | the record of an install.sh `--data` install holds no plain absolute path: put back `MESHCTL_DATA=<dir>` (the directory the drop-in names); to remove the mesh, delete the file, then run uninstall.sh with `--data <dir>` |
 | a node stays `applying` | it applied an older version and is failing the new one; `meshctl status` on it shows the error |
 | `exit "vps-3" is not exit-capable` | allow it first: `node set vps-3 --can-exit` |
 | `only spokes choose an exit or a keepalive` | `meshctl exit` ran on a server; exits are for spokes |
