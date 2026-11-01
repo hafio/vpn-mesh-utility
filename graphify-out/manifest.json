@@ -258,9 +258,9 @@
     "semantic_hash": ""
   },
   "docs/test.md": {
-    "mtime": 1793522042.1055748,
-    "seen": 1793522577.2380247,
-    "ast_hash": "0b5afbca146dfcf4bf5d854abb9b0d7c",
+    "mtime": 1793537755.0603979,
+    "seen": 1793537997.6248667,
+    "ast_hash": "aec887f6fbb673142fcfe341f434ce9b",
     "semantic_hash": ""
   },
   "cmd/meshctl/agent.go": {
@@ -312,9 +312,9 @@
     "semantic_hash": ""
   },
   "deploy/deploy_test.go": {
-    "mtime": 1793522042.1048758,
-    "seen": 1793522577.2207437,
-    "ast_hash": "6f792c73661e8aec2eae96fcd2652c78",
+    "mtime": 1793537744.6862748,
+    "seen": 1793537997.61156,
+    "ast_hash": "603c23a85073b862e2dbae7e18333ef7",
     "semantic_hash": ""
   },
   "deploy/embed.go": {
@@ -648,8 +648,8 @@
     "semantic_hash": ""
   },
   "docs/commands.md": {
-    "mtime": 1793522358.4069297,
-    "seen": 1793522577.237923,
+    "mtime": 1793537798.1078732,
+    "seen": 1793537997.6246915,
     "ast_hash": "1ffe3ce502114fbe5c477883882268da",
     "semantic_hash": ""
   },

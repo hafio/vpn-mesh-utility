@@ -266,14 +266,24 @@ download() {
     die "checksum mismatch for meshctl-linux-$arch: the download is corrupt or was altered; nothing was changed"
 }
 
+# put copies $1 to $3 with mode $2: written beside it, then moved over it,
+# so a running meshctl is never written into. The scripts never call
+# `install`: on some hosts the first one on PATH is not coreutils' (a
+# Synology NAS can have a package's own).
+put() {
+  cp "$1" "$3.new"
+  chmod "$2" "$3.new"
+  mv -f "$3.new" "$3"
+}
+
 # place installs the checked download to /usr/local/bin and, where systemd
 # runs, the agent's unit template.
 place() {
-  install -m 0755 "$tmp/meshctl" "$BIN"
+  put "$tmp/meshctl" 0755 "$BIN"
   echo "installed meshctl $VERSION to $BIN"
   if [ "$systemd" = yes ]; then
     unit "$tmp/unit"
-    install -m 0644 "$tmp/unit" "$UNIT"
+    put "$tmp/unit" 0644 "$UNIT"
     systemctl daemon-reload
   fi
 }
@@ -342,7 +352,7 @@ keep() {
     return 0
   fi
   datadir "$dir"
-  [ -d "$CONF" ] || install -d -m 0755 "$CONF"
+  [ -d "$CONF" ] || mkdir -m 0755 "$CONF"
   recordfile "$dir" >"$record.new"
   chmod 0644 "$record.new"
   mv -f "$record.new" "$record"

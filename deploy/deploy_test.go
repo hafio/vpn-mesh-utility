@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -425,6 +426,20 @@ func TestScriptsReadTheTerminal(t *testing.T) {
 				if f == "read" && !strings.Contains(line, "</dev/tty") {
 					t.Errorf("%s line %d reads stdin: %s", s.name, i+1, line)
 				}
+			}
+		}
+	}
+}
+
+// The scripts place files with cp, chmod and mv and never run `install`: on
+// a Synology NAS the first `install` on PATH can be a package's own program,
+// which refused coreutils' flags before meshctl was placed.
+func TestScriptsNeverRunInstall(t *testing.T) {
+	run := regexp.MustCompile(`(^|[;&|]\s*|\b(then|do|else)\s+)install\s`)
+	for _, s := range shellScripts {
+		for i, line := range strings.Split(withLib(s.tmpl, libTemplate), "\n") {
+			if line = strings.TrimSpace(line); !strings.HasPrefix(line, "#") && run.MatchString(line) {
+				t.Errorf("%s line %d runs install: %s", s.name, i+1, line)
 			}
 		}
 	}
