@@ -20,7 +20,7 @@ COPY . .
 # the pinned release and checks the zip and the DLL before it is embedded.
 RUN set -eu; \
     case "$VERSION" in ""|*[!A-Za-z0-9._+-]*) echo "VERSION must match [A-Za-z0-9._+-]+ (got '$VERSION')" >&2; exit 1 ;; esac; \
-    mkdir -p /out/dist /out/data; chmod 0770 /out/data; \
+    mkdir -p /out/dist /out/root/data; chmod 0770 /out/root/data; \
     go run ./internal/tools/fetchwintun -arch amd64 -out internal/agent/wintun; \
     for t in linux/amd64 linux/arm64 windows/amd64; do \
       os="${t%/*}"; arch="${t#*/}"; out="/out/dist/meshctl-$os-$arch"; tags=""; \
@@ -35,8 +35,10 @@ COPY --from=build /out/dist/meshctl-linux-${TARGETARCH} /app/meshctl
 COPY --from=build /out/dist /app/dist
 # /data is 65532:0, mode 0770: a new volume at /data starts as a copy of it,
 # so the control plane (65532) writes there as its owner and a node (uid 0,
-# no CAP_DAC_OVERRIDE) as its group; nobody else can.
-COPY --from=build --chown=65532:0 /out/data /data
+# no CAP_DAC_OVERRIDE) as its group; nobody else can. The parent is copied:
+# COPY makes a missing destination 0755 and copies only what is inside it,
+# while a directory it creates inside the destination keeps its mode.
+COPY --from=build --chown=65532:0 /out/root/ /
 ENV MESHCTL_DIST_DIR=/app/dist
 USER 65532:65532
 EXPOSE 8080

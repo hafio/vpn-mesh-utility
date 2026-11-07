@@ -1,7 +1,7 @@
 # Graph Report - vpn-mesh-utility  (2026-11-07)
 
 ## Corpus Check
-- 337 files · ~430,036 words
+- 337 files · ~430,088 words
 - Verdict: corpus is large enough that graph structure adds value.
 - Unclassified: 24 file(s) not represented in the graph (top: .tmpl 16, (none) 5, .css 2)
 
@@ -11,7 +11,7 @@
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `e83150a4`
+- Built from commit: `131f4797`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 

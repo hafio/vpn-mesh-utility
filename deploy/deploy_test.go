@@ -707,10 +707,15 @@ func sameSet(a, b []string) bool {
 // /data/agent.lock while it was 65532:65532, 0755).
 func TestImageDataDir(t *testing.T) {
 	file := strings.ReplaceAll(string(mustRead(t, filepath.Join("..", "Dockerfile"))), "\r\n", "\n")
-	for _, want := range []string{"chmod 0770 /out/data;", "\nCOPY --from=build --chown=65532:0 /out/data /data\n"} {
+	for _, want := range []string{"chmod 0770 /out/root/data;", "\nCOPY --from=build --chown=65532:0 /out/root/ /\n"} {
 		if !strings.Contains(file, want) {
 			t.Errorf("Dockerfile lacks %q", strings.TrimSpace(want))
 		}
+	}
+	// Copied as the destination itself, /data would be made 0755: root
+	// without CAP_DAC_OVERRIDE could not write it.
+	if regexp.MustCompile(`(?m)^COPY .* /data/?$`).MatchString(file) {
+		t.Error("Dockerfile copies a directory onto /data, which COPY makes 0755; copy its parent instead")
 	}
 }
 
