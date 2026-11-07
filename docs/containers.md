@@ -36,6 +36,14 @@ The image's command is `meshctl start`, which runs what the container's environm
 | `control` | the control plane: the database, the web UI and the agent API on `MESHCTL_PORT` (8080) | a volume at `/data`, a reverse proxy for https; no WireGuard, no UDP, no capability |
 | unset, or `node` | a node's agent | `NET_ADMIN`, its own WireGuard, a volume at `/data` |
 
+A new named volume at `/data` starts as a copy of the image's `/data`, which belongs to uid 65532
+(the control plane) and group 0, mode 0770: the control plane writes there as its owner, a node
+-- root, but without `CAP_DAC_OVERRIDE` -- as its group, and nobody else can. A volume an older
+image made belongs to 65532 alone, and a node stops with `permission denied` on
+`/data/agent.lock`. Give it to root (`docker run --rm -v <volume>:/data alpine chown 0:0 /data`;
+`docker volume ls` names it, `<project>_meshctl-data` for a compose sample), or, if the node
+never joined, remove it (`docker compose down -v`) and start again.
+
 Only the control plane sets the mode. Whether a node is a **server node** (a hub with a public
 UDP endpoint) or a **client node** (a spoke that dials out) is its role on the control plane
 (`meshctl node add <name> --role server|spoke`), never the container's setting. A node's

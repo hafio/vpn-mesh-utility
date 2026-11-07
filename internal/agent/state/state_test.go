@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -243,6 +244,28 @@ func TestLock(t *testing.T) {
 	again()
 	if _, err := (&Dir{Path: filepath.Join(d.Path, "missing")}).Lock(); err == nil || errors.Is(err, ErrLocked) {
 		t.Fatalf("Lock in a missing dir = %v", err)
+	}
+}
+
+// A data dir the agent cannot write -- in a container, a volume an older
+// image made, which belongs to the control plane's uid -- is refused with
+// what to do, naming the lock file once, and leaves no lock file behind.
+func TestLockInADirItCannotWrite(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a POSIX file mode that binds the test's user (not root)")
+	}
+	d := open(t)
+	if err := os.Chmod(d.Path, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(d.Path, 0o700) })
+	_, err := d.Lock()
+	if !errors.Is(err, fs.ErrPermission) || !strings.Contains(err.Error(), "must belong to user or group 0") ||
+		strings.Count(err.Error(), LockFile) != 1 {
+		t.Fatalf("Lock in a dir it cannot write = %v", err)
+	}
+	if _, serr := os.Stat(filepath.Join(d.Path, LockFile)); !errors.Is(serr, fs.ErrNotExist) {
+		t.Fatalf("a lock file was made: %v", serr)
 	}
 }
 

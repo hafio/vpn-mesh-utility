@@ -6,7 +6,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -53,6 +55,8 @@ var (
 	disabled    = &client.Error{Status: http.StatusForbidden, Code: proto.CodeNodeDisabled, Message: "node is disabled"}
 	rateLimited = &client.Error{Status: http.StatusTooManyRequests, Code: proto.CodeRateLimited, Message: "wait a minute"}
 	errNoAnswer = errors.New("dial tcp 203.0.113.1:443: connect: connection refused")
+	// errUnwritable is a data dir the agent cannot write (state.Dir.Lock).
+	errUnwritable = fmt.Errorf("lock the data dir: %w", &fs.PathError{Op: "open", Path: "/data/agent.lock", Err: fs.ErrPermission})
 )
 
 // Every start a container can see: first, restarted, a new token, no
@@ -67,6 +71,7 @@ func TestJoinOnStart(t *testing.T) {
 		joinErr  error
 		wantJoin bool
 		wantErr  string
+		wantNot  string
 		// remembered is the token join.json holds afterwards ("" none).
 		remembered string
 		wantLog    string
@@ -90,6 +95,8 @@ func TestJoinOnStart(t *testing.T) {
 		{name: "server unreachable, never joined", token: testfix.Token, joinErr: errNoAnswer, wantJoin: true, wantErr: "the next start tries again"},
 		{name: "rate limited", token: testfix.Token, joinErr: rateLimited, wantJoin: true, wantErr: "the next start tries again"},
 		{name: "disabled node is asked again", token: testfix.Token, joinErr: disabled, wantJoin: true, wantErr: "node is disabled"},
+		{name: "a data dir it cannot write", token: testfix.Token, joinErr: errUnwritable, wantJoin: true, wantErr: "permission denied",
+			wantNot: "tries again"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			data, dir := startDir(t, c.joined, c.recorded)
@@ -110,6 +117,9 @@ func TestJoinOnStart(t *testing.T) {
 			startErr := joinOnStart(context.Background(), o, join)
 			if c.wantErr == "" && startErr != nil || c.wantErr != "" && (startErr == nil || !strings.Contains(startErr.Error(), c.wantErr)) {
 				t.Fatalf("err = %v, want %q", startErr, c.wantErr)
+			}
+			if c.wantNot != "" && strings.Contains(startErr.Error(), c.wantNot) {
+				t.Errorf("err = %v: a restart cannot fix it, so it must not say %q", startErr, c.wantNot)
 			}
 			if called != c.wantJoin {
 				t.Errorf("joined = %v, want %v", called, c.wantJoin)

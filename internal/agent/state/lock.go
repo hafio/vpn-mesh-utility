@@ -3,6 +3,7 @@ package state
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"strconv"
 	"strings"
@@ -19,8 +20,11 @@ var ErrLocked = errors.New("another meshctl process uses this data dir")
 // a crash never leaves it behind; unlock releases it earlier.
 func (d *Dir) Lock() (unlock func(), err error) {
 	f, err := os.OpenFile(d.file(LockFile), os.O_RDWR|os.O_CREATE, 0o600)
+	if errors.Is(err, fs.ErrPermission) {
+		return nil, fmt.Errorf("lock the data dir: %w: %s", err, fmt.Sprintf(unwritable, d.Path))
+	}
 	if err != nil {
-		return nil, fmt.Errorf("open %s: %w", d.file(LockFile), err)
+		return nil, fmt.Errorf("lock the data dir: %w", err)
 	}
 	if err := lockFile(f); err != nil {
 		holder := ""

@@ -108,7 +108,7 @@ docs/containers.md is held to the same by `TestContainerSamples`:
 | privilege escalation | `no-new-privileges=true` |
 | root file system | read-only; `/tmp` is a 16 MiB tmpfs |
 | network | the external `dokploy-network` bridge, `expose` of the control plane's port only (8080, or `MESHCTL_PORT`); nothing published on the host (the dev stack and the sample publish on `127.0.0.1` only) |
-| storage | the named volume `meshctl-data` at `/data` |
+| storage | the named volume `meshctl-data` at `/data`; the image's `/data` is 65532:0, mode 0770, so a node's volume made from it is writable by root's group too (a node has no `CAP_DAC_OVERRIDE`) and by nobody else |
 | limits | 256 MiB memory, 256 pids |
 
 The image is distroless static, built `CGO_ENABLED=0` from pinned base-image digests.
@@ -245,7 +245,7 @@ the sample to this list and forbids every other widening token, including the ho
 | devices | `/dev/net/tun` unless the kernel backend | wireguard-go when the host has no module |
 | ports | one UDP port, on a server node only | the node's endpoint; nothing else is published |
 | root file system | read-only; `/tmp` is a 16 MiB tmpfs | |
-| storage | a named volume, or a host directory, at `/data` | keys and the cached config |
+| storage | a named volume, or a host directory, at `/data` | keys and the cached config; a named volume starts as the image's `/data` (65532:0, 0770), which root writes through its group, with no `CAP_DAC_OVERRIDE` added |
 | machine id | the host's `/etc/machine-id`, read-only; on Docker Desktop for Windows a file beside the compose file holding the PC's `MachineGuid` | pins the node to its machine (amendment A50) |
 | runtime socket | the host's Docker (or Podman) API socket at `/var/run/docker.sock`, `:ro`; left out with `MESHCTL_RUNTIME_SOCKET=off` | the containers' names (amendment A38, below) |
 | limits | 256 MiB memory, 256 pids | |

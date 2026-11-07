@@ -700,6 +700,20 @@ func sameSet(a, b []string) bool {
 	return true
 }
 
+// A new volume at /data starts as a copy of the image's /data, and both
+// kinds of container write there: the control plane as uid 65532, a node
+// as root without CAP_DAC_OVERRIDE. So the image's /data is 65532's and
+// group 0's, mode 0770, and nobody else's (a node failed to create
+// /data/agent.lock while it was 65532:65532, 0755).
+func TestImageDataDir(t *testing.T) {
+	file := strings.ReplaceAll(string(mustRead(t, filepath.Join("..", "Dockerfile"))), "\r\n", "\n")
+	for _, want := range []string{"chmod 0770 /out/data;", "\nCOPY --from=build --chown=65532:0 /out/data /data\n"} {
+		if !strings.Contains(file, want) {
+			t.Errorf("Dockerfile lacks %q", strings.TrimSpace(want))
+		}
+	}
+}
+
 func TestControlComposePosture(t *testing.T) {
 	if !bytes.Equal(ComposeControl(), mustRead(t, "compose.control.yml")) {
 		t.Fatal("the embedded compose file is stale")

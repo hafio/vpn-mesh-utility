@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"time"
 
@@ -107,6 +108,8 @@ func joinOnStart(ctx context.Context, o JoinOptions, join func(context.Context, 
 		return nil
 	case refused:
 		return fmt.Errorf("%w; set MESHCTL_TOKEN (or MESHCTL_TOKEN_FILE) to a new token from `meshctl node token <name>`", err)
+	case errors.Is(err, fs.ErrPermission):
+		return err // the data dir, which no restart fixes; the error says what does
 	}
 	return fmt.Errorf("%w; the next start tries again", err)
 }

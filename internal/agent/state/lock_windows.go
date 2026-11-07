@@ -13,6 +13,10 @@ import (
 // holds, which another process must still be able to read.
 const lockOffset = 1 << 30
 
+// unwritable says why the agent cannot write its data dir (%s) and what to
+// do: the service runs as LocalSystem, which the dir's ACL must allow.
+const unwritable = "%s must give SYSTEM and Administrators full control; run the agent elevated or as its service"
+
 // lockFile takes an exclusive lock on f, not waiting for it.
 func lockFile(f *os.File) error {
 	ol := windows.Overlapped{Offset: lockOffset}

@@ -901,6 +901,7 @@ server is back. When it is, agents reconnect within a minute.
 | `this request did not come from https://...` in the UI | the UI was opened under another address than `--url`; open it at that URL |
 | `too many failed sign-ins` | wait 15 minutes, or reset the password with `meshctl user passwd` |
 | DNS `unavailable` | the host runs no systemd-resolved (AlmaLinux's default): the node answers the others, the host does not use it. See section 6 |
+| a node container stops with `lock the data dir: open /data/agent.lock: permission denied` | its volume was made by an older image and belongs to the control plane's uid 65532; the agent runs as root without `CAP_DAC_OVERRIDE`. Give the volume to root, or remove it if the node never joined (docs/containers.md, "One image, two modes") |
 | `dns` listed as degraded, `is another DNS server using port 53 on this address?` | something else listens on port 53 of the mesh IP or of every address (a DNS app on the NAS); bind it to another address |
 | `DNS record "nas" has the name of a node` | a custom record cannot take a node's name; that name resolves already |
 | `no server has joined with an endpoint yet` for a phone | a phone's profile lists the servers it dials; join a server first |

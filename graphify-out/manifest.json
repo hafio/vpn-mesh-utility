@@ -24,9 +24,9 @@
     "semantic_hash": ""
   },
   "go.mod": {
-    "mtime": 1792628131.436641,
-    "seen": 1792628710.6448443,
-    "ast_hash": "6dd8468be3dd285a457821f05dee3827",
+    "mtime": 1794020146.9137585,
+    "seen": 1794020481.585168,
+    "ast_hash": "1142e500d72b404cc9fb489d1dbf58da",
     "semantic_hash": ""
   },
   "internal/archtest/archtest.go": {
@@ -252,15 +252,15 @@
     "semantic_hash": ""
   },
   "docs/spec.md": {
-    "mtime": 1793522042.1065438,
-    "seen": 1793522577.2380228,
-    "ast_hash": "1126bf88e96344b06b6b9aa5648e0255",
+    "mtime": 1793977490.3169537,
+    "seen": 1794020481.5980923,
+    "ast_hash": "1e82b6d4f1364b9b05ba7236b40b006c",
     "semantic_hash": ""
   },
   "docs/test.md": {
-    "mtime": 1793537755.0603979,
-    "seen": 1793537997.6248667,
-    "ast_hash": "aec887f6fbb673142fcfe341f434ce9b",
+    "mtime": 1793977496.7293856,
+    "seen": 1794020481.5980933,
+    "ast_hash": "5181d0d987da4a853bbee47c9234d611",
     "semantic_hash": ""
   },
   "cmd/meshctl/agent.go": {
@@ -312,9 +312,9 @@
     "semantic_hash": ""
   },
   "deploy/deploy_test.go": {
-    "mtime": 1793537744.6862748,
-    "seen": 1793537997.61156,
-    "ast_hash": "603c23a85073b862e2dbae7e18333ef7",
+    "mtime": 1793977466.3216848,
+    "seen": 1794020481.5849183,
+    "ast_hash": "85558679c9f2ed5ca82c73612cee41c3",
     "semantic_hash": ""
   },
   "deploy/embed.go": {
@@ -456,9 +456,9 @@
     "semantic_hash": ""
   },
   "internal/agent/state/state_test.go": {
-    "mtime": 1793468567.852513,
-    "seen": 1793498328.9613478,
-    "ast_hash": "3da172bbfb97a3d8b1d747f12226ea3d",
+    "mtime": 1793977445.0554466,
+    "seen": 1794020481.5895617,
+    "ast_hash": "38294061b51365f9bb0c69e227fbb5ed",
     "semantic_hash": ""
   },
   "internal/agent/sysctl/sysctl.go": {
@@ -648,21 +648,21 @@
     "semantic_hash": ""
   },
   "docs/commands.md": {
-    "mtime": 1793537798.1078732,
-    "seen": 1793537997.6246915,
+    "mtime": 1794020254.9549687,
+    "seen": 1794020481.5980313,
     "ast_hash": "1ffe3ce502114fbe5c477883882268da",
     "semantic_hash": ""
   },
   "docs/operations.md": {
-    "mtime": 1793521583.79487,
-    "seen": 1793522577.2380192,
-    "ast_hash": "84b65136723186ac9b28f99086043cc3",
+    "mtime": 1793977490.262953,
+    "seen": 1794020481.598089,
+    "ast_hash": "65986ce11f9d20ff8508de98e28c790a",
     "semantic_hash": ""
   },
   "docs/security.md": {
-    "mtime": 1793522042.1051242,
-    "seen": 1793522577.2380211,
-    "ast_hash": "61d8e403d5f551c4e0d34614f1381f2f",
+    "mtime": 1793977490.2109523,
+    "seen": 1794020481.5980904,
+    "ast_hash": "b8b56d99558144137533cfc1383f9ee8",
     "semantic_hash": ""
   },
   "cmd/meshctl/import.go": {
@@ -1830,15 +1830,15 @@
     "semantic_hash": ""
   },
   "internal/agent/startjoin.go": {
-    "mtime": 1793000404.256138,
-    "seen": 1793004872.5317223,
-    "ast_hash": "220334da383adaf5d3d87d9c7ed853e9",
+    "mtime": 1793977420.7781746,
+    "seen": 1794020481.5891347,
+    "ast_hash": "cf75b5eb11a7479612dff841d6a1eca4",
     "semantic_hash": ""
   },
   "internal/agent/startjoin_test.go": {
-    "mtime": 1793000765.673593,
-    "seen": 1793004872.5317237,
-    "ast_hash": "72fadc2f951d77d53b65b12ea25b9fe3",
+    "mtime": 1794014090.5529246,
+    "seen": 1794020481.5891366,
+    "ast_hash": "ae07068e844998c6c5eaad8b7ee4e4f5",
     "semantic_hash": ""
   },
   "deploy/samples_test.go": {
@@ -1860,9 +1860,9 @@
     "semantic_hash": ""
   },
   "docs/containers.md": {
-    "mtime": 1793334620.5530388,
-    "seen": 1793342879.6657722,
-    "ast_hash": "b81553e697fb6cdb8aa315acea07f6cb",
+    "mtime": 1793977490.102951,
+    "seen": 1794020481.5980513,
+    "ast_hash": "05f3cf532fbf59bf1a9d9797a0290590",
     "semantic_hash": ""
   },
   "internal/server/api/meshes_test.go": {
@@ -1950,21 +1950,21 @@
     "semantic_hash": ""
   },
   "internal/agent/state/lock.go": {
-    "mtime": 1792937470.2036076,
-    "seen": 1792945234.081154,
-    "ast_hash": "f3b8e180cba01b8400b22bfff8001e27",
+    "mtime": 1793977405.562004,
+    "seen": 1794020481.5891385,
+    "ast_hash": "a742bf2b141c462b907a1fa0ea0e193a",
     "semantic_hash": ""
   },
   "internal/agent/state/lock_unix.go": {
-    "mtime": 1792937470.2056074,
-    "seen": 1792945234.0811555,
-    "ast_hash": "cdfe46d3dbea072a8ad9f045ab5c4db3",
+    "mtime": 1793977415.0341103,
+    "seen": 1794020481.5891402,
+    "ast_hash": "61dcc335bed0811f1dd2c4700e594886",
     "semantic_hash": ""
   },
   "internal/agent/state/lock_windows.go": {
-    "mtime": 1792937480.4837227,
-    "seen": 1792945234.081157,
-    "ast_hash": "9d74bdfd324edf2591e333f950d98b07",
+    "mtime": 1793977405.7060058,
+    "seen": 1794020481.589142,
+    "ast_hash": "0dd8ccd25fab0e9cf09d63473c43b941",
     "semantic_hash": ""
   },
   "internal/proto/trust.go": {
