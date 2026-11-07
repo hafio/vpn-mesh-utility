@@ -168,7 +168,7 @@ The node's local UI is `internal/agent/localui` (amendment A7): a handler in `pa
 registered in `Handler` (`signedIn` for pages, `change` for every POST, which checks the
 session, the Origin and the CSRF token before the handler runs), a template in
 `templates/<page>.html` that uses the `head` and `foot` blocks of `layout.html`, and only
-`static/app.css` beside it -- no script at all (`TestTemplatesHaveNoScript`). It reaches the
+`static/app.css` and `static/favicon.svg` (the control plane's icon, `TestFavicon`) beside it -- no script at all (`TestTemplatesHaveNoScript`). It reaches the
 agent only through `localui.Funcs`; a change of the node's settings goes through the same
 `prefs` relay as `meshctl exit`.
 

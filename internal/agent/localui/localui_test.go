@@ -433,6 +433,15 @@ func TestDashboard(t *testing.T) {
 	if w := r.do(http.MethodGet, "/static/app.css", nil, nil, nil); w.Code != http.StatusOK || !strings.HasPrefix(w.Header().Get("Content-Type"), "text/css") {
 		t.Fatalf("app.css = %d %v", w.Code, w.Header())
 	}
+	if w := r.do(http.MethodGet, "/static/favicon.svg", nil, nil, nil); w.Code != http.StatusOK || w.Header().Get("Content-Type") != "image/svg+xml" ||
+		!strings.HasPrefix(w.Body.String(), "<svg ") {
+		t.Fatalf("favicon.svg = %d %v", w.Code, w.Header())
+	}
+	w = httptest.NewRecorder()
+	asset("static/none.css", "text/css")(w, httptest.NewRequest(http.MethodGet, "/static/none.css", nil))
+	if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), "missing static/none.css") {
+		t.Fatalf("a missing asset = %d %q", w.Code, w.Body)
+	}
 }
 
 // Each form reaches the agent with exactly what it says, and what the

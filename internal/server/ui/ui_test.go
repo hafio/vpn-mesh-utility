@@ -188,7 +188,7 @@ func (r *rig) signInAs(name string) (string, string) {
 func TestEveryResponseCarriesTheSecurityHeaders(t *testing.T) {
 	r := newRig(t)
 	cookie, _ := r.signIn()
-	for _, p := range []string{"/login", "/", "/m/default/nodes", "/m/default/versions", "/m/default/audit", "/m/default/settings", "/users", "/account", "/static/app.css", "/static/forms.js", "/static/copy.js", "/nope"} {
+	for _, p := range []string{"/login", "/", "/m/default/nodes", "/m/default/versions", "/m/default/audit", "/m/default/settings", "/users", "/account", "/static/app.css", "/static/forms.js", "/static/copy.js", "/static/favicon.svg", "/nope"} {
 		w := r.do(http.MethodGet, p, cookie, nil)
 		h := w.Header()
 		// same-origin keeps the browser's Origin on the UI's own posts
@@ -1192,6 +1192,39 @@ func TestHTMXIsPinned(t *testing.T) {
 		if w := r.do(http.MethodGet, p, "", nil); w.Code == http.StatusOK {
 			t.Errorf("%s was served", p)
 		}
+	}
+}
+
+// Both web UIs show the same icon: the control plane's static/favicon.svg is
+// the local UI's file byte for byte, served as SVG, plain ASCII, with no
+// script and no link of its own.
+func TestFavicon(t *testing.T) {
+	b, err := fs.ReadFile(staticFS, "static/favicon.svg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, err := os.ReadFile(filepath.Join("..", "..", "agent", "localui", "static", "favicon.svg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(b, local) {
+		t.Error("internal/agent/localui/static/favicon.svg differs from this one; copy it over")
+	}
+	for i, c := range b {
+		if c > 0x7e || (c < 0x20 && c != '\n' && c != '\r') {
+			t.Fatalf("favicon.svg byte %d is %#x, not plain ASCII", i, c)
+		}
+	}
+	if bytes.Contains(bytes.ToLower(b), []byte("<script")) || bytes.Contains(b, []byte("href")) || regexp.MustCompile(`\son[a-z]+=`).Match(b) {
+		t.Error("favicon.svg carries a script, an event handler or a link")
+	}
+	r := newRig(t)
+	w := r.do(http.MethodGet, "/static/favicon.svg", "", nil)
+	if w.Code != http.StatusOK || !strings.HasPrefix(w.Header().Get("Content-Type"), "image/svg+xml") || !bytes.Equal(w.Body.Bytes(), b) {
+		t.Fatalf("GET /static/favicon.svg = %d %v", w.Code, w.Header())
+	}
+	if body := r.do(http.MethodGet, "/login", "", nil).Body.String(); !strings.Contains(body, `<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">`) {
+		t.Error("the sign-in page does not link the icon")
 	}
 }
 

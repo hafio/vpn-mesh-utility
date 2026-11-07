@@ -35,7 +35,7 @@ import (
 	"github.com/hafio/vpn-mesh-utility/internal/validate"
 )
 
-//go:embed templates/*.html static/app.css
+//go:embed templates/*.html static/app.css static/favicon.svg
 var assets embed.FS
 
 // Lifetimes and limits (amendment A7).
@@ -210,7 +210,8 @@ func (u *UI) expire(now time.Time) {
 func (u *UI) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /login", u.login)
-	mux.HandleFunc("GET /static/app.css", u.css)
+	mux.HandleFunc("GET /static/app.css", asset("static/app.css", "text/css; charset=utf-8"))
+	mux.HandleFunc("GET /static/favicon.svg", asset("static/favicon.svg", "image/svg+xml"))
 	mux.HandleFunc("GET /{$}", u.signedIn(u.dashboard))
 	mux.HandleFunc("GET /logs", u.signedIn(u.logs))
 	mux.HandleFunc("POST /exit", u.change(u.exit))
@@ -350,12 +351,15 @@ func validOrNot(o string) string {
 	return o
 }
 
-func (u *UI) css(w http.ResponseWriter, _ *http.Request) {
-	b, err := assets.ReadFile("static/app.css")
-	if err != nil {
-		http.Error(w, "missing stylesheet", http.StatusInternalServerError)
-		return
+// asset serves one embedded file (the stylesheet, the icon) as ctype.
+func asset(name, ctype string) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		b, err := assets.ReadFile(name)
+		if err != nil {
+			http.Error(w, "missing "+name, http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", ctype)
+		_, _ = w.Write(b) // the browser went away
 	}
-	w.Header().Set("Content-Type", "text/css; charset=utf-8")
-	_, _ = w.Write(b) // the browser went away
 }
